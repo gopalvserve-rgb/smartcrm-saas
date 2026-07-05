@@ -1438,6 +1438,80 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
   const modes = Array.isArray(settings.reply_modes) ? settings.reply_modes : ['always'];
   const isManual = modes.includes('manual') && !modes.includes('always');
 
+  /* ─────────────────────────────────────────────────────────────
+   * AIBOT_WELCOME_v1 (2026-07-05)
+   * -----------------------------------------------------------
+   * If the tenant configured a welcome_message AND this looks like
+   * a first-touch inbound (no prior outbound WA to this phone) OR
+   * a plain greeting ("Hi", "Hello", "Namaste", etc.) with no
+   * welcome sent in the last 24h → send the welcome directly and
+   * skip the Gemini call. Saves cost + guarantees consistent first
+   * impression across every conversation.
+   * ───────────────────────────────────────────────────────────── */
+  try {
+    const welcomeMsg = String(settings.welcome_message || '').trim();
+    if (welcomeMsg && !isManual) {
+      const phoneTail = String(phone || '').replace(/\D/g, '').slice(-10);
+      /* Any prior outbound WA to this phone? (includes agent + bot messages) */
+      let hasPriorOut = false;
+      try {
+        const r = await db.query(
+          `SELECT 1 FROM whatsapp_messages
+            WHERE direction = 'out'
+              AND (
+                RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
+                OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1
+              )
+            LIMIT 1`,
+          [phoneTail]
+        );
+        hasPriorOut = r.rows.length > 0;
+      } catch (_) {}
+
+      /* Greeting-only detection */
+      const _t = String(inboundText || '').trim().toLowerCase();
+      const isGreetingOnly = /^(hi+|hii+|hey+|hello+|helo+|hlo+|namaste+|namaskar+|salam+|salaam+|hola+|good\s*(morning|afternoon|evening|day)|hi\s*there|start)[\s!.?😊😀🙏]*$/i.test(_t);
+
+      /* Has a welcome already been sent to this phone in the last 24h? */
+      let welcomeSentRecent = false;
+      try {
+        const w = await db.query(
+          `SELECT 1 FROM ai_chat_log
+            WHERE phone = $1 AND status = 'sent' AND mode_used = 'welcome'
+              AND created_at > NOW() - INTERVAL '24 hours'
+            LIMIT 1`,
+          [phone]
+        );
+        welcomeSentRecent = w.rows.length > 0;
+      } catch (_) {}
+
+      const shouldSendWelcome = (!hasPriorOut) || (isGreetingOnly && !welcomeSentRecent);
+      if (shouldSendWelcome) {
+        const wb = _wb();
+        const cfg = {};
+        try {
+          if (inboundPhoneId) cfg.phone_number_id = String(inboundPhoneId);
+        } catch (_) {}
+        try {
+          const send = await wb._sendText(
+            { to: phone, text: welcomeMsg, leadId: leadId || null, userId: null },
+            cfg
+          );
+          await db.query(
+            `INSERT INTO ai_chat_log (phone, lead_id, inbound_msg_id, status, reply_text, mode_used, phone_number_id)
+             VALUES ($1, $2, $3, 'sent', $4, 'welcome', $5)`,
+            [phone, leadId || null, inboundMsgId || null,
+             welcomeMsg.slice(0, 4000), inboundPhoneId || null]
+          );
+          return;   /* Welcome sent — skip Gemini entirely for this turn */
+        } catch (e) {
+          console.warn('[aiBot] welcome send failed, falling through to Gemini:', e && e.message);
+          /* Fall through — if send fails, still try Gemini so customer gets SOME reply */
+        }
+      }
+    }
+  } catch (e) { console.warn('[aiBot] welcome trigger failed:', e && e.message); }
+
   let { system, history, prompt } = await _buildPrompt(settings, phone, leadId, inboundText);
 
   // Dynamic quick-reply mode: ask the model to also choose 0-3 buttons

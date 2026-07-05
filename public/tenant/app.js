@@ -16204,6 +16204,9 @@ async function _aibotSettingsView(currentPhId) {
   idleQuick.onchange = () => { if (idleQuick.value) { idleSec.value = idleQuick.value; idleQuick.value = ''; } };
   const pauseHumanChk = h('input', { type: 'checkbox', checked: Number(s.pause_after_human_handoff) === 1 ? 'checked' : null });
   const maxReplies = h('input', { type: 'number', value: s.max_replies_per_thread || 0, min: 0, style: { width: '8rem' } });
+  /* AIBOT_WELCOME_v1 — pre-defined welcome message for first WA touch */
+  const welcomeMsgInp = h('textarea', { rows: 3, style: { width: '100%' } },
+    s.welcome_message || '');
   const useKb = h('input', { type: 'checkbox', checked: s.use_kb ? 'checked' : null });
   const kbCap = h('input', { type: 'number', value: s.kb_max_chars || 8000, min: 2000, max: 120000, step: 5000, style: { width: '8rem' } });
   const histCount = h('input', { type: 'number', value: s.history_messages != null ? s.history_messages : 8, min: 0, max: 40, style: { width: '8rem' } });
@@ -16218,7 +16221,12 @@ async function _aibotSettingsView(currentPhId) {
       h('label', {}, 'Otherwise, resume after agent silence (seconds) — 0 = never auto-resume'),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' } }, idleSec, idleQuick),
       h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Only used when the toggle above is OFF. How long after the last human-agent message before the bot may reply on this thread again. Use 10–20 sec for testing, 86400 (24h) for production.')),
-    h('div', { class: 'field' }, h('label', {}, 'Max bot replies per conversation (0 = unlimited)'), maxReplies),
+    /* AIBOT_WELCOME_v1 — welcome message shown on first WA touch (skips Gemini) */
+    h('div', { class: 'field' },
+      h('label', {}, '💬 Welcome message (sent on the very first WhatsApp — skips AI)'),
+      welcomeMsgInp,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Fires when a phone number contacts you for the first time OR when they say only "Hi/Hello/Namaste" and no welcome has been sent in the last 24h. Leave blank to always let AI answer. Supports plain text.')),
+    h('div', { class: 'field' }, h('label', {}, 'Max bot replies per conversation (0 = unlimited — SET TO 0 IF BOT STOPS AFTER 5 MSGS)'), maxReplies),
     h('div', { class: 'field' }, h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } }, useKb, h('span', {}, ' Use the knowledge base when answering'))),
     h('div', { class: 'field' }, h('label', {}, 'KB max chars per call (cap on prompt size)'), kbCap),
     h('div', { class: 'field' }, h('label', {}, 'How many recent messages to feed as context'), histCount)
@@ -16422,6 +16430,7 @@ async function _aibotSettingsView(currentPhId) {
       resume_after_idle_seconds: Number(idleSec.value || 0),
       pause_after_human_handoff: pauseHumanChk.checked,
       max_replies_per_thread: Number(maxReplies.value || 0),
+      welcome_message: welcomeMsgInp.value || '',
       use_kb: useKb.checked,
       kb_max_chars: Number(kbCap.value || 8000),
       history_messages: Number(histCount.value || 8),
