@@ -8603,6 +8603,16 @@ async function ensureXLSX() {
   return _xlsxLib;
 }
 
+/** INV_SALES_EXPORT_v1 — export an array of flat objects as a real .xlsx download. */
+async function downloadRowsAsXlsx(rows, filename, sheetName) {
+  if (!rows || !rows.length) { toast('Nothing to export', 'err'); return; }
+  const XLSX = await ensureXLSX();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, String(sheetName || 'Sheet1').slice(0, 31));
+  XLSX.writeFile(wb, filename || ('export-' + new Date().toISOString().slice(0, 10) + '.xlsx'));
+}
+
 /** Normalize a column header into a snake_case key (lowercase, spaces+dashes → _). */
 function normalizeKey(k) {
   return String(k || '').replace(/^﻿/, '').trim().toLowerCase().replace(/[\s\-]+/g, '_');
@@ -20512,6 +20522,14 @@ VIEWS.projects = async (view) => {
     h('h3', { style: { margin: 0, flex: 1 } }, '🚚 Sale Final Closure pipeline'),
     h('span', { class: 'muted', style: { fontSize: '.85rem' } },
       'Every lead that has entered the post-sale stage tracker, grouped by stage. Stalled cards are flagged.'),
+    h('button', { class: 'btn', title: 'Download the current pipeline as Excel (honours the filters)', onclick: async () => {
+      try {
+        const bd = await api('api_projectStages_board', _collectFilters());
+        const flat = [];
+        bd.board.forEach(col => col.leads.forEach(l => flat.push({ Stage: col.stage.name, Name: l.name, Phone: l.phone || '', Owner: l.assigned_name || '', Source: l.source || '', Product: l.product_name || '', Value: l.value || 0, 'Days at stage': l.days_at_stage == null ? '' : l.days_at_stage, Stalled: l.stalled ? 'YES' : '', 'Entered at': l.project_stage_started_at || '' })));
+        await downloadRowsAsXlsx(flat, 'sale-closure-' + new Date().toISOString().slice(0, 10) + '.xlsx', 'Sale Closure');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '⬇ Excel'),
     ['admin'].includes(CRM.user.role)
       ? h('a', { class: 'btn', href: '#/admin', onclick: () => setTimeout(() => showAdminTab('projstages'), 100) }, '⚙ Edit stages')
       : null
@@ -54205,6 +54223,13 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     filters.appendChild(statusSel);
     filters.appendChild(_btn('Apply', { kind:'ghost', onclick: () => load() }));
     pg.appendChild(filters);
+    pg.querySelector('.page-head').appendChild(_btn('⬇ Excel', { kind:'ghost', onclick: async () => {
+      try {
+        const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined });
+        const flat = rows.map(r => ({ 'Invoice #': r.invoice_no, Type: r.doc_type || 'tax', Date: r.invoice_date, Customer: r.customer_name, GSTIN: r.customer_gstin || '', Total: r.total, Paid: r.amount_paid, Balance: (Number(r.total)||0) - (Number(r.amount_paid)||0), Status: r.status, 'Paid status': r.paid_status || '' }));
+        await downloadRowsAsXlsx(flat, 'invoices-' + new Date().toISOString().slice(0, 10) + '.xlsx', 'Invoices');
+      } catch (e) { toast(e.message, 'err'); }
+    } }));
 
     const tbl = h('div'); pg.appendChild(tbl);
     view.appendChild(pg);
@@ -54284,6 +54309,17 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
 
       top.appendChild(_field('Seller (Your Company)', compSel));
       top.appendChild(_field('Customer (existing)', custSel));
+      // INV_CREATE_PARTY_v1 — save the entered Bill-To as a reusable customer/party.
+      const _saveParty = _btn('➕ Save as party', { kind:'ghost', onclick: async () => {
+        if (!custName.value.trim()) { toast('Enter the Bill-To Name first', 'err'); return; }
+        try {
+          const c = await api('api_invoicing_customers_save', { name: custName.value.trim(), gstin: custGstin.value || '', state: custState.value || '', billing_address: billTo.value || '' });
+          const opt = h('option', { value: c.id, selected: 'selected' }, c.name + (c.gstin ? ' \u2022 ' + c.gstin : ''));
+          custSel.appendChild(opt); custSel.value = String(c.id);
+          toast('Party “' + c.name + '” saved — reusable on future invoices', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+      } });
+      top.appendChild(_field('New party', _saveParty, 'Save the Bill-To details below as a reusable customer'));
       top.appendChild(_field('Bill-To Name *', custName));
       top.appendChild(_field('Customer GSTIN', custGstin, 'Leave blank for B2C'));
       top.appendChild(_field('Customer State', custState, 'Drives CGST+SGST vs IGST'));
