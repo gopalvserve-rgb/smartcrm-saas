@@ -1612,8 +1612,10 @@ VIEWS.invoices = async (view) => {
       h('td', {}, fmtRupees(i.total_inr)),
       h('td', {}, h('span', { class: 'tag ' + (i.status === 'paid' ? 'ok' : i.status === 'pending' ? 'warn' : 'err') }, i.status)),
       h('td', { class: 'muted' }, fmtDate(i.created_at)),
-      h('td', { style: { textAlign: 'right' } },
-        i.status !== 'paid' ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_invoices_markPaid', i.id); navigate('invoices'); } }, 'Mark paid') : null
+      h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+        i.status !== 'paid' ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_invoices_markPaid', i.id); navigate('invoices'); } }, 'Mark paid') : null,
+        h('button', { class: 'btn ghost xs', style: { marginLeft: '4px' }, title: 'Send this invoice to the tenant (email / WhatsApp)', onclick: () => _openInvoiceSendModal(i) }, '📧 Send'),
+        h('button', { class: 'btn ghost xs', style: { marginLeft: '4px' }, title: 'Email this tenant (reminder / any info)', onclick: () => _openTenantEmailModal(i) }, '✉ Email')
       )
     )))
   );
@@ -5149,3 +5151,63 @@ VIEWS.whatsapp = async (view) => {
   }
   refresh();
 };
+
+
+/* ==========================================================================
+ * SAAS_EMAIL_v1 — invoice send + free-form tenant email (from Invoices list)
+ * ========================================================================== */
+function _openInvoiceSendModal(inv) {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '460px' } });
+  m.appendChild(card); document.body.appendChild(m);
+  const emailChk = h('input', { type: 'checkbox', checked: 'checked' });
+  const waChk = h('input', { type: 'checkbox' });
+  const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+  const send = h('button', { class: 'btn primary' }, 'Send');
+  send.onclick = async () => {
+    if (!emailChk.checked && !waChk.checked) { out.innerHTML = '<span style="color:#dc2626">Pick at least one channel</span>'; return; }
+    send.disabled = true; send.textContent = 'Sending…';
+    try {
+      const r = await api('api_saas_invoices_send', { id: inv.id, email: emailChk.checked, whatsapp: waChk.checked });
+      out.innerHTML = '<span style="color:#15803d">Sent · email=' + ((r.sent && r.sent.email) || 'skip') + ' · whatsapp=' + ((r.sent && r.sent.whatsapp) || 'skip') + '</span>';
+    } catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
+    send.disabled = false; send.textContent = 'Send';
+  };
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '📧 Send invoice ' + (inv.number || '')));
+  card.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '8px' } },
+    'To ' + (inv.org_name || 'tenant') + (inv.contact_email ? (' · ' + inv.contact_email) : '') + (inv.total_inr != null ? (' · ' + fmtRupees(inv.total_inr)) : '')));
+  card.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '6px 0' } }, emailChk, h('span', {}, 'Email')));
+  card.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '6px 0' } }, waChk, h('span', {}, 'WhatsApp')));
+  card.appendChild(out);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), send));
+}
+
+function _openTenantEmailModal(inv) {
+  inv = inv || {};
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '560px' } });
+  m.appendChild(card); document.body.appendChild(m);
+  const subj = h('input', { type: 'text', value: inv.number ? ('Regarding invoice ' + inv.number) : '', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
+  const body = h('textarea', { rows: '8', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
+  const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+  const send = h('button', { class: 'btn primary' }, 'Send email');
+  send.onclick = async () => {
+    if (!subj.value.trim() || !body.value.trim()) { out.innerHTML = '<span style="color:#dc2626">Subject and message required</span>'; return; }
+    send.disabled = true; send.textContent = 'Sending…';
+    try {
+      const r = await api('api_saas_email_send', { tenant_id: inv.tenant_id, to: inv.contact_email || undefined, subject: subj.value.trim(), body: body.value.trim() });
+      out.innerHTML = '<span style="color:#15803d">✓ Sent to ' + r.to + '</span>';
+    } catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
+    send.disabled = false; send.textContent = 'Send email';
+  };
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '✉ Email ' + (inv.org_name || 'tenant')));
+  card.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '8px' } }, 'Sends from your platform email to the tenant\'s contact email' + (inv.contact_email ? (' (' + inv.contact_email + ')') : '') + '.'));
+  card.appendChild(h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600' } }, 'Subject'));
+  card.appendChild(subj);
+  card.appendChild(h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600', marginTop: '8px', display: 'block' } }, 'Message'));
+  card.appendChild(body);
+  card.appendChild(out);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), send));
+}

@@ -131,7 +131,35 @@ async function api_saas_invoices_runAutoGen(token) {
   return await ag.runOnce();
 }
 
+// SAAS_EMAIL_v1 — send a free-form email (invoice reminder, notice, any info)
+// to a tenant's contact email via the platform SMTP (saasMailer).
+async function api_saas_email_send(token, payload) {
+  const { requireFullAdmin } = require('./superAdminAuth');
+  await requireFullAdmin(token);
+  const p = payload || {};
+  let to = String(p.to || '').trim();
+  if (!to && p.tenant_id) {
+    const r = await control.query('SELECT contact_email FROM tenants WHERE id = $1', [p.tenant_id]);
+    to = r.rows.length ? String(r.rows[0].contact_email || '').trim() : '';
+  }
+  if (!to) throw new Error('No recipient email (tenant has no contact email — pass "to")');
+  const subject = String(p.subject || '').trim();
+  if (!subject) throw new Error('Subject required');
+  const bodyText = String(p.body || p.html || '').trim();
+  if (!bodyText) throw new Error('Message body required');
+  // If the body has no HTML tags, wrap plain text into simple HTML paragraphs.
+  const html = /<[a-z][\s\S]*>/i.test(bodyText)
+    ? bodyText
+    : '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a">' +
+      bodyText.split(/\n\s*\n/).map(par => '<p>' + par.replace(/\n/g, '<br>') + '</p>').join('') +
+      '</div>';
+  const saasMailer = require('./saasMailer');
+  await saasMailer.sendMail({ to, subject, html });
+  return { ok: true, to };
+}
+
 module.exports = {
+  api_saas_email_send,
   api_saas_invoices_list,
   api_saas_invoices_get,
   api_saas_invoices_markPaid,
