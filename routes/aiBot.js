@@ -1839,13 +1839,32 @@ async function _hasCommitSignal(phone) {
       // Time-bound future commitments
       'busy now', 'busy right now', 'in a meeting', 'will call you', 'will get back',
       "i'll get back", 'will reach out', "i'll reach out", 'circle back', 'later in the week',
-      'next week', 'next month', 'after diwali', 'after holi', 'after the weekend'
+      'next week', 'next month', 'after diwali', 'after holi', 'after the weekend',
+      /* AIBOT_COMMIT_v3 (2026-07-05) — plain acknowledgements when a bot has JUST
+       * proposed a demo/time. 'ok' / 'ok done' etc as a single word confirms the
+       * proposed action. We only match short standalone 'ok' via a strict pattern
+       * further below (not this list). */
+      'demo', 'demo please', 'demo book', 'book demo', 'yes book',
+      'yes confirmed', 'yes please', 'sounds good', 'that works', 'works for me',
+      'perfect', 'confirmed', 'done', 'chalega', 'chalta hai', 'kar do', 'karo book'
     ];
     // Bot / agent acknowledgements
     const COMMIT_KW_OUT = [
+      /* existing */
       'callback scheduled', 'demo scheduled', 'demo booked', 'meeting confirmed',
       'i will arrange', 'will arrange a callback', 'arranged a callback',
-      'agent will call', 'our team will call', 'thanks for confirming'
+      'agent will call', 'our team will call', 'thanks for confirming',
+      /* AIBOT_COMMIT_v3 (2026-07-05) — broader phrasing that the current bot actually uses */
+      'confirmed your demo', 'demo is confirmed', 'your demo for',
+      'noted that', 'i have noted', "i've noted",
+      'look forward to speaking', 'look forward to showing', 'look forward to seeing',
+      'team will be ready', 'team is ready', 'our team will be',
+      'see you soon', 'see you tomorrow', 'see you at',
+      /* Time-committed acknowledgements */
+      'tomorrow at 11', 'tomorrow at 12', 'tomorrow at 1', 'tomorrow at 2',
+      'tomorrow at 3', 'tomorrow at 4', 'tomorrow at 5', 'tomorrow at 6', 'tomorrow at 7',
+      'at 3 pm', 'at 4 pm', 'at 5 pm', 'at 11 am', 'at 10 am',
+      'perfect!', 'great!', 'wonderful evening', 'have a lovely'
     ];
     for (const m of msgs) {
       const kws = m.dir === 'in' ? COMMIT_KW_IN : COMMIT_KW_OUT;
@@ -1854,6 +1873,63 @@ async function _hasCommitSignal(phone) {
       }
     }
   } catch (e) { /* fail open — don't block legit re-engagement */ }
+
+  /* AIBOT_COMMIT_v3 (2026-07-05) — CRM-state check.
+   * If the lead has an upcoming followup, an active demo_reminder, or a
+   * "closed" status (Won / Demo Scheduled / Meeting Fixed / Not Interested /
+   * Junk), skip re-engagement. This catches cases where the bot phrasing
+   * doesn't match our keyword lists but the CRM already knows the customer
+   * is committed. */
+  try {
+    const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+    if (digits) {
+      const l = await db.query(
+        `SELECT l.id, l.next_followup_at, s.name AS status_name
+           FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
+          WHERE RIGHT(regexp_replace(l.phone, '[^0-9]', '', 'g'), 10) = $1
+          ORDER BY l.id DESC LIMIT 1`,
+        [digits]
+      );
+      const lead = l.rows[0];
+      if (lead) {
+        /* Upcoming follow-up scheduled in next 30 days → committed */
+        if (lead.next_followup_at) {
+          const fu = new Date(lead.next_followup_at).getTime();
+          const now = Date.now();
+          if (fu > now - 3600_000 && fu < now + 30 * 86400_000) {
+            return { committed: true, reason: 'CRM state: follow-up scheduled ' + lead.next_followup_at };
+          }
+        }
+        /* Status-based skip */
+        const closedStatuses = /demo\s*scheduled|meeting\s*fixed|meeting\s*scheduled|won|deal\s*done|closed\s*won|not\s*interested|junk|lost|dnp|dnd/i;
+        if (lead.status_name && closedStatuses.test(String(lead.status_name))) {
+          return { committed: true, reason: 'CRM state: status="' + lead.status_name + '"' };
+        }
+        /* Any pending followup row for this lead */
+        try {
+          const fu = await db.query(
+            `SELECT 1 FROM followups
+              WHERE lead_id = $1 AND (is_done = 0 OR is_done IS NULL)
+                AND due_at BETWEEN NOW() - INTERVAL '1 hour' AND NOW() + INTERVAL '30 days'
+              LIMIT 1`,
+            [lead.id]
+          );
+          if (fu.rows.length) return { committed: true, reason: 'CRM state: pending followup row exists' };
+        } catch (_) {}
+        /* Any pending demo_reminder for this lead */
+        try {
+          const dr = await db.query(
+            `SELECT 1 FROM demo_reminders
+              WHERE lead_id = $1 AND scheduled_at > NOW() - INTERVAL '1 hour'
+              LIMIT 1`,
+            [lead.id]
+          );
+          if (dr.rows.length) return { committed: true, reason: 'CRM state: demo_reminder scheduled' };
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
   return { committed: false };
 }
 

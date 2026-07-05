@@ -778,6 +778,12 @@
   }
 
   function _ensureFab() {
+    /* FAB_REMOVE_v1 (2026-07-05) — bell FAB removed per user request.
+     * If a legacy FAB is on the page, evict it. Otherwise do nothing. */
+    var old = document.getElementById('rf-fab');
+    if (old) old.remove();
+    return;
+    /* legacy code (dead) below */
     if (document.getElementById('rf-fab')) return;
     var fab = document.createElement('button');
     fab.id = 'rf-fab';
