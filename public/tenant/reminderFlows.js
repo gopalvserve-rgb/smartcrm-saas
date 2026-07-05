@@ -85,12 +85,16 @@
             '<h2 style="margin:0">🔔 Follow-up Reminders</h2>' +
             '<p class="muted" style="margin:.25rem 0 0">Reusable reminder flows. Reps pick one when they set a follow-up — WhatsApp templates + emails fire at the times you configure.</p>' +
           '</div>' +
-          '<button type="button" class="btn primary" id="rf-new" style="padding:.55rem 1.1rem;font-weight:600;background:#6366f1;color:#fff;border:0;border-radius:8px;cursor:pointer">+ New Flow</button>' +
+          '<div style="display:flex;gap:.5rem">' +
+            '<button type="button" id="rf-log" style="padding:.55rem 1rem;font-weight:600;background:#fff;color:#0f172a;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer">📋 Log</button>' +
+            '<button type="button" class="btn primary" id="rf-new" style="padding:.55rem 1.1rem;font-weight:600;background:#6366f1;color:#fff;border:0;border-radius:8px;cursor:pointer">+ New Flow</button>' +
+          '</div>' +
         '</div>' +
         '<div id="rf-body"><div style="padding:2rem;text-align:center;color:#94a3b8">Loading…</div></div>' +
       '</div>';
 
     document.getElementById('rf-new').onclick = function () { openBuilder(null); };
+    document.getElementById('rf-log').onclick = function () { renderLog(); };
     try { await renderList(); }
     catch (e) {
       document.getElementById('rf-body').innerHTML =
@@ -163,6 +167,157 @@
       });
     });
   }
+
+  /* ══════════════════════════════════════════════════════════════════
+   * LOG — every reminder ever sent/scheduled/failed
+   * REMINDER_LOG_v1 (2026-07-05)
+   * ══════════════════════════════════════════════════════════════ */
+  var _logState = { since_hours: 168, status: '', channel: '' };
+
+  async function renderLog() {
+    var body = document.getElementById('rf-body');
+    if (!body) return;
+    body.innerHTML = '<div style="padding:2rem;text-align:center;color:#94a3b8">Loading log…</div>';
+
+    var d;
+    try {
+      d = await _api('api_followupReminders_log', {
+        limit: 200,
+        since_hours: _logState.since_hours,
+        status: _logState.status || undefined,
+        channel: _logState.channel || undefined
+      });
+    } catch (e) {
+      body.innerHTML = '<div style="padding:1rem;background:#fee2e2;color:#991b1b;border-radius:8px">⚠ ' + esc(e.message) + '</div>';
+      return;
+    }
+
+    var items = d.items || [];
+    var totals = d.totals || {};
+
+    function fmtDT(s) {
+      if (!s) return '<span style="color:#94a3b8">—</span>';
+      try {
+        var dt = new Date(s);
+        return dt.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+      } catch (_) { return esc(s); }
+    }
+    function statusPill(st) {
+      var col = { sent: '#10b981', failed: '#dc2626', scheduled: '#6366f1', cancelled: '#94a3b8', skipped: '#f59e0b' }[st] || '#64748b';
+      return '<span style="background:' + col + ';color:#fff;padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:700;text-transform:uppercase">' + esc(st) + '</span>';
+    }
+    function chChip(ch) {
+      var col = ch === 'wa' ? '#25D366' : ch === 'email' ? '#0891b2' : '#94a3b8';
+      var lbl = ch === 'wa' ? '💬 WA' : ch === 'email' ? '📧 Email' : ch;
+      return '<span style="background:' + col + ';color:#fff;padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:600">' + esc(lbl) + '</span>';
+    }
+
+    var rows = items.map(function (r) {
+      var rung = Number(r.rung_offset_minutes || 0);
+      var rungLbl = rung === 0 ? 'On time' : (Math.abs(rung) < 60 ? Math.abs(rung) + 'm before' : (Math.abs(rung) / 60) + 'h before');
+      var recipient = r.recipient_type === 'lead'
+        ? '👤 Lead · ' + esc(r.recipient_phone || r.recipient_email || '—')
+        : '💼 Owner · ' + esc(r.recipient_phone || r.recipient_email || '—');
+      var msgId = r.wa_message_id || r.email_message_id || '';
+      var errCell = r.error
+        ? '<span style="color:#dc2626;font-size:11px" title="' + esc(r.error) + '">' + esc(String(r.error).slice(0, 80)) + '</span>'
+        : '<span style="color:#94a3b8;font-size:11px">—</span>';
+      return '<tr style="border-top:1px solid #f1f5f9">' +
+        '<td style="padding:.55rem .5rem;vertical-align:top">' + statusPill(r.status) + '</td>' +
+        '<td style="padding:.55rem .5rem;vertical-align:top"><b>' + esc(r.lead_name || '(no name)') + '</b><br><span style="color:#64748b;font-size:11px">' + esc(r.lead_phone || r.lead_email || '') + '</span></td>' +
+        '<td style="padding:.55rem .5rem;vertical-align:top">' + esc(r.flow_name || '(deleted flow)') + '<br><span style="color:#94a3b8;font-size:10.5px">' + esc(rungLbl) + '</span></td>' +
+        '<td style="padding:.55rem .5rem;vertical-align:top">' + chChip(r.channel) + '<br><span style="color:#64748b;font-size:11px">' + recipient + '</span></td>' +
+        '<td style="padding:.55rem .5rem;vertical-align:top;font-size:11.5px">' +
+          '<div><span style="color:#94a3b8">Fire:</span> ' + fmtDT(r.fire_at) + '</div>' +
+          '<div><span style="color:#94a3b8">Sent:</span> ' + fmtDT(r.sent_at) + '</div>' +
+        '</td>' +
+        '<td style="padding:.55rem .5rem;vertical-align:top;font-size:11px">' +
+          (r.wa_template_name ? '<code style="background:#eef2ff;color:#4338ca;padding:1px 6px;border-radius:4px;font-size:10.5px">' + esc(r.wa_template_name) + '</code><br>' : '') +
+          (msgId ? '<span style="color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px" title="' + esc(msgId) + '">ID: ' + esc(String(msgId).slice(0, 24)) + '…</span>' : '') +
+        '</td>' +
+        '<td style="padding:.55rem .5rem;vertical-align:top">' + errCell + '</td>' +
+      '</tr>';
+    }).join('');
+
+    if (!rows) rows = '<tr><td colspan="7" style="padding:2rem;text-align:center;color:#94a3b8">No reminder activity in the selected window.</td></tr>';
+
+    body.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">' +
+        '<button type="button" id="rf-log-back" style="background:transparent;border:0;color:#6366f1;cursor:pointer;font-size:13px;font-weight:600;padding:0">◄ Back to all flows</button>' +
+        '<div style="display:flex;gap:.5rem;align-items:center;font-size:12.5px;flex-wrap:wrap">' +
+          '<label style="display:flex;align-items:center;gap:.35rem">Window ' +
+            '<select id="rf-log-window" style="padding:.35rem;border:1px solid #e5e7eb;border-radius:6px;font-size:12.5px">' +
+              [ [24, 'Last 24h'], [72, 'Last 3 days'], [168, 'Last 7 days'], [720, 'Last 30 days'] ].map(function (o) {
+                var sel = _logState.since_hours === o[0] ? ' selected' : '';
+                return '<option value="' + o[0] + '"' + sel + '>' + o[1] + '</option>';
+              }).join('') +
+            '</select>' +
+          '</label>' +
+          '<label style="display:flex;align-items:center;gap:.35rem">Status ' +
+            '<select id="rf-log-status" style="padding:.35rem;border:1px solid #e5e7eb;border-radius:6px;font-size:12.5px">' +
+              [ ['', 'All'], ['sent', 'Sent'], ['failed', 'Failed'], ['scheduled', 'Scheduled'], ['cancelled', 'Cancelled'], ['skipped', 'Skipped'] ].map(function (o) {
+                var sel = _logState.status === o[0] ? ' selected' : '';
+                return '<option value="' + o[0] + '"' + sel + '>' + o[1] + '</option>';
+              }).join('') +
+            '</select>' +
+          '</label>' +
+          '<label style="display:flex;align-items:center;gap:.35rem">Channel ' +
+            '<select id="rf-log-channel" style="padding:.35rem;border:1px solid #e5e7eb;border-radius:6px;font-size:12.5px">' +
+              [ ['', 'All'], ['wa', 'WhatsApp'], ['email', 'Email'] ].map(function (o) {
+                var sel = _logState.channel === o[0] ? ' selected' : '';
+                return '<option value="' + o[0] + '"' + sel + '>' + o[1] + '</option>';
+              }).join('') +
+            '</select>' +
+          '</label>' +
+          '<button type="button" id="rf-log-refresh" style="padding:.35rem .75rem;background:#6366f1;color:#fff;border:0;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px">↻ Refresh</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem;margin-bottom:1rem">' +
+        [
+          [totals.total || 0, 'Total', '#6366f1'],
+          [totals.sent || 0, '✅ Sent', '#10b981'],
+          [totals.failed || 0, '❌ Failed', '#dc2626'],
+          [totals.scheduled || 0, '⏳ Scheduled', '#6366f1'],
+          [totals.cancelled || 0, '🚫 Cancelled', '#94a3b8'],
+          [totals.skipped || 0, '⏭ Skipped', '#f59e0b']
+        ].map(function (c) {
+          return '<div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid ' + c[2] + ';border-radius:8px;padding:.6rem .8rem">' +
+            '<div style="font-size:1.4rem;font-weight:700;color:' + c[2] + '">' + c[0] + '</div>' +
+            '<div style="font-size:11px;color:#64748b;font-weight:600">' + c[1] + '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+      '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:auto">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px">' +
+          '<thead style="background:#f8fafc">' +
+            '<tr>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Status</th>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Lead</th>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Flow / Rung</th>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Channel · Recipient</th>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Timing</th>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Template / Msg ID</th>' +
+              '<th style="text-align:left;padding:.6rem .5rem;font-weight:700;color:#0f172a;font-size:11px;text-transform:uppercase;letter-spacing:.3px">Error</th>' +
+            '</tr>' +
+          '</thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+      '</div>' +
+      '<p class="muted" style="font-size:11px;margin:1rem 0 0;color:#94a3b8">Showing up to 200 entries. Rows sorted by most recent fire time.</p>';
+
+    document.getElementById('rf-log-back').onclick = function () { viewFollowupReminders(); };
+    document.getElementById('rf-log-refresh').onclick = function () {
+      _logState.since_hours = Number(document.getElementById('rf-log-window').value) || 168;
+      _logState.status = document.getElementById('rf-log-status').value;
+      _logState.channel = document.getElementById('rf-log-channel').value;
+      renderLog();
+    };
+    ['rf-log-window','rf-log-status','rf-log-channel'].forEach(function (id) {
+      document.getElementById(id).onchange = function () { document.getElementById('rf-log-refresh').click(); };
+    });
+  }
+
+  window.REMINDER_FLOWS_v1.log = renderLog;
 
   /* ══════════════════════════════════════════════════════════════════
    * BUILDER — edit one flow (or create new when id=null)

@@ -254,6 +254,63 @@ async function api_followupReminders_summary(token) {
   return { summary: r.rows[0] || {}, top_errors: errs.rows };
 }
 
+/* ── 7. FULL LOG — every reminder ever fired/scheduled across all leads ── */
+/* REMINDER_LOG_v1 (2026-07-05) — admin log tab in the Follow-up Reminders SPA */
+async function api_followupReminders_log(token, payload) {
+  await authUser(token);
+  await _ensureSchema();
+  const p = payload || {};
+  const limit = Math.min(Math.max(Number(p.limit || 200), 1), 1000);
+  const status = p.status ? String(p.status).toLowerCase() : '';
+  const channel = p.channel ? String(p.channel).toLowerCase() : '';
+  const flowId = p.flow_id ? Number(p.flow_id) : null;
+  const sinceHours = Math.min(Math.max(Number(p.since_hours || 168), 1), 720);
+
+  const clauses = ["r.created_at >= NOW() - ($1 || ' hours')::interval"];
+  const args = [String(sinceHours)];
+  if (status)  { args.push(status);  clauses.push(`r.status = $${args.length}`); }
+  if (channel) { args.push(channel); clauses.push(`r.channel = $${args.length}`); }
+  if (flowId)  { args.push(flowId);  clauses.push(`r.flow_id = $${args.length}`); }
+  args.push(limit);
+
+  const r = await db.query(
+    `SELECT r.id, r.lead_id, r.flow_id, r.channel, r.recipient_type,
+            r.recipient_phone, r.recipient_email, r.wa_template_name,
+            r.rung_offset_minutes, r.followup_at, r.fire_at, r.sent_at,
+            r.status, r.error, r.wa_message_id, r.email_message_id, r.attempts,
+            r.created_at,
+            f.name AS flow_name,
+            l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email
+       FROM followup_reminders r
+       LEFT JOIN reminder_flows f ON f.id = r.flow_id
+       LEFT JOIN leads l ON l.id = r.lead_id
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY COALESCE(r.sent_at, r.fire_at) DESC, r.id DESC
+      LIMIT $${args.length}`,
+    args
+  );
+
+  const totalsArgs = args.slice(0, -1);
+  const totals = await db.query(
+    `SELECT
+       COUNT(*)                              ::int AS total,
+       COUNT(*) FILTER (WHERE r.status='sent')      ::int AS sent,
+       COUNT(*) FILTER (WHERE r.status='failed')    ::int AS failed,
+       COUNT(*) FILTER (WHERE r.status='scheduled') ::int AS scheduled,
+       COUNT(*) FILTER (WHERE r.status='cancelled') ::int AS cancelled,
+       COUNT(*) FILTER (WHERE r.status='skipped')   ::int AS skipped
+     FROM followup_reminders r
+     WHERE ${clauses.join(' AND ')}`,
+    totalsArgs
+  );
+
+  return {
+    items: r.rows,
+    totals: totals.rows[0] || {},
+    filters: { status, channel, flow_id: flowId, since_hours: sinceHours, limit }
+  };
+}
+
 /* Exported so leads.js can auto-cancel when a lead is Won/Lost/Junk */
 async function _cancelForLead(leadId, reason) {
   try {
@@ -275,6 +332,7 @@ module.exports = {
   api_followupReminders_cancel,
   api_followupReminders_reschedule,
   api_followupReminders_summary,
+  api_followupReminders_log,
   _cancelForLead,
   _ensureSchema,
   _scheduleFromFlow
