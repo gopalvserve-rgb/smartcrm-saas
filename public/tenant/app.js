@@ -56123,3 +56123,59 @@ VIEWS.ecorders = async (view) => {
     };
   }
 });
+
+/* ==========================================================================
+ * MODULE_HELP_FAB_v1 — floating, context-aware "Tutorial" button.
+ * Opens the hosted tutorial (crm.smartcrmsolution.com/tutorial) deep-linked
+ * to the CURRENT module's section, so users don't have to scroll/search.
+ * ========================================================================== */
+(function () {
+  var TUT = 'https://crm.smartcrmsolution.com/tutorial/';
+  // Map CRM view id -> tutorial anchor (module #m* or a specific #slide-*).
+  var MAP = {
+    dashboard:'#m1', users:'#slide-3', customfields:'#slide-16',
+    leads:'#m2', newleads:'#m2', duetoday:'#m2', overdue:'#m2', pool:'#m2', inbox:'#m2', newleadsreview:'#m2',
+    whatsbot:'#m3', whatsappreport:'#m3', campaigns:'#slide-35', bots:'#slide-36', flows:'#slide-36',
+    assign:'#slide-38', automations:'#slide-39', nurturing:'#slide-40', calendar:'#slide-41',
+    aibot:'#slide-42', callratings:'#slide-43', aiaudit:'#slide-43', coaching:'#slide-43',
+    ask:'#slide-44', copilot:'#slide-44', tat:'#slide-45',
+    company:'#slide-48', products:'#slide-49', quotations:'#slide-50',
+    callactivity:'#slide-51', callinsights:'#slide-51', recordings:'#slide-52', attendance:'#slide-53'
+  };
+  function currentView() {
+    try { if (typeof parseHashView === 'function') { var v = parseHashView(); if (v) return v; } } catch (_) {}
+    var hraw = String(location.hash || '').replace(/^#\/?/, '');
+    return (hraw.split(/[\/?]/)[0] || '').toLowerCase();
+  }
+  function urlForCurrent() { return TUT + (MAP[currentView()] || ''); }
+  function ensureBtn() {
+    if (document.getElementById('tutorial-fab')) return;
+    var b = document.createElement('button');
+    b.id = 'tutorial-fab'; b.type = 'button';
+    b.title = 'Watch the tutorial for this page';
+    b.innerHTML = '<span style="font-size:17px;line-height:1">🎓</span><span style="white-space:nowrap">Tutorial</span>';
+    b.style.cssText = 'position:fixed;right:20px;bottom:88px;z-index:2147482000;display:flex;align-items:center;gap:8px;padding:11px 16px;border:none;border-radius:999px;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 8px 24px rgba(79,70,229,.45);transition:transform .15s ease,box-shadow .15s ease;';
+    b.addEventListener('mouseenter', function () { b.style.transform = 'translateY(-2px)'; b.style.boxShadow = '0 12px 30px rgba(79,70,229,.55)'; });
+    b.addEventListener('mouseleave', function () { b.style.transform = ''; b.style.boxShadow = '0 8px 24px rgba(79,70,229,.45)'; });
+    b.addEventListener('click', function () {
+      var v = currentView();
+      b.querySelector('span:last-child').textContent = MAP[v] ? 'Opening…' : 'Tutorial';
+      window.open(urlForCurrent(), '_blank', 'noopener');
+      setTimeout(function () { try { b.querySelector('span:last-child').textContent = 'Tutorial'; } catch (_) {} }, 1200);
+    });
+    document.body.appendChild(b);
+  }
+  function update() {
+    var loggedIn = !!(window.CRM && window.CRM.token);
+    var b = document.getElementById('tutorial-fab');
+    if (!loggedIn) { if (b) b.style.display = 'none'; return; }
+    ensureBtn();
+    b = document.getElementById('tutorial-fab');
+    if (b) b.style.display = 'flex';
+  }
+  try {
+    window.addEventListener('hashchange', update);
+    setTimeout(update, 400); setTimeout(update, 1500);
+    setInterval(update, 3000); // cheap: toggles a boolean; also handles login/logout transitions
+  } catch (_) {}
+})();
