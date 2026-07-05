@@ -106,8 +106,18 @@ async function api_me(token) {
     totp_enabled: Number(user.totp_enabled) === 1,
     calendly_url: user.calendly_url || '',
     // CALL_CAPTURE_LEAD_ONLY_USER_v1 — per-user 'capture only my CRM-lead calls'
-    capture_lead_only: Number(user.capture_lead_only) === 1 ? 1 : 0
+    capture_lead_only: Number(user.capture_lead_only) === 1 ? 1 : 0,
+    // TERMS_GATE_v1 — has this user accepted the T&C yet?
+    terms_accepted: !!user.terms_accepted_at
   };
+}
+
+// TERMS_GATE_v1 — record T&C acceptance (self-heals the column).
+async function api_acceptTerms(token) {
+  const user = await authUser(token);
+  try { await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ'); } catch (_) {}
+  await db.query('UPDATE users SET terms_accepted_at = NOW() WHERE id = $1', [user.id]);
+  return { ok: true, terms_accepted: true };
 }
 
 async function api_logout() { return { ok: true }; }
@@ -283,7 +293,7 @@ async function api_password_reset(_token, rawToken, newPassword) {
 }
 
 module.exports = {
-  api_login, api_login_otp_verify, api_me, api_logout, api_changePassword,
+  api_login, api_login_otp_verify, api_me, api_acceptTerms, api_logout, api_changePassword,
   api_password_forgot, api_password_reset,
   api_2fa_setup_start, api_2fa_setup_verify, api_2fa_disable, api_2fa_admin_reset
 };

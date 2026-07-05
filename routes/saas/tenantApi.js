@@ -178,6 +178,7 @@ async function api_login(_token, email, password) {
       email:      user.email,
       role:       user.role,
       photo_url:  user.photo_url || '',
+      terms_accepted: !!user.terms_accepted_at,
     }
   };
 }
