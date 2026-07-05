@@ -197,6 +197,8 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_after_minutes INTEGER NOT NULL DEFAULT 60`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_message TEXT NOT NULL DEFAULT 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_max_attempts INTEGER NOT NULL DEFAULT 1`);
+    /* AIBOT_CONCLUSION_v1 (2026-07-05) — admin-configurable stop conditions */
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS conclusion_signals JSONB DEFAULT '{}'::jsonb`).catch(()=>{});
     // Tenant-configurable heat detection (May 2026): client can add their own
     // high-intent keywords + choose which heat levels fire a notification.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_keywords JSONB NOT NULL DEFAULT '[]'::jsonb`);
@@ -299,6 +301,8 @@ async function api_aibot_settings_save(token, payload) {
   if (p.reengage_after_minutes    != null) addCol('reengage_after_minutes',    '$$',          Math.max(5, Math.min(10080, Number(p.reengage_after_minutes))));
   if (p.reengage_message          != null) addCol('reengage_message',          '$$',          String(p.reengage_message).slice(0, 1000));
   if (p.reengage_max_attempts     != null) addCol('reengage_max_attempts',     '$$',          Math.max(1, Math.min(5, Number(p.reengage_max_attempts))));
+  /* AIBOT_CONCLUSION_v1 — stop conditions as JSONB {presets:[], custom:''} */
+  if (p.conclusion_signals        != null) addCol('conclusion_signals',        '$$::jsonb',  typeof p.conclusion_signals === 'string' ? p.conclusion_signals : JSON.stringify(p.conclusion_signals || {}));
   if (p.heat_enabled              != null) addCol('heat_enabled',              '$$',          p.heat_enabled ? 1 : 0);
   if (p.pause_after_human_handoff != null) addCol('pause_after_human_handoff','$$',          p.pause_after_human_handoff ? 1 : 0);
   if (p.heat_keywords             != null) addCol('heat_keywords',             '$$::jsonb',   JSON.stringify(Array.isArray(p.heat_keywords) ? p.heat_keywords : []));
@@ -1807,6 +1811,56 @@ async function api_aibot_discard_draft(token, draftId) {
 // Returns { committed: bool, reason: '...' }.
 async function _hasCommitSignal(phone) {
   if (!phone) return { committed: false };
+
+  /* AIBOT_CONCLUSION_v1 (2026-07-05) — load admin-configured conclusion signals */
+  var _adminIn = [];   /* customer phrases */
+  var _adminOut = [];  /* bot phrases */
+  var _presets = [];
+  try {
+    const cs = await db.query(`SELECT conclusion_signals FROM ai_bot_settings ORDER BY id ASC LIMIT 1`);
+    let raw = cs.rows[0] && cs.rows[0].conclusion_signals;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (_) { raw = {}; } }
+    if (raw && Array.isArray(raw.presets)) _presets = raw.presets;
+    if (raw && typeof raw.custom === 'string' && raw.custom.trim()) {
+      raw.custom.split(/\r?\n/).forEach(line => {
+        const t = String(line || '').trim().toLowerCase();
+        if (t) { _adminIn.push(t); _adminOut.push(t); }
+      });
+    }
+  } catch (_) {}
+
+  /* Preset library — maps preset IDs to phrase lists */
+  const PRESET_LIB = {
+    demo_booked:        { in: ['book demo','book a demo','book the demo','demo book','yes book','confirm demo','demo confirm'],
+                          out: ['demo scheduled','demo booked','confirmed your demo','demo is confirmed','your demo for','see you tomorrow','see you at'] },
+    callback_requested: { in: ['call me tomorrow','call me at','call back tomorrow','callback at','call back at','baat karte','baat karo','phone karo','call karo','call kar','ring me','phone me','tomorrow at','call at','call tomorrow','callback','call back'],
+                          out: ['callback scheduled','arranged a callback','will arrange a callback','agent will call','our team will call'] },
+    appointment_fixed:  { in: ['appointment','site visit','visit office','meet up','meet you','meeting scheduled','meeting fixed','fix the meeting','meeting confirm'],
+                          out: ['meeting confirmed','meeting scheduled','see you soon','team will be ready','look forward to speaking','look forward to seeing'] },
+    quote_accepted:     { in: ['i agree','approved','accept quote','accept quotation','quotation approved','quote approved','sounds good','looks good','that works','works for me'],
+                          out: ['quotation approved','quote approved','thanks for confirming','look forward to speaking'] },
+    quote_requested:    { in: ['send quote','send quotation','share quote','share quotation','send proposal','send the proposal','how much','pricing','send pricing','send rate','send price'],
+                          out: ['sending you the quote','sending the quote','sharing quotation','share the quote'] },
+    proposal_sent:      { in: [],
+                          out: ['proposal sent','brochure sent','sent you the brochure','sent you our','sent the pdf','check the pdf','check the attachment'] },
+    ready_to_buy:       { in: ['ready to buy','want to buy','go ahead','lets proceed',"let's proceed",'proceed with','sign up','sign me up','kharidna hai','lena hai','finalize','finalise','confirm order','place order','count me in',"i'll buy",'i will buy','we are in','we will go ahead','i have decided','decision taken','going with you','will sign'],
+                          out: ['thanks for confirming','deal done','order placed','congratulations on'] },
+    payment_confirmed:  { in: ['paid','payment done','transfer done','tranferred','sent the money','sent money','upi done','advance paid','advance done'],
+                          out: ['payment received','received the payment','payment confirmed','advance received'] },
+    address_shared:     { in: ['my address','my location','pin code','pincode','send to','deliver to','shipping address'],
+                          out: ['noted the address','address noted','delivery scheduled'] },
+    not_interested:     { in: ['not interested','no thanks','no thank you','wrong number','wrong person','stop messaging','stop sending','unsubscribe','do not call',"don't call",'do not message',"don't message",'remove me','mat karo','nahi chahiye','nahin chahiye','mujhe nahi','mujhe nahin'],
+                          out: ['understood, we will not','removed you from','sorry to hear that','apologies for the'] },
+    later_promised:     { in: ['later','next week','next month','after diwali','after holi','after the weekend','busy now','busy right now','in a meeting','will call you','will get back',"i'll get back",'will reach out',"i'll reach out",'circle back'],
+                          out: ['no problem, please reach out','feel free to reach','will wait for your','look forward to hearing'] },
+    human_takeover:     { in: [],
+                          out: [] /* handled elsewhere by pause_after_human_handoff */ }
+  };
+  _presets.forEach(pid => {
+    const p = PRESET_LIB[pid];
+    if (p) { _adminIn = _adminIn.concat(p.in); _adminOut = _adminOut.concat(p.out); }
+  });
+
   try {
     const r = await db.query(
       `SELECT direction, body, created_at FROM whatsapp_messages
@@ -1866,10 +1920,13 @@ async function _hasCommitSignal(phone) {
       'at 3 pm', 'at 4 pm', 'at 5 pm', 'at 11 am', 'at 10 am',
       'perfect!', 'great!', 'wonderful evening', 'have a lovely'
     ];
+    /* AIBOT_CONCLUSION_v1 — merge admin phrases with built-in library */
+    const _finalIn  = COMMIT_KW_IN.concat(_adminIn);
+    const _finalOut = COMMIT_KW_OUT.concat(_adminOut);
     for (const m of msgs) {
-      const kws = m.dir === 'in' ? COMMIT_KW_IN : COMMIT_KW_OUT;
+      const kws = m.dir === 'in' ? _finalIn : _finalOut;
       for (const kw of kws) {
-        if (m.txt.includes(kw)) return { committed: true, reason: 'commit signal: "' + kw + '" (' + m.dir + ')' };
+        if (kw && m.txt.includes(kw)) return { committed: true, reason: 'commit signal: "' + kw + '" (' + m.dir + ')' };
       }
     }
   } catch (e) { /* fail open — don't block legit re-engagement */ }

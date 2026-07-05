@@ -834,63 +834,9 @@ async function apiRaw(fn, ...args) {
   } catch (_) {}
   document.title = CRM.config.company_name || 'Lead CRM';
 
-  // TERMS_GATE_v1 — block CRM use until the user accepts the Terms & Conditions.
-  // Fail-open: only an explicit terms_accepted === false blocks; any error just lets them in.
-  const _TERMS_HTML = `
-    <p><b>PLEASE READ THESE TERMS AND CONDITIONS CAREFULLY.</b> These Terms &amp; Conditions, as modified from time to time, are a binding contract between Smart CRM Solution ("the Company") and you. By using this CRM you accept these Terms &amp; Conditions.</p>
-    <p>If these Terms conflict with any other document, these Terms will prevail for the purposes of usage of the platform. As a condition of use, the platform may send you administrative and promotional emails/SMS regarding your account activity, purchases and updates. You may opt out of promotional messages at any time.</p>
-    <h4 style="margin:14px 0 4px">General</h4>
-    <p>The right to use the platform is personal to you and is not transferable to any other person or entity. You are responsible for all use of your account and for maintaining the confidentiality of your login credentials.</p>
-    <h4 style="margin:14px 0 4px">Modified Terms</h4>
-    <p>The Company reserves the right at all times to discontinue or modify any of these Terms and/or its Privacy Policy without prior notice. Continued use of the platform after changes constitutes acceptance of the revised Terms.</p>
-    <h4 style="margin:14px 0 4px">Cancellation &amp; Refunds</h4>
-    <p>Requests for order cancellation are valid only if made within 24 hours of placing the order and before the order is processed. The Company has full right to decide whether an order has been processed. Refunds, where applicable, are handled per the Refund Policy.</p>
-    <h4 style="margin:14px 0 4px">Fraudulent / Declined Transactions</h4>
-    <p>The Company monitors accounts to avoid fraudulent accounts and transactions and may cancel orders it deems suspicious. You confirm that payment details provided are correct and that you are authorised to use them.</p>
-    <h4 style="margin:14px 0 4px">Jurisdiction</h4>
-    <p>In case of dispute, jurisdiction will be Delhi courts only in all circumstances.</p>
-  `;
-  async function _enforceTermsGate() {
-    try {
-      const u = CRM.user;
-      if (!u || u.terms_accepted !== false) return; // accepted / unknown -> do not block
-      await new Promise((resolve) => {
-        const ov = document.createElement('div');
-        ov.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.78);display:flex;align-items:center;justify-content:center;padding:16px;';
-        const card = document.createElement('div');
-        card.style.cssText = 'background:#fff;border-radius:14px;max-width:720px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden;';
-        card.innerHTML =
-          '<div style="padding:18px 22px;border-bottom:1px solid #e2e8f0">' +
-            '<h2 style="margin:0;font-size:1.2rem;color:#0f172a">Terms &amp; Conditions</h2>' +
-            '<div style="font-size:.82rem;color:#64748b;margin-top:4px">Please read and accept to continue using the CRM.</div>' +
-          '</div>' +
-          '<div style="padding:18px 22px;overflow-y:auto;flex:1;font-size:.86rem;line-height:1.55;color:#334155">' + _TERMS_HTML +
-            '<div style="margin-top:12px;font-size:.8rem"><a href="https://smartcrmsolution.com/home/terms-and-condition.php" target="_blank" rel="noopener">Read the full Terms &amp; Conditions &#8599;</a></div>' +
-          '</div>' +
-          '<div style="padding:14px 22px;border-top:1px solid #e2e8f0;display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap">' +
-            '<label style="display:flex;align-items:center;gap:8px;margin-right:auto;font-size:.85rem;color:#334155;cursor:pointer"><input type="checkbox" id="tc-agree"/> I have read and agree</label>' +
-            '<button id="tc-decline" style="padding:9px 16px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;cursor:pointer;font-weight:600">Decline &amp; Log out</button>' +
-            '<button id="tc-accept" disabled style="padding:9px 18px;border-radius:8px;border:none;background:#94a3b8;color:#fff;cursor:not-allowed;font-weight:700">Accept &amp; Continue</button>' +
-          '</div>';
-        ov.appendChild(card); document.body.appendChild(ov);
-        const chk = card.querySelector('#tc-agree'), acc = card.querySelector('#tc-accept'), dec = card.querySelector('#tc-decline');
-        chk.addEventListener('change', () => { acc.disabled = !chk.checked; acc.style.background = chk.checked ? '#4f46e5' : '#94a3b8'; acc.style.cursor = chk.checked ? 'pointer' : 'not-allowed'; });
-        acc.addEventListener('click', async () => {
-          acc.disabled = true; acc.textContent = 'Saving...';
-          try { await api('api_acceptTerms'); CRM.user.terms_accepted = true; ov.remove(); resolve(); }
-          catch (e) { acc.disabled = false; acc.textContent = 'Accept & Continue'; alert('Could not save acceptance: ' + (e && e.message || e) + '. Please try again.'); }
-        });
-        dec.addEventListener('click', () => {
-          try { localStorage.removeItem(CRM._slug ? ('crm_token_' + CRM._slug) : 'crm_token'); localStorage.removeItem('crm_token'); } catch (_) {}
-          location.reload();
-        });
-      });
-    } catch (_) { /* fail-open */ }
-  }
   if (CRM.token) {
     try {
       CRM.user = await api('api_me');
-      try { await _enforceTermsGate(); } catch (_) {}
       // Load industry pack BEFORE renderShell so the sidebar's requiresPack
       // filter sees the active pack at render time. Without this, the nav
       // gets built with installedPacks=undefined, every Edu/RE item gets
@@ -16296,6 +16242,47 @@ async function _aibotSettingsView(currentPhId) {
   const reengageMins   = h('input', { type: 'number', value: s.reengage_after_minutes || 60, min: 5, max: 10080, step: 5, style: { width: '7rem' } });
   const reengageMsgInp = h('textarea', { rows: 3, style: { width: '100%' } }, s.reengage_message || 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.');
   const reengageMaxInp = h('input', { type: 'number', value: s.reengage_max_attempts || 1, min: 1, max: 5, style: { width: '5rem' } });
+
+  /* AIBOT_CONCLUSION_v1 (2026-07-05) — admin-configurable stop conditions.
+   * When the customer commits (books a demo, asks for a callback, confirms an
+   * appointment, etc.) the re-engagement should NOT fire. Preset checkboxes +
+   * a freeform textarea for phrases specific to this tenant's business. */
+  var _cs = s.conclusion_signals || {};
+  if (typeof _cs === 'string') { try { _cs = JSON.parse(_cs); } catch (_) { _cs = {}; } }
+  var _csPresets = (_cs && Array.isArray(_cs.presets)) ? _cs.presets : ['demo_booked','callback_requested','appointment_fixed','quote_accepted','not_interested'];
+  var _csCustom = (_cs && typeof _cs.custom === 'string') ? _cs.custom : '';
+
+  var CONCLUSION_PRESETS = [
+    { id: 'demo_booked',         label: '📅 Customer booked a demo / product tour' },
+    { id: 'callback_requested',  label: '📞 Customer asked for a callback / call at a specific time' },
+    { id: 'appointment_fixed',   label: '🤝 Appointment / meeting / site visit fixed' },
+    { id: 'quote_accepted',      label: '💰 Customer accepted / approved a quotation' },
+    { id: 'quote_requested',     label: '📄 Customer asked for a quotation / proposal' },
+    { id: 'proposal_sent',       label: '📧 Proposal / brochure was sent to the customer' },
+    { id: 'ready_to_buy',        label: '🛒 Customer said "ready to buy / go ahead / place order"' },
+    { id: 'payment_confirmed',   label: '💳 Payment / advance / signup confirmed' },
+    { id: 'address_shared',      label: '🏠 Customer shared address / location / KYC' },
+    { id: 'not_interested',      label: '🚫 Customer said "not interested / wrong number / stop"' },
+    { id: 'later_promised',      label: '⏳ Customer said "will get back later / next week / after Diwali"' },
+    { id: 'human_takeover',      label: '💼 A human agent has replied on this thread' }
+  ];
+
+  var conclusionPresetInputs = {};
+  var conclusionPresetsWrap = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '.4rem .8rem', marginTop: '.35rem' } });
+  CONCLUSION_PRESETS.forEach(function (p) {
+    var cb = h('input', { type: 'checkbox', checked: _csPresets.indexOf(p.id) >= 0 ? 'checked' : null });
+    conclusionPresetInputs[p.id] = cb;
+    conclusionPresetsWrap.appendChild(
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem', cursor: 'pointer', padding: '.2rem 0' } },
+        cb, h('span', {}, p.label)
+      )
+    );
+  });
+  var conclusionCustomInp = h('textarea', {
+    rows: 3, placeholder: 'One phrase per line — e.g.\nsite visit fixed for tomorrow\nkarj lena hai\nadmission form filled',
+    style: { width: '100%', fontSize: '.85rem' }
+  }, _csCustom);
+
   // Quick-set chips
   const reengageQuick = h('div', { style: { display: 'flex', gap: '.3rem', flexWrap: 'wrap', marginTop: '.3rem' } });
   [['10 min', 10], ['30 min', 30], ['1 hour', 60], ['3 hours', 180], ['1 day', 1440], ['3 days', 4320]].forEach(([lbl, mins]) => {
@@ -16320,7 +16307,20 @@ async function _aibotSettingsView(currentPhId) {
       h('label', {}, 'Max re-engagement attempts per customer (per 7 days)'),
       reengageMaxInp,
       h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
-        'Stops the bot from spamming a customer who keeps going silent. Once this many pings have been sent in 7 days, no more.'))
+        'Stops the bot from spamming a customer who keeps going silent. Once this many pings have been sent in 7 days, no more.')),
+    /* AIBOT_CONCLUSION_v1 — do-not-fire conditions */
+    h('div', { class: 'field', style: { marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #fde68a' } },
+      h('label', { style: { fontWeight: 600, fontSize: '.9rem' } }, '🛑 Do NOT re-engage when…'),
+      h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '.25rem 0 .5rem' } },
+        'Tick the outcomes that should silence the re-engagement ping for this conversation. When any of these signals is detected in the chat, the soft check-in above will NOT fire.'),
+      conclusionPresetsWrap
+    ),
+    h('div', { class: 'field' },
+      h('label', {}, 'Extra custom phrases (one per line)'),
+      conclusionCustomInp,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        'Business-specific commit phrases. Case-insensitive substring match. E.g. "site visit fixed", "policy issued", "admission confirmed", "karj mil gaya".')
+    )
   ));
 
   // ---- Hot lead alerts (May 2026) ----
@@ -16466,6 +16466,11 @@ async function _aibotSettingsView(currentPhId) {
       reengage_after_minutes: Number(reengageMins.value || 60),
       reengage_message: reengageMsgInp.value,
       reengage_max_attempts: Number(reengageMaxInp.value || 1),
+      /* AIBOT_CONCLUSION_v1 — persist admin-picked stop conditions */
+      conclusion_signals: {
+        presets: Object.keys(conclusionPresetInputs).filter(function (k) { return conclusionPresetInputs[k].checked; }),
+        custom:  conclusionCustomInp.value || ''
+      },
       bot_name: botName.value, business_name: bizName.value,
       language: Object.keys(langChks).filter(k => langChks[k].checked).join('+') || 'en',
       system_prompt: sysPrompt.value,
