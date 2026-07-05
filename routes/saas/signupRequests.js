@@ -278,9 +278,29 @@ async function expressPublicSubmit(req, res) {
     const org  = String(b.org_name || '').trim();
     const slug = String(b.desired_slug || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
     const meta = {};
-    ['submitted_by','desired_tenure','desired_users','payment_status','amount_paid_inr','total_amount_inr','next_payment_at','notes','transaction_mode','transaction_id','transaction_date','payment_remarks'].forEach(k => {
+    ['submitted_by','desired_tenure','desired_users','payment_status','amount_paid_inr','total_amount_inr','next_payment_at','notes','transaction_mode','transaction_id','transaction_date','payment_remarks','gst_mode'].forEach(k => {
       if (b[k] != null && String(b[k]).trim() !== '') meta[k] = String(b[k]).trim();
     });
+    // GST_SPLIT_v1 — split the entered Total into sale amount + GST so the
+    // super-admin can account for sale value and GST separately.
+    // No GST  → the total IS the sale amount (gst 0).
+    // With GST → the total is GST-inclusive; extract 18% (sale = total / 1.18).
+    const _gstMode = String(b.gst_mode || 'no_gst').toLowerCase() === 'with_gst' ? 'with_gst' : 'no_gst';
+    const _total   = Number(b.total_amount_inr);
+    if (isFinite(_total) && _total > 0) {
+      if (_gstMode === 'with_gst') {
+        const sale = Math.round((_total / 1.18) * 100) / 100;
+        meta.gst_mode       = 'with_gst';
+        meta.gst_percent    = 18;
+        meta.sale_amount_inr = sale;
+        meta.gst_amount_inr = Math.round((_total - sale) * 100) / 100;
+      } else {
+        meta.gst_mode       = 'no_gst';
+        meta.gst_percent    = 0;
+        meta.sale_amount_inr = _total;
+        meta.gst_amount_inr = 0;
+      }
+    }
     const r = await control.query(
       `INSERT INTO signups (name, email, mobile, org_name, desired_slug, status, metadata)
        VALUES ($1,$2,$3,$4,$5,'pending',$6) RETURNING id`,

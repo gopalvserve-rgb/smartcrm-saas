@@ -112,9 +112,21 @@
               </label>
             </div>
           </div>
+          <div class="full">
+            <label>GST *</label>
+            <div style="display:flex;gap:1rem;margin-top:.3rem">
+              <label style="display:flex;align-items:center;gap:.35rem;font-weight:500;font-size:.9rem;cursor:pointer">
+                <input type="radio" name="gst_mode" value="no_gst" checked /> No GST
+              </label>
+              <label style="display:flex;align-items:center;gap:.35rem;font-weight:500;font-size:.9rem;cursor:pointer">
+                <input type="radio" name="gst_mode" value="with_gst" /> With GST (18% included)
+              </label>
+            </div>
+          </div>
           <div>
             <label>Total amount (₹)</label>
             <input type="number" name="total_amount_inr" min="0" step="0.01" placeholder="e.g. 24000" />
+            <div id="sr-gst-breakdown" class="sr-help" style="margin-top:.35rem"></div>
           </div>
           <div>
             <label>Amount paid so far (₹)</label>
@@ -223,6 +235,24 @@
     }
     totalInp.addEventListener('input', _refreshBalance);
     paidInp.addEventListener('input', _refreshBalance);
+
+    /* GST_SPLIT_v1 — No GST vs With GST(18% incl). Back-calc sale + GST live. */
+    const gstOut = document.getElementById('sr-gst-breakdown');
+    function _gstMode() { const c = document.querySelector('input[name=gst_mode]:checked'); return c ? c.value : 'no_gst'; }
+    function _refreshGst() {
+      const t = Number(totalInp.value);
+      if (!isFinite(t) || t <= 0) { gstOut.textContent = ''; return; }
+      if (_gstMode() === 'with_gst') {
+        const sale = Math.round((t / 1.18) * 100) / 100;
+        const gst  = Math.round((t - sale) * 100) / 100;
+        gstOut.innerHTML = '<span style="color:#1e40af">Sale amount (excl. GST): <b>₹' + sale.toLocaleString('en-IN') +
+          '</b> &middot; GST 18%: <b>₹' + gst.toLocaleString('en-IN') + '</b></span>';
+      } else {
+        gstOut.innerHTML = '<span style="color:#475569">No GST — the full ₹' + t.toLocaleString('en-IN') + ' is the sale amount.</span>';
+      }
+    }
+    document.querySelectorAll('input[name=gst_mode]').forEach(r => r.addEventListener('change', _refreshGst));
+    totalInp.addEventListener('input', _refreshGst);
     document.querySelectorAll('input[name=payment_status]').forEach(r => {
       r.addEventListener('change', () => {
         const isPartial = r.value === 'partial' && r.checked;
