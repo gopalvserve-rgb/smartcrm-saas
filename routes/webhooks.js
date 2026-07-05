@@ -175,7 +175,19 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     }
     _diag.map_source = mapSource;
     _diag.map_keys = customMap ? Object.keys(customMap) : [];
-    if (customMap) { Object.keys(customMap).forEach(k => _fbMappedKeys.add(String(k))); }
+    // FB_META_QNA_v3 (2026-07-05) — 'ignore' entries in the customMap must NOT
+    // block the Q&A dump. Only skip a key from Notes if it maps to a real CRM
+    // column. This fixes the case where admin left every dropdown as
+    // '— ignore —' and expected all custom questions to still appear in Notes.
+    if (customMap) {
+      Object.keys(customMap).forEach(k => {
+        const target = customMap[k];
+        const t = target && typeof target === 'object' ? (target.field || target.to || target.target) : target;
+        const tStr = String(t == null ? '' : t).toLowerCase().trim();
+        if (!tStr || tStr === 'ignore' || tStr === 'skip' || tStr === 'none') return;
+        _fbMappedKeys.add(String(k));
+      });
+    }
     if (customMap && Object.keys(customMap).length) {
       _hasAdminMapping = true;
       const out = integrations._applyCustomMapping({ data: payload }, customMap);
@@ -207,10 +219,10 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   console.log('[fb-ingest] map diag:', JSON.stringify(_diag));
 
   const lead = {
-    name:     mappedOverrides.name  || payload.full_name || payload.name || '',
-    phone:    mappedOverrides.phone || payload.phone_number || payload.phone || '',
+    name:     mappedOverrides.name  || payload.full_name || payload.name || ((payload.first_name || payload.last_name) ? String((payload.first_name||'') + ' ' + (payload.last_name||'')).trim() : ''),
+    phone:    mappedOverrides.phone || payload.phone_number || payload.work_phone_number || payload.mobile_number || payload.mobile || payload.phone || '',
     email:    mappedOverrides.email || payload.email || '',
-    whatsapp: mappedOverrides.whatsapp || payload.phone_number || payload.phone || '',
+    whatsapp: mappedOverrides.whatsapp || payload.phone_number || payload.work_phone_number || payload.mobile_number || payload.mobile || payload.phone || '',
     source:   mappedOverrides.source || ctx.default_source || 'Facebook Lead Ad',
     source_ref: mappedOverrides.source_ref || '',
     company:  mappedOverrides.company || '',
@@ -267,14 +279,28 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   // saw the Q&A. Remarks appear in the lead timeline where every rep looks.
   let _qnaForRemark = '';
   try {
-    const _consumed = new Set(['full_name','name','phone_number','phone','email','whatsapp']);
+    // FB_META_QNA_v3 (2026-07-05) — expanded identity autopickup so admin
+    // never has to map name/phone/email/whatsapp/first-last for a form
+    // to work. Anything OTHER than these identity fields is a "form
+    // question" that gets appended to Notes.
+    const _consumed = new Set([
+      'full_name','name','first_name','last_name','middle_name',
+      'phone_number','work_phone_number','mobile_number','mobile','phone',
+      'email','whatsapp','whatsapp_number','whatsapp_business_number'
+    ]);
     const _qna = [];
     for (const _f of (fieldData || [])) {
       if (!_f || !_f.name) continue;
       if (_consumed.has(_f.name) || _fbMappedKeys.has(String(_f.name))) continue;
       const _ans = Array.isArray(_f.values) ? _f.values.join(', ') : String(_f.values == null ? '' : _f.values);
       if (!_ans) continue;
-      const _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      // Prefer Meta's human-readable label ("Garh Ganga में Plot चाहिए?") over
+      // the raw normalised name ("1_garh_ganga_(up)_में_plot_..."). Fall back
+      // to a cleaned-up name when Meta didn't send a label.
+      let _q = String(_f.label || '').trim();
+      if (!_q) {
+        _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      }
       _qna.push(_q + ': ' + _ans);
     }
     if (_qna.length) {

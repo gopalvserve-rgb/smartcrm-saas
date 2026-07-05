@@ -266,16 +266,24 @@
         else if (window.go) window.go('followupreminders');
         else if (window.VIEWS && window.VIEWS.followupreminders) window.VIEWS.followupreminders();
       };
-      /* Try to place under "AI FEATURES" group next to Demo Reminders */
-      var aiGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
-        .find(function (h) { return /ai\s*features/i.test(h.textContent); });
+      /* FB_QNA_v3 (2026-07-05) — user asked to move Follow-up Reminders under
+       * the Marketing & Communication group instead of AI Features. */
+      var groups = Array.from(nav.querySelectorAll('.nav-group-head'));
+      var mktGroup = groups.find(function (h) {
+        return /market|communication|messaging|outreach/i.test(h.textContent);
+      });
+      if (mktGroup && mktGroup.nextElementSibling) {
+        mktGroup.nextElementSibling.appendChild(link);
+        return;
+      }
+      /* Fallback — AI Features group */
+      var aiGroup = groups.find(function (h) { return /ai\s*features/i.test(h.textContent); });
       if (aiGroup && aiGroup.nextElementSibling) {
         aiGroup.nextElementSibling.appendChild(link);
         return;
       }
-      /* Fallback — Settings group */
-      var settingsGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
-        .find(function (h) { return /settings/i.test(h.textContent); });
+      /* Last resort — Settings group */
+      var settingsGroup = groups.find(function (h) { return /settings/i.test(h.textContent); });
       if (settingsGroup && settingsGroup.nextElementSibling) {
         settingsGroup.nextElementSibling.appendChild(link);
       } else {
