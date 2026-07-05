@@ -7112,8 +7112,50 @@ async function openAfterCallModal(lead) {
           if (statusId && statusId !== Number(lead.status_id)) patch.status_id = statusId;
           if (fu) patch.next_followup_at = localDtInputToIso(fu);
           try {
-            if (Object.keys(patch).length) await api('api_leads_update', lead.id, patch);
-            if (remark) await api('api_leads_addRemark', lead.id, { remark });
+            // CALL_AUTOCREATE_LEAD_v1 (2026-07-05) — if this after-call sheet
+            // was opened from a dialpad call to a number that isn't yet a
+            // lead in CRM (lead.id === null), api_leads_update would throw
+            // "Not found" and the rep would lose their entered status/remark.
+            // Instead: try to find an existing lead by phone via the server
+            // (in case CRM.cache.lastLeads was stale), and if still nothing,
+            // silently create a new lead with the dialed number + save the
+            // status/remark/follow-up against it.
+            let workingLeadId = lead.id;
+            if (!workingLeadId) {
+              const dialedPhone = String(lead.phone || (CRM.pendingCall && CRM.pendingCall.dialedPhone) || '').trim();
+              if (!dialedPhone) throw new Error('No phone number to save against');
+              // 1. Server-side search by phone — covers the case where the
+              //    lead exists but wasn't in the client's lastLeads cache.
+              try {
+                const found = await api('api_leads_list', { q: dialedPhone, limit: 5 });
+                const arr = (found && (found.leads || found.items || found)) || [];
+                const norm = s => String(s || '').replace(/\D/g, '').slice(-10);
+                const hit = (Array.isArray(arr) ? arr : []).find(l => norm(l.phone) === norm(dialedPhone));
+                if (hit && hit.id) workingLeadId = hit.id;
+              } catch (_) { /* non-fatal — fall through to create */ }
+              // 2. Still nothing — create a new lead. Name defaults to the
+              //    phone number so the rep can rename later. Source = 'Dialer'
+              //    so managers can see how the lead entered the CRM.
+              if (!workingLeadId) {
+                const created = await api('api_leads_create', {
+                  phone:  dialedPhone,
+                  name:   dialedPhone,
+                  source: 'Dialer',
+                  status_id: statusId || undefined,
+                  next_followup_at: patch.next_followup_at || undefined
+                });
+                workingLeadId = (created && (created.id || created.lead_id)) || null;
+                if (!workingLeadId) throw new Error('Could not create lead for ' + dialedPhone);
+                // For newly-created leads the status_id + next_followup_at
+                // were already set on create — drop them from the patch so
+                // we don't redo the same work.
+                if (patch.status_id) delete patch.status_id;
+                if (patch.next_followup_at) delete patch.next_followup_at;
+                toast('New lead saved: ' + dialedPhone);
+              }
+            }
+            if (Object.keys(patch).length) await api('api_leads_update', workingLeadId, patch);
+            if (remark) await api('api_leads_addRemark', workingLeadId, { remark });
             toast('Updated');
             // Post-call save → fire silent recording sweeps. Dialer may
             // still be flushing audio bytes at this moment; we run two
