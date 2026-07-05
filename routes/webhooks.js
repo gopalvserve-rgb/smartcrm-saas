@@ -268,21 +268,21 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     } catch (_e) { console.warn('[fb-ingest] campaign auto-attach failed:', _e.message); }
   }
 
-  // FB_META_QNA_NOTES_v2 (2026-07-03) — append every answered form question the
-  // admin did NOT map into Notes as "Question: Answer". v1 wrongly skipped ALL
-  // Q&A whenever ANY mapping existed (so tenants that mapped name/phone/email
-  // got no Q&A at all). Now we always run, and skip only the standard identity
-  // fields + the specific question keys the admin mapped (_fbMappedKeys).
-  // FB_META_QNA_REMARK_v1 (2026-07-05) — ALSO drop the same Q&A into a
-  // Remark row after lead insert. The Notes column is hidden by default in
-  // the leads list, so admins who don't customise the column picker never
-  // saw the Q&A. Remarks appear in the lead timeline where every rep looks.
+  // FB_META_QNA_v4 (2026-07-05) — BULLETPROOF Q&A dump.
+  //
+  // Previous versions kept edge-casing themselves out of writing Q&A:
+  //   v1 skipped ALL Q&A when any admin mapping existed
+  //   v2 skipped fields the admin explicitly mapped
+  //   v3 stopped skipping 'ignore' mappings — but was still empty when Meta
+  //       returned zero field_data (page token missing leads_retrieval scope,
+  //       or lead was fetched before FB_META_QNA_v3 shipped)
+  //
+  // v4 rule: EVERY non-identity field_data entry lands in Notes + Remark.
+  // Duplicating what admin also mapped to a CRM column is fine — data
+  // richness beats prettiness. When field_data is empty we log a clear
+  // diagnostic in Notes so admins know WHY (usually: fix Meta permissions).
   let _qnaForRemark = '';
   try {
-    // FB_META_QNA_v3 (2026-07-05) — expanded identity autopickup so admin
-    // never has to map name/phone/email/whatsapp/first-last for a form
-    // to work. Anything OTHER than these identity fields is a "form
-    // question" that gets appended to Notes.
     const _consumed = new Set([
       'full_name','name','first_name','last_name','middle_name',
       'phone_number','work_phone_number','mobile_number','mobile','phone',
@@ -291,12 +291,11 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     const _qna = [];
     for (const _f of (fieldData || [])) {
       if (!_f || !_f.name) continue;
-      if (_consumed.has(_f.name) || _fbMappedKeys.has(String(_f.name))) continue;
+      // v4: only skip pure identity fields — never skip based on admin mapping.
+      if (_consumed.has(_f.name)) continue;
       const _ans = Array.isArray(_f.values) ? _f.values.join(', ') : String(_f.values == null ? '' : _f.values);
       if (!_ans) continue;
-      // Prefer Meta's human-readable label ("Garh Ganga में Plot चाहिए?") over
-      // the raw normalised name ("1_garh_ganga_(up)_में_plot_..."). Fall back
-      // to a cleaned-up name when Meta didn't send a label.
+      // Prefer Meta's human-readable label; fall back to a cleaned-up name.
       let _q = String(_f.label || '').trim();
       if (!_q) {
         _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -306,6 +305,18 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     if (_qna.length) {
       lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + 'Form answers:\n' + _qna.join('\n');
       _qnaForRemark = '📋 Facebook form answers:\n' + _qna.join('\n');
+    } else {
+      // FB_META_QNA_v4 — no answers extracted. Explain WHY inside notes so
+      // admin can act on it (usually: page token missing 'leads_retrieval'
+      // scope OR Meta returned empty field_data for this form).
+      let _reason;
+      if (!fieldData || !fieldData.length) {
+        _reason = 'Meta returned NO field_data for this lead. Common cause: the Facebook page access token used to fetch this lead is missing the `leads_retrieval` permission. Fix: reconnect Facebook in Settings → Integrations and re-authorise this page with leads permissions.';
+      } else {
+        _reason = 'Meta returned ' + fieldData.length + ' field(s) but every value was empty or identity-only.';
+      }
+      lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + '⚠ Q&A not captured — ' + _reason;
+      _qnaForRemark = '⚠ Facebook form Q&A empty — ' + _reason;
     }
   } catch (_e) { console.warn('[fb-ingest] QnA notes failed:', _e.message); }
 

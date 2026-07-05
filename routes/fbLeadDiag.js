@@ -157,4 +157,107 @@ async function api_fbLead_diagnose(token, leadId) {
   return out;
 }
 
-module.exports = { api_fbLead_diagnose };
+/**
+ * FB_QNA_v4 REPROCESS (2026-07-05)
+ * Re-fetch leadgen from Meta Graph, rebuild Q&A on Notes + Remark.
+ * Usage: api_fbLead_reprocess({lead_id:123}) or api_fbLead_reprocess({last:20})
+ */
+async function api_fbLead_reprocess(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+
+  let leadIds = [];
+  if (p.lead_id) {
+    leadIds = [Number(p.lead_id)];
+  } else {
+    const last = Math.min(Math.max(Number(p.last || 20), 1), 200);
+    const q = await db.query(
+      `SELECT id FROM leads
+        WHERE (source ILIKE '%facebook%' OR source ILIKE '%meta%')
+          AND meta_json IS NOT NULL
+        ORDER BY id DESC LIMIT $1`,
+      [last]
+    );
+    leadIds = q.rows.map(r => r.id);
+  }
+
+  const out = { scanned: leadIds.length, updated: 0, skipped: 0, errors: [], examples: [] };
+  let fbMod = null;
+  try { fbMod = require('./fb'); } catch (_) {}
+
+  for (const leadId of leadIds) {
+    try {
+      const lead = await db.findById('leads', leadId);
+      if (!lead || !lead.meta_json) { out.skipped++; continue; }
+      const mj = typeof lead.meta_json === 'string' ? JSON.parse(lead.meta_json) : lead.meta_json;
+      const leadgenId = mj && (mj.leadgen_id || (mj.raw && mj.raw.id));
+      const pageId    = mj && mj.page_id;
+      if (!leadgenId) { out.skipped++; continue; }
+
+      let pageToken = '';
+      if (fbMod && typeof fbMod._pageContextForWebhook === 'function' && pageId) {
+        const ctx = await fbMod._pageContextForWebhook(pageId).catch(() => ({}));
+        pageToken = ctx && ctx.access_token || '';
+      }
+      if (!pageToken) pageToken = await db.getConfig('META_PAGE_ACCESS_TOKEN', '') || '';
+      if (!pageToken) { out.errors.push({ lead_id: leadId, err: 'no page token' }); continue; }
+
+      const r = await fetch(`https://graph.facebook.com/v19.0/${leadgenId}?fields=id,created_time,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,field_data&access_token=${pageToken}`);
+      const j = await r.json();
+      if (j.error) { out.errors.push({ lead_id: leadId, err: 'Graph: ' + j.error.message }); continue; }
+
+      const fieldData = j.field_data || [];
+      const _consumed = new Set([
+        'full_name','name','first_name','last_name','middle_name',
+        'phone_number','work_phone_number','mobile_number','mobile','phone',
+        'email','whatsapp','whatsapp_number','whatsapp_business_number'
+      ]);
+      const _qna = [];
+      for (const _f of fieldData) {
+        if (!_f || !_f.name) continue;
+        if (_consumed.has(_f.name)) continue;
+        const _ans = Array.isArray(_f.values) ? _f.values.join(', ') : String(_f.values == null ? '' : _f.values);
+        if (!_ans) continue;
+        let _q = String(_f.label || '').trim();
+        if (!_q) _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        _qna.push(_q + ': ' + _ans);
+      }
+
+      if (!_qna.length) { out.skipped++; continue; }
+
+      let newNotes = String(lead.notes || '');
+      const oldIdx = newNotes.indexOf('Form answers:');
+      if (oldIdx >= 0) newNotes = newNotes.slice(0, oldIdx).trim();
+      newNotes = newNotes.replace(/\n?⚠ Q&A not captured[^\n]*(\n[^\n]*)*$/, '').trim();
+      const qnaBlock = 'Form answers:\n' + _qna.join('\n');
+      const finalNotes = (newNotes ? newNotes + '\n\n' : '') + qnaBlock;
+      const newMeta = Object.assign({}, mj, { raw: j });
+
+      await db.query(
+        `UPDATE leads SET notes=$1, meta_json=$2::jsonb, updated_at=NOW() WHERE id=$3`,
+        [finalNotes, JSON.stringify(newMeta), leadId]
+      );
+
+      await db.query(
+        `DELETE FROM remarks WHERE lead_id=$1 AND remark LIKE '📋 Facebook form answers:%'`,
+        [leadId]
+      );
+      await db.query(
+        `INSERT INTO remarks (lead_id, user_id, remark, created_at) VALUES ($1, NULL, $2, NOW())`,
+        [leadId, '📋 Facebook form answers:\n' + _qna.join('\n')]
+      );
+
+      out.updated++;
+      if (out.examples.length < 8) {
+        out.examples.push({ lead_id: leadId, added_count: _qna.length, preview: _qna.slice(0, 5).join(' | ') });
+      }
+    } catch (e) {
+      out.errors.push({ lead_id: leadId, err: e.message });
+    }
+  }
+
+  return out;
+}
+
+module.exports = { api_fbLead_diagnose, api_fbLead_reprocess };
