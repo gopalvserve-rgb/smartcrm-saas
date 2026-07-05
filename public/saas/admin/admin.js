@@ -5097,37 +5097,47 @@ function _saasStartEmbeddedSignup(appId, configId, onDone) {
 }
 
 VIEWS.whatsapp = async (view) => {
-  view.appendChild(h('h1', {}, '📲 WhatsApp — Tenant Notifications'));
-  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '12px' } },
-    'Connect a dedicated WhatsApp number here. Once connected, all platform → tenant WhatsApp (welcome credentials, invoices, payment & billing reminders) is sent from this number.'));
+  view.appendChild(h('h1', {}, '📲 WhatsApp'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } },
+    'Connect a dedicated number, sync & send templates, and chat — the same WhatsApp tools your tenants get, on your platform number.'));
+  const tabbar = h('div', { style: { display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' } });
+  const bodyEl = h('div', {});
+  const TABS = [['connect', '🔌 Connect'], ['templates', '📋 Templates'], ['chat', '💬 Chat']];
+  let _active = 'connect';
+  const _btns = {};
+  TABS.forEach(([k, label]) => { const b = h('button', { class: 'btn', onclick: () => { _active = k; _paint(); _render(); } }, label); _btns[k] = b; tabbar.appendChild(b); });
+  function _paint() { TABS.forEach(([k]) => { _btns[k].className = 'btn ' + (k === _active ? 'primary' : 'ghost'); }); }
+  view.appendChild(tabbar); view.appendChild(bodyEl);
+  async function _render() {
+    bodyEl.innerHTML = '';
+    try {
+      if (_active === 'connect') await _waRenderConnect(bodyEl);
+      else if (_active === 'templates') await _waRenderTemplates(bodyEl);
+      else await _waRenderChat(bodyEl);
+    } catch (e) { bodyEl.innerHTML = ''; bodyEl.appendChild(h('div', { class: 'error-box' }, e.message)); }
+  }
+  _paint(); _render();
+};
 
+async function _waRenderConnect(host) {
   const statusCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading status…'));
-  view.appendChild(statusCard);
-
+  host.appendChild(statusCard);
   async function refresh() {
-    statusCard.innerHTML = '';
-    statusCard.appendChild(h('div', { class: 'muted' }, 'Loading status…'));
+    statusCard.innerHTML = ''; statusCard.appendChild(h('div', { class: 'muted' }, 'Loading status…'));
     let s;
-    try { s = await api('api_saas_wa_status'); }
-    catch (e) { statusCard.innerHTML = ''; statusCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    // Warm the SDK so the first Connect click opens the popup synchronously.
+    try { s = await api('api_saas_wa_status'); } catch (e) { statusCard.innerHTML = ''; statusCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
     if (s.fb_app_id) { _saasEnsureFbSdk(s.fb_app_id).catch(() => {}); }
     statusCard.innerHTML = '';
-
     if (s.connected) {
       statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
         h('span', { style: { background: '#dcfce7', color: '#166534', padding: '4px 12px', borderRadius: '999px', fontWeight: '700', fontSize: '.85rem' } }, '✓ Connected'),
         h('div', {}, h('div', { style: { fontWeight: '700' } }, (s.display_phone_number || s.phone_number_id) + (s.verified_name ? ' · ' + s.verified_name : '')),
-          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Phone ID ' + s.phone_number_id + ' · WABA ' + s.waba_id))
-      ));
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Phone ID ' + s.phone_number_id + ' · WABA ' + s.waba_id))));
       statusCard.appendChild(h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         h('button', { class: 'btn ghost', onclick: () => _saasStartEmbeddedSignup(s.fb_app_id, s.fb_config_id, refresh) }, '🔄 Reconnect / change number'),
-        h('button', { class: 'btn ghost', style: { color: '#b91c1c' }, onclick: async () => { if (!confirm('Disconnect this WhatsApp number? Tenant notifications will stop until you reconnect.')) return; try { await api('api_saas_wa_disconnect'); toast('Disconnected'); refresh(); } catch (e) { toast(e.message, 'err'); } } }, 'Disconnect')
-      ));
-
-      // Send-test panel
-      const toInp  = h('input', { type: 'text', placeholder: 'Recipient (e.g. 9198xxxxxxx)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '220px' } });
-      const msgInp = h('input', { type: 'text', value: 'Test from Smart CRM Solution ✅', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', flex: '1', minWidth: '220px' } });
+        h('button', { class: 'btn ghost', style: { color: '#b91c1c' }, onclick: async () => { if (!confirm('Disconnect this WhatsApp number? Tenant notifications will stop until you reconnect.')) return; try { await api('api_saas_wa_disconnect'); toast('Disconnected'); refresh(); } catch (e) { toast(e.message, 'err'); } } }, 'Disconnect')));
+      const toInp = h('input', { type: 'text', placeholder: 'Recipient (e.g. 9198xxxxxxx)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '220px' } });
+      const msgInp = h('input', { type: 'text', value: 'Test from Smart CRM Solution', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', flex: '1', minWidth: '220px' } });
       const sendBtn = h('button', { class: 'btn primary' }, 'Send test');
       sendBtn.onclick = async () => {
         if (!toInp.value.trim()) return toast('Enter a recipient number', 'err');
@@ -5138,7 +5148,7 @@ VIEWS.whatsapp = async (view) => {
       };
       statusCard.appendChild(h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' } },
         h('div', { style: { fontWeight: '600', marginBottom: '6px' } }, 'Send a test message'),
-        h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '8px' } }, 'Free-form text only works if the recipient messaged you in the last 24h; otherwise Meta requires an approved template.'),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '8px' } }, 'Free-form text only works if the recipient messaged you in the last 24h; otherwise use a template (Templates tab).'),
         h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, toInp, msgInp, sendBtn)));
     } else {
       statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
@@ -5149,8 +5159,94 @@ VIEWS.whatsapp = async (view) => {
         'A Facebook popup will open — log in, pick/create your WhatsApp Business number, and finish. If the popup is blocked, allow popups and click Connect again.'));
     }
   }
-  refresh();
-};
+  await refresh();
+}
+
+async function _waRenderTemplates(host) {
+  const bar = h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } });
+  const syncBtn = h('button', { class: 'btn' }, '🔄 Sync from Meta');
+  bar.appendChild(syncBtn);
+  bar.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Pull approved templates from your WhatsApp Business account.'));
+  host.appendChild(bar);
+  const listWrap = h('div', {}); host.appendChild(listWrap);
+  const sendCard = h('div', { class: 'card', style: { marginTop: '12px' } }); host.appendChild(sendCard);
+  let templates = [];
+  function renderSendForm() {
+    sendCard.innerHTML = '';
+    sendCard.appendChild(h('h3', { style: { marginTop: 0 } }, 'Send a template'));
+    const approved = templates.filter(t => t.status === 'APPROVED');
+    const toInp = h('input', { type: 'text', placeholder: 'Recipient (e.g. 9198xxxxxxx)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '200px' } });
+    const sel = h('select', { style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— pick template —'), ...approved.map(t => h('option', { value: t.name, 'data-lang': t.language }, t.name + ' (' + t.language + ')')));
+    const varsInp = h('input', { type: 'text', placeholder: 'Variables comma-separated (optional)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', flex: '1', minWidth: '200px' } });
+    const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+    const btn = h('button', { class: 'btn primary' }, 'Send template');
+    btn.onclick = async () => {
+      if (!toInp.value.trim() || !sel.value) { out.innerHTML = '<span style="color:#dc2626">Recipient and template required</span>'; return; }
+      btn.disabled = true; btn.textContent = 'Sending…';
+      const vars = varsInp.value.trim() ? varsInp.value.split(',').map(x => x.trim()) : [];
+      const lang = sel.options[sel.selectedIndex].getAttribute('data-lang') || 'en_US';
+      try { const r = await api('api_saas_wa_sendTemplate', { phone: toInp.value.trim(), template_name: sel.value, template_language: lang, variables: vars }); out.innerHTML = '<span style="color:#15803d">✓ Sent' + (r.wa_message_id ? (' (' + r.wa_message_id + ')') : '') + '</span>'; }
+      catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
+      btn.disabled = false; btn.textContent = 'Send template';
+    };
+    sendCard.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } }, toInp, sel, varsInp, btn));
+    sendCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '6px' } }, 'Templates are required to start a new conversation (outside the 24h window).'));
+    sendCard.appendChild(out);
+  }
+  async function loadList() {
+    listWrap.innerHTML = '<div class="muted">Loading templates…</div>';
+    try { templates = await api('api_saas_wa_templates_list'); } catch (e) { listWrap.innerHTML = ''; listWrap.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    listWrap.innerHTML = '';
+    if (!templates.length) { listWrap.appendChild(h('div', { class: 'muted' }, 'No templates yet — click Sync from Meta.')); }
+    else {
+      listWrap.appendChild(h('table', { class: 'data-table', style: { width: '100%', fontSize: '.85rem' } },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Lang'), h('th', {}, 'Status'), h('th', {}, 'Category'), h('th', {}, 'Body'))),
+        h('tbody', {}, ...templates.map(t => h('tr', {}, h('td', {}, h('code', {}, t.name)), h('td', {}, t.language || ''), h('td', {}, h('span', { class: 'tag ' + (t.status === 'APPROVED' ? 'ok' : 'warn') }, t.status || '')), h('td', { class: 'muted' }, t.category || ''), h('td', { class: 'muted', style: { maxWidth: '320px' } }, (t.body_text || '').slice(0, 120)))))));
+    }
+    renderSendForm();
+  }
+  syncBtn.onclick = async () => { syncBtn.disabled = true; syncBtn.textContent = 'Syncing…'; try { const r = await api('api_saas_wa_templates_sync'); toast('Synced ' + ((r && (r.synced != null ? r.synced : r.count)) || '') + ' templates'); await loadList(); } catch (e) { toast(e.message, 'err'); } syncBtn.disabled = false; syncBtn.textContent = '🔄 Sync from Meta'; };
+  await loadList();
+}
+
+async function _waRenderChat(host) {
+  const wrap = h('div', { style: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: '12px', height: '70vh' } });
+  const left = h('div', { class: 'card', style: { overflowY: 'auto', padding: '6px' } });
+  const right = h('div', { class: 'card', style: { display: 'flex', flexDirection: 'column', padding: '0', overflow: 'hidden' } });
+  wrap.appendChild(left); wrap.appendChild(right); host.appendChild(wrap);
+  let threads = [], activePhone = null;
+  async function loadMessages(phone) {
+    right.innerHTML = '<div class="muted" style="padding:12px">Loading…</div>';
+    let msgs = [];
+    try { const r = await api('api_saas_wa_chat_messages', phone); msgs = Array.isArray(r) ? r : ((r && r.messages) || []); } catch (e) { right.innerHTML = ''; right.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    right.innerHTML = '';
+    const head = h('div', { style: { padding: '10px 12px', borderBottom: '1px solid #e2e8f0', fontWeight: '600' } }, phone);
+    const pane = h('div', { style: { flex: '1', overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '6px', background: '#f8fafc' } });
+    msgs.forEach(m => { const outb = (m.direction === 'out' || m.direction === 'outbound'); pane.appendChild(h('div', { style: { alignSelf: outb ? 'flex-end' : 'flex-start', background: outb ? '#dcf8c6' : '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '6px 10px', maxWidth: '75%', fontSize: '.85rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, m.body || m.text || '[' + (m.message_type || 'media') + ']')); });
+    const inp = h('input', { type: 'text', placeholder: 'Type a message…', style: { flex: '1', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+    const sbtn = h('button', { class: 'btn primary' }, 'Send');
+    const sendIt = async () => { if (!inp.value.trim()) return; const txt = inp.value.trim(); inp.value = ''; try { await api('api_saas_wa_chat_send', { phone: phone, text: txt }); loadMessages(phone); } catch (e) { toast(e.message, 'err'); inp.value = txt; } };
+    sbtn.onclick = sendIt; inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') sendIt(); });
+    right.appendChild(head); right.appendChild(pane);
+    right.appendChild(h('div', { style: { display: 'flex', gap: '8px', padding: '10px 12px', borderTop: '1px solid #e2e8f0' } }, inp, sbtn));
+    pane.scrollTop = pane.scrollHeight;
+  }
+  async function loadThreads() {
+    left.innerHTML = '<div class="muted" style="padding:8px">Loading…</div>';
+    try { const r = await api('api_saas_wa_chat_threads', { limit: 50 }); threads = Array.isArray(r) ? r : ((r && r.threads) || []); } catch (e) { left.innerHTML = ''; left.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    left.innerHTML = '';
+    if (!threads.length) { left.appendChild(h('div', { class: 'muted', style: { padding: '8px' } }, 'No conversations yet.')); return; }
+    threads.forEach(t => {
+      const phone = t.phone || t.from_number || t.number || t.counterpart || '';
+      const row = h('div', { style: { padding: '8px', borderRadius: '8px', cursor: 'pointer', background: activePhone === phone ? '#eef2ff' : 'transparent' }, onclick: () => { activePhone = phone; loadThreads(); loadMessages(phone); } },
+        h('div', { style: { fontWeight: '600', fontSize: '.85rem' } }, t.name || t.lead_name || phone),
+        h('div', { class: 'muted', style: { fontSize: '.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, (t.last_message || t.body || '')));
+      left.appendChild(row);
+    });
+  }
+  right.appendChild(h('div', { class: 'muted', style: { padding: '12px' } }, 'Select a conversation on the left. (Free-text replies work within 24h of the contact\'s last message; otherwise send a template.)'));
+  await loadThreads();
+}
 
 
 /* ==========================================================================

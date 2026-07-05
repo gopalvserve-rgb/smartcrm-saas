@@ -17,6 +17,8 @@ const tenantPool = require('../../utils/tenantPool');
 const tenantDb   = require('../../db/pg');
 const saasWa     = require('../../utils/saasWaSender');
 const { requireSuperAdmin } = require('./superAdminAuth');
+const { signToken } = require('../../utils/auth');
+const whatsbot = require('../whatsbot');
 
 const GRAPH = 'https://graph.facebook.com/v19.0';
 const PLATFORM_FB_APP_ID     = process.env.PLATFORM_FB_APP_ID     || '965594974738358';
@@ -106,7 +108,61 @@ async function api_saas_wa_sendTest(token, payload) {
   return { ok: true, message_id: res.message_id || null };
 }
 
+// Run a tenant whatsbot API in the VSERVE tenant context, acting as a Vserve
+// admin. This reuses the ENTIRE tenant WhatsApp engine (templates, chat,
+// campaigns) for the platform without re-porting any of it — the platform
+// number IS Vserve's number, so this is the same workspace tenants get.
+async function _asVserveAdmin(fn) {
+  return await _inVserve(async () => {
+    let admin = null;
+    try { admin = await tenantDb.findOneBy('users', 'role', 'admin'); } catch (_) {}
+    if (!admin) { const all = await tenantDb.getAll('users').catch(() => []); admin = all[0]; }
+    if (!admin) throw new Error('No user in the Vserve tenant to act as');
+    const tok = signToken(admin, 'vserve');
+    return await fn(tok);
+  });
+}
+
+async function api_saas_wa_templates_sync(token) {
+  await requireSuperAdmin(token);
+  return _asVserveAdmin(t => whatsbot.api_wb_templates_sync(t));
+}
+async function api_saas_wa_templates_list(token) {
+  await requireSuperAdmin(token);
+  return _asVserveAdmin(t => whatsbot.api_wb_templates_list(t));
+}
+async function api_saas_wa_sendTemplate(token, payload) {
+  await requireSuperAdmin(token);
+  const p = payload || {};
+  if (!p.phone) throw new Error('Recipient phone required');
+  if (!p.template_name) throw new Error('Pick a template');
+  return _asVserveAdmin(t => whatsbot.api_wb_initiate_chat(t, {
+    phone: String(p.phone),
+    template_name: p.template_name,
+    template_language: p.template_language || 'en_US',
+    variables: Array.isArray(p.variables) ? p.variables : []
+  }));
+}
+async function api_saas_wa_chat_threads(token, opts) {
+  await requireSuperAdmin(token);
+  return _asVserveAdmin(t => whatsbot.api_wb_chat_threads(t, opts || {}));
+}
+async function api_saas_wa_chat_messages(token, phone) {
+  await requireSuperAdmin(token);
+  return _asVserveAdmin(t => whatsbot.api_wb_chat_messages(t, phone));
+}
+async function api_saas_wa_chat_send(token, payload) {
+  await requireSuperAdmin(token);
+  return _asVserveAdmin(t => whatsbot.api_wb_chat_send(t, payload || {}));
+}
+
 module.exports = {
+  api_saas_wa_templates_sync,
+  api_saas_wa_templates_list,
+  api_saas_wa_sendTemplate,
+  api_saas_wa_chat_threads,
+  api_saas_wa_chat_messages,
+  api_saas_wa_chat_send,
   api_saas_wa_status,
   api_saas_wa_connect,
   api_saas_wa_disconnect,
