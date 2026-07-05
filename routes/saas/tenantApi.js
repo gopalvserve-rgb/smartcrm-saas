@@ -80,6 +80,7 @@ const ROUTE_FILES = [
   'demoReminders', /* DEMO_REMINDER_v1 — per-rep demo WhatsApp reminders */
   'quotations',
   'invoicing',
+  'callLogSync',      /* CALLLOG_SYNC_v1 - isolated device call-log batch import */
   'modules',
   'crmCopilot',
   'waBotFlows',
