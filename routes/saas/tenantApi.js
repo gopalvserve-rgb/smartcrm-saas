@@ -122,6 +122,7 @@ const ROUTE_FILES = [
   'subStatuses',      /* SUB_STATUS_v1 — vserve-only sub-statuses under each lead status */
   'reminderFlows',      /* REMINDER_FLOWS_v1 — admin CRUD for follow-up reminder templates */
   'followupReminders',  /* REMINDER_FLOWS_v1 — runtime scheduling + log view APIs */
+  'fbQnaBackfill',      /* FB_META_QNA_BACKFILL_v1 — retroactively add Q&A remarks */
 ];
 
 const API = {};
