@@ -123,6 +123,9 @@ async function api_saas_finance_overview(token, payload) {
       COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $1 AND paid_at < $2 THEN total_inr ELSE 0 END), 0)::numeric AS period_paid,
       COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $3 AND paid_at < $4 THEN total_inr ELSE 0 END), 0)::numeric AS prev_period_paid,
       COUNT(*) FILTER (WHERE status = 'paid')::int    AS paid_count,
+      COUNT(*) FILTER (WHERE status = 'paid' AND paid_at >= $1 AND paid_at < $2)::int AS period_paid_count,
+      COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $1 AND paid_at < $2 THEN COALESCE(tax_inr,0) ELSE 0 END), 0)::numeric AS period_gst,
+      COALESCE(SUM(CASE WHEN status = 'paid' THEN COALESCE(tax_inr,0) ELSE 0 END), 0)::numeric AS lifetime_gst,
       COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
       COALESCE(SUM(CASE WHEN status = 'pending' THEN total_inr ELSE 0 END), 0)::numeric     AS pending_total,
       COUNT(*) FILTER (WHERE status = 'pending' AND period_end < NOW())::int AS overdue_count,
@@ -174,8 +177,14 @@ async function api_saas_finance_overview(token, payload) {
       expiring_in_7:   expiringNext7,
       expiring_in_30:  expiringNext30
     },
+    gst: {
+      period:   _safeNum(inv.period_gst),
+      lifetime: _safeNum(inv.lifetime_gst),
+      period_net: Math.max(0, periodPaid - _safeNum(inv.period_gst))
+    },
     invoices: {
       paid_count:     _safeNum(inv.paid_count),
+      period_paid_count: _safeNum(inv.period_paid_count),
       pending_count:  _safeNum(inv.pending_count),
       pending_total:  _safeNum(inv.pending_total),
       overdue_count:  _safeNum(inv.overdue_count),

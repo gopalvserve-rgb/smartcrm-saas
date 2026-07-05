@@ -4364,298 +4364,167 @@ VIEWS.finance = async (view) => {
     refreshBtn, exportBtn
   ));
 
-  // Containers we will populate after data loads
-  const kpiCard      = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading overview…'));
-  const chartCard    = h('div', { class: 'card' });
-  const packageCard  = h('div', { class: 'card' });
-  const expiringCard = h('div', { class: 'card' });
-  const overdueCard  = h('div', { class: 'card' });
-  const salesCard    = h('div', { class: 'card' });
-  view.appendChild(kpiCard);
-  view.appendChild(chartCard);
-  view.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '.75rem' } },
-    packageCard, expiringCard));
-  view.appendChild(overdueCard);
-  view.appendChild(salesCard);
+  // ============ FIN_REDESIGN_v1 — Revenue-focused dashboard ============
+  const _inr = (v) => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const _kpiHost = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', marginBottom: '14px' } });
+  view.appendChild(_kpiHost);
+  function _grid2(a, b) { return h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '12px', marginBottom: '12px' } }, a, b); }
+  function _panel(title, sub) { const c = h('div', { class: 'card' }); c.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: sub ? '2px' : '10px' } }, title)); if (sub) c.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem', marginBottom: '10px' } }, sub)); const b = h('div', {}); c.appendChild(b); c._body = b; return c; }
+  const pTrend = _panel('📈 Revenue Trend', 'Paid revenue, last 12 months');
+  const pCollect = _panel('💰 Payment Collection');
+  const pGst = _panel('🧾 GST Analysis');
+  const pInvStatus = _panel('📊 Invoice Status');
+  const pTopCust = _panel('🏆 Top Paying Customers');
+  const pRenewMonthly = _panel('🔁 Monthly Renewals', 'Payments per month');
+  const pRecent = h('div', { class: 'card' });
+  const pUpcoming = h('div', { class: 'card' });
+  view.appendChild(_grid2(pTrend, pCollect));
+  view.appendChild(_grid2(pGst, pInvStatus));
+  view.appendChild(_grid2(pTopCust, pRenewMonthly));
+  view.appendChild(pRecent);
+  view.appendChild(pUpcoming);
 
-  function kpi(label, value, hint, color) {
-    // FIN_DASH_DATE_v1 — larger, clearer KPI cards
-    return h('div', { style: {
-      padding: '1rem 1.1rem',
-      background: (color || '#f8fafc'),
-      borderRadius: '12px',
-      border: '1px solid rgba(15,23,42,.07)',
-      boxShadow: '0 1px 2px rgba(15,23,42,.03)',
-      minHeight: '90px',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between'
-    } },
-      h('div', { style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.05em', color: '#64748b', fontWeight: '600' } }, label),
-      h('div', { style: { fontSize: '1.7rem', fontWeight: '800', color: '#0f172a', lineHeight: '1.1', margin: '.35rem 0 .1rem' } }, value),
-      hint ? h('div', { style: { fontSize: '.74rem', color: '#475569', fontWeight: '500' } }, hint) : null
-    );
-  }
-
-  // ---- KPI cards ---------------------------------------------------
-  async function loadOverview() {
-    kpiCard.innerHTML = '';
-    kpiCard.appendChild(h('div', { class: 'muted' }, 'Loading overview…'));
-    let d;
-    try { d = await api('api_saas_finance_overview', _rangePayload()); }
-    catch (e) { kpiCard.innerHTML = ''; kpiCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    kpiCard.innerHTML = '';
-
-    kpiCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue'));
-    const revGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.75rem' } });
-    const r = d.revenue;
-    const periodLabel = (d.period && d.period.label) ? d.period.label : 'This month';
-    const pctVal = (r.delta_pct != null ? r.delta_pct : r.mom_pct);
-    const deltaTxt = pctVal == null ? 'no prior period to compare' :
-      (pctVal >= 0 ? '▲ ' : '▼ ') + Math.abs(pctVal).toFixed(1) + '% vs prior ' + periodLabel.toLowerCase();
-    const periodPaid = (r.period_paid != null ? r.period_paid : r.this_month);
-    const prevPaid   = (r.prev_paid   != null ? r.prev_paid   : r.last_month);
-    revGrid.appendChild(kpi('MRR',  fmtRupees(r.mrr),  r.paying_tenants + ' paying tenants', '#ecfdf5'));
-    revGrid.appendChild(kpi('ARR',  fmtRupees(r.arr),  '12 × MRR projection', '#ecfdf5'));
-    revGrid.appendChild(kpi(periodLabel + ' (paid)', fmtRupees(periodPaid), deltaTxt,
-      pctVal != null && pctVal < 0 ? '#fef2f2' : '#eff6ff'));
-    revGrid.appendChild(kpi('Prior ' + periodLabel.toLowerCase(), fmtRupees(prevPaid), 'previous comparable window', '#f1f5f9'));
-    revGrid.appendChild(kpi('Lifetime collected', fmtRupees(r.lifetime_paid), 'all paid invoices', '#fefce8'));
-    kpiCard.appendChild(revGrid);
-
-    // FIN_NO_TENANT_COUNT_v1 — tenant COUNT KPIs removed from Finance per request
-    // (this page is amount/finance-only now). Counts live on the Tenants page.
-    void d.tenants;
-
-    kpiCard.appendChild(h('h2', { style: { marginTop: '1rem' } }, 'Invoices'));
-    const iv = d.invoices;
-    const iGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.75rem' } });
-    iGrid.appendChild(kpi('Paid (lifetime)',   iv.paid_count));
-    iGrid.appendChild(kpi('Pending',           iv.pending_count, fmtRupees(iv.pending_total) + ' open', '#fff7ed'));
-    iGrid.appendChild(kpi('Overdue',           iv.overdue_count, fmtRupees(iv.overdue_total) + ' past due', '#fef2f2'));
-    iGrid.appendChild(kpi('Failed payments',   iv.failed_count, null, '#fef2f2'));
-    kpiCard.appendChild(iGrid);
-
-    kpiCard.appendChild(h('div', { class: 'muted', style: { marginTop: '.6rem', fontSize: '.72rem' } },
-      'Generated ' + new Date(d.generated_at).toLocaleString('en-IN')));
-  }
-
-  // ---- Revenue by month — simple SVG bar chart ---------------------
-  async function loadChart() {
-    chartCard.innerHTML = '';
-    chartCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue — last 12 months'));
-    chartCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
-    let d;
-    try { d = await api('api_saas_finance_revenueByMonth'); }
-    catch (e) { chartCard.innerHTML = '<div class="error-box">' + e.message + '</div>'; return; }
-    chartCard.innerHTML = '';
-    chartCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue — last 12 months'));
-    const rows = d.rows || [];
-    if (!rows.length) { chartCard.appendChild(h('div', { class: 'muted' }, 'No data.')); return; }
-    const max = Math.max(1, ...rows.map(r => Number(r.paid_total) || 0));
-    const w = 760, h_ = 220, pad = 30, bw = (w - pad * 2) / rows.length;
-    const svgNS = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h_);
-    svg.setAttribute('style', 'width:100%; height:auto; max-width:760px');
-    rows.forEach((r, i) => {
-      const v = Number(r.paid_total) || 0;
-      const bh = (v / max) * (h_ - pad * 2);
-      const x = pad + i * bw + bw * 0.1;
-      const y = h_ - pad - bh;
-      const rect = document.createElementNS(svgNS, 'rect');
-      rect.setAttribute('x', x); rect.setAttribute('y', y);
-      rect.setAttribute('width', bw * 0.8); rect.setAttribute('height', Math.max(0, bh));
-      rect.setAttribute('fill', '#4f46e5'); rect.setAttribute('rx', '3');
-      const ttl = document.createElementNS(svgNS, 'title');
-      ttl.textContent = r.month + ': ' + fmtRupees(v) + ' (' + r.paid_count + ' invoice' + (r.paid_count === 1 ? '' : 's') + ')';
-      rect.appendChild(ttl);
-      svg.appendChild(rect);
-      const lbl = document.createElementNS(svgNS, 'text');
-      lbl.setAttribute('x', x + bw * 0.4); lbl.setAttribute('y', h_ - pad + 14);
-      lbl.setAttribute('text-anchor', 'middle');
-      lbl.setAttribute('font-size', '9'); lbl.setAttribute('fill', '#64748b');
-      lbl.textContent = (r.month || '').slice(2); // YY-MM
-      svg.appendChild(lbl);
+  function _bars(items, opts) {
+    opts = opts || {};
+    const max = Math.max(1, ...items.map(i => Number(i.value) || 0));
+    const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+    items.forEach(i => {
+      const pct = Math.round(((Number(i.value) || 0) / max) * 100);
+      wrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '92px 1fr auto', gap: '8px', alignItems: 'center' } },
+        h('div', { style: { fontSize: '.75rem', color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: String(i.label) }, i.label),
+        h('div', { style: { background: '#f1f5f9', borderRadius: '6px', height: '18px', overflow: 'hidden' } }, h('div', { style: { width: pct + '%', height: '100%', background: opts.color || '#4f46e5', borderRadius: '6px' } })),
+        h('div', { style: { fontSize: '.75rem', fontWeight: '700', color: '#0f172a', whiteSpace: 'nowrap' } }, opts.fmt ? opts.fmt(i.value) : String(i.value))));
     });
-    chartCard.appendChild(svg);
-    // Total below
-    const total = rows.reduce((s, r) => s + (Number(r.paid_total) || 0), 0);
-    chartCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } },
-      '12-month total: ' + fmtRupees(total)));
+    return wrap;
+  }
+  function _donut(segs) {
+    const total = segs.reduce((a, x) => a + (Number(x.value) || 0), 0) || 1;
+    let acc = 0; const stops = [];
+    segs.forEach(x => { const from = acc / total * 360; acc += (Number(x.value) || 0); const to = acc / total * 360; stops.push(x.color + ' ' + from + 'deg ' + to + 'deg'); });
+    const ring = h('div', { style: { width: '116px', height: '116px', borderRadius: '50%', background: 'conic-gradient(' + stops.join(',') + ')', flex: '0 0 auto', position: 'relative' } },
+      h('div', { style: { position: 'absolute', inset: '17px', background: '#fff', borderRadius: '50%' } }));
+    const legend = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
+      ...segs.map(x => h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '.8rem' } },
+        h('span', { style: { width: '11px', height: '11px', borderRadius: '3px', background: x.color, display: 'inline-block' } }),
+        h('span', { class: 'muted' }, x.label + ' '), h('b', {}, x.fmt ? x.fmt(x.value) : String(x.value)))));
+    return h('div', { style: { display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } }, ring, legend);
+  }
+  function kpi(label, value, hint, color) {
+    return h('div', { style: { padding: '.85rem 1rem', background: color || '#f8fafc', borderRadius: '12px', border: '1px solid rgba(15,23,42,.07)', minHeight: '84px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' } },
+      h('div', { style: { fontSize: '.66rem', textTransform: 'uppercase', letterSpacing: '.05em', color: '#64748b', fontWeight: '700' } }, label),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: '800', color: '#0f172a', lineHeight: '1.1' } }, value),
+      hint ? h('div', { style: { fontSize: '.71rem', color: '#475569' } }, hint) : null);
   }
 
-  // ---- By package -------------------------------------------------
-  async function loadPackages() {
-    packageCard.innerHTML = '';
-    packageCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'By package'));
-    let d;
-    try { d = await api('api_saas_finance_byPackage'); }
-    catch (e) { packageCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    if (!(d.rows && d.rows.length)) { packageCard.appendChild(h('div', { class: 'muted' }, 'No packages.')); return; }
-    packageCard.appendChild(h('table', { class: 'data-table', style: { width: '100%' } },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Package'), h('th', {}, 'Tenants'),
-        h('th', {}, 'Active'), h('th', {}, 'Trial'),
-        h('th', {}, '₹/mo each'), h('th', {}, 'MRR'),
-        h('th', {}, 'Lifetime ₹'))),
-      h('tbody', {}, ...d.rows.map(r => h('tr', {},
-        h('td', {}, r.name),
-        h('td', {}, r.tenant_count),
-        h('td', {}, r.active_count),
-        h('td', {}, r.trial_count),
-        h('td', {}, fmtRupees(r.monthly_per_tenant)),
-        h('td', { style: { fontWeight: '600' } }, fmtRupees(r.mrr_contribution)),
-        h('td', {}, fmtRupees(r.lifetime_paid))
-      )))
-    ));
+  let _topCustData = [];
+  function renderRecent(invList) {
+    pRecent.innerHTML = '';
+    pRecent.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: '10px' } }, '🧾 Recent Transactions'));
+    const paid = (Array.isArray(invList) ? invList : []).filter(i => i.status === 'paid')
+      .sort((a, b) => new Date(b.paid_at || b.created_at) - new Date(a.paid_at || a.created_at)).slice(0, 12);
+    if (!paid.length) { pRecent.appendChild(h('div', { class: 'muted' }, 'No paid invoices yet.')); return; }
+    const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
+    const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
+    pRecent.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '620px' } },
+      h('thead', {}, h('tr', {}, th('Invoice'), th('Customer'), th('Amount'), th('GST'), th('Date'))),
+      h('tbody', {}, ...paid.map(i => h('tr', {},
+        td(h('code', {}, i.number || '')),
+        td(i.org_name || '—'),
+        td(_inr(i.total_inr), { fontWeight: '700' }),
+        td(_inr(i.tax_inr), { color: '#0891b2' }),
+        td(fmtDate(i.paid_at || i.created_at), { color: '#475569', whiteSpace: 'nowrap' })))))));
   }
-
-  // ---- Expiring soon (next 30 days) -------------------------------
-  async function loadExpiring() {
-    expiringCard.innerHTML = '';
-    expiringCard.appendChild(h('h2', { style: { marginTop: 0 } }, '⚠ Expiring in 30 days'));
-    let d;
-    try { d = await api('api_saas_finance_expiringSoon', { days: 30 }); }
-    catch (e) { expiringCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    if (!(d.rows && d.rows.length)) {
-      expiringCard.appendChild(h('div', { class: 'muted' }, 'No tenants expiring in the next 30 days.'));
-      return;
+  function renderUpcoming(expiring, sales) {
+    pUpcoming.innerHTML = '';
+    pUpcoming.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: '10px' } }, '🔔 Upcoming Renewals'));
+    let rows = (expiring && expiring.rows) ? expiring.rows.slice() : [];
+    if ((!rows.length) && sales && sales.rows) {
+      rows = sales.rows.filter(r => r.days_to_expiry != null && r.days_to_expiry >= -3 && r.days_to_expiry <= 45)
+        .map(r => ({ org_name: r.org_name, package: r.package, current_period_end: r.current_period_end, days_to_expiry: r.days_to_expiry }))
+        .sort((a, b) => a.days_to_expiry - b.days_to_expiry);
     }
-    expiringCard.appendChild(h('table', { class: 'data-table', style: { width: '100%', fontSize: '.84rem' } },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Tenant'),
-        h('th', {}, 'Package'), h('th', {}, 'Expires'), h('th', {}, 'In'), h('th', {}, '₹/mo'))),
-      h('tbody', {}, ...d.rows.map(r => h('tr', {
-          style: r.days_to_expiry <= 7 ? { background: '#fff7ed' } : {}
-        },
-        h('td', {}, h('a', { href: '#/tenants', style: { color: '#4f46e5', fontWeight: '500' } }, r.org_name),
-          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, r.slug)),
-        h('td', {}, r.package || '—'),
-        h('td', {}, fmtDate(r.current_period_end)),
-        h('td', { style: { color: r.days_to_expiry <= 7 ? '#dc2626' : '#92400e', fontWeight: '600' } },
-          r.days_to_expiry + 'd'),
-        h('td', {}, fmtRupees(r.monthly_value))
-      )))
-    ));
+    if (!rows.length) { pUpcoming.appendChild(h('div', { class: 'muted' }, 'No renewals due in the next 45 days.')); return; }
+    const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
+    const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
+    pUpcoming.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '560px' } },
+      h('thead', {}, h('tr', {}, th('Customer'), th('Plan'), th('Renews on'), th('In'))),
+      h('tbody', {}, ...rows.slice(0, 20).map(r => { const d = r.days_to_expiry;
+        return h('tr', {},
+          td(r.org_name || '—'),
+          td(r.package || r.pkg_name || '—', { color: '#475569' }),
+          td(fmtDate(r.current_period_end), { whiteSpace: 'nowrap' }),
+          td((d == null ? '—' : d + 'd'), { fontWeight: '700', color: (d != null && d <= 7) ? '#dc2626' : (d != null && d <= 15) ? '#d97706' : '#0f172a' })); })))));
   }
 
-  // ---- Overdue invoices -------------------------------------------
-  async function loadOverdue() {
-    overdueCard.innerHTML = '';
-    overdueCard.appendChild(h('h2', { style: { marginTop: 0 } }, '🧾 Overdue invoices'));
-    let d;
-    try { d = await api('api_saas_finance_overdueInvoices'); }
-    catch (e) { overdueCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    if (!(d.rows && d.rows.length)) {
-      overdueCard.appendChild(h('div', { class: 'muted' }, 'No overdue invoices. 🎉'));
-      return;
-    }
-    overdueCard.appendChild(h('table', { class: 'data-table', style: { width: '100%' } },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Invoice #'),
-        h('th', {}, 'Tenant'), h('th', {}, 'Amount'),
-        h('th', {}, 'Period end'), h('th', {}, 'Days overdue'))),
-      h('tbody', {}, ...d.rows.map(r => h('tr', { style: { background: '#fef2f2' } },
-        h('td', {}, r.number),
-        h('td', {}, r.tenant_name || '—',
-          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, r.tenant_slug || '')),
-        h('td', { style: { fontWeight: '600' } }, fmtRupees(r.total_inr)),
-        h('td', {}, fmtDate(r.period_end || r.created_at)),
-        h('td', { style: { color: '#dc2626', fontWeight: '600' } }, r.overdue_days + 'd')
-      )))
-    ));
+  async function loadDash() {
+    _kpiHost.innerHTML = ''; _kpiHost.appendChild(h('div', { class: 'muted', style: { gridColumn: '1/-1' } }, 'Loading…'));
+    let ov, trend, sales, invList, expiring;
+    try {
+      [ov, trend, sales, invList, expiring] = await Promise.all([
+        api('api_saas_finance_overview', _rangePayload()),
+        api('api_saas_finance_revenueByMonth').catch(() => ({ months: [] })),
+        api('api_saas_finance_tenantSales', _rangePayload()).catch(() => ({ rows: [] })),
+        api('api_saas_invoices_list', {}).catch(() => []),
+        api('api_saas_finance_expiringSoon', { days: 45 }).catch(() => ({ rows: [] }))
+      ]);
+    } catch (e) { _kpiHost.innerHTML = ''; _kpiHost.appendChild(h('div', { class: 'error-box', style: { gridColumn: '1/-1' } }, e.message)); return; }
+    const rev = ov.revenue || {}, invx = ov.invoices || {}, gst = ov.gst || {}, tn = ov.tenants || {};
+    const outstanding = (Number(invx.pending_total) || 0) + (Number(invx.overdue_total) || 0);
+    const denom = (Number(rev.period_paid) || 0) + outstanding;
+    const collectionRate = denom > 0 ? Math.round((Number(rev.period_paid) || 0) / denom * 100) : 100;
+    _kpiHost.innerHTML = '';
+    [
+      kpi('Revenue', _inr(rev.period_paid), (ov.period && ov.period.label) || '', '#ecfdf5'),
+      kpi('GST', _inr(gst.period), 'collected in period', '#eff6ff'),
+      kpi('Outstanding', _inr(outstanding), (invx.pending_count || 0) + ' pending', '#fff7ed'),
+      kpi('Paid', String(invx.period_paid_count || 0), 'invoices in period', '#f0fdf4'),
+      kpi('Pending', _inr(invx.pending_total), (invx.pending_count || 0) + ' invoices', '#fffbeb'),
+      kpi('Overdue', _inr(invx.overdue_total), (invx.overdue_count || 0) + ' invoices', '#fef2f2'),
+      kpi('Customers', String(rev.paying_tenants || tn.active || 0), 'paying tenants', '#f8fafc'),
+      kpi('Renewals', String(tn.expiring_in_30 || 0), 'due in 30 days', '#f5f3ff'),
+      kpi('Collection Rate', collectionRate + '%', 'collected vs billed', collectionRate >= 80 ? '#ecfdf5' : '#fff7ed'),
+      kpi('MRR', _inr(rev.mrr), 'ARR ' + _inr(rev.arr), '#eef2ff')
+    ].forEach(k => _kpiHost.appendChild(k));
+    const months = (trend.months || []);
+    pTrend._body.innerHTML = '';
+    pTrend._body.appendChild(months.length ? _bars(months.map(m => ({ label: m.month, value: m.revenue })), { color: '#4f46e5', fmt: _inr }) : h('div', { class: 'muted' }, 'No data'));
+    pCollect._body.innerHTML = '';
+    pCollect._body.appendChild(_donut([
+      { label: 'Collected', value: Number(rev.period_paid) || 0, color: '#16a34a', fmt: _inr },
+      { label: 'Pending', value: Number(invx.pending_total) || 0, color: '#f59e0b', fmt: _inr },
+      { label: 'Overdue', value: Number(invx.overdue_total) || 0, color: '#dc2626', fmt: _inr }
+    ]));
+    pCollect._body.appendChild(h('div', { style: { marginTop: '10px', fontSize: '.85rem' } }, 'Collection rate: ', h('b', {}, collectionRate + '%')));
+    pGst._body.innerHTML = '';
+    pGst._body.appendChild(_bars([
+      { label: 'Net sale', value: Number(gst.period_net) || 0 },
+      { label: 'GST (period)', value: Number(gst.period) || 0 },
+      { label: 'GST (lifetime)', value: Number(gst.lifetime) || 0 }
+    ], { color: '#0891b2', fmt: _inr }));
+    pInvStatus._body.innerHTML = '';
+    pInvStatus._body.appendChild(_donut([
+      { label: 'Paid', value: Number(invx.paid_count) || 0, color: '#16a34a', fmt: v => String(v) },
+      { label: 'Pending', value: Number(invx.pending_count) || 0, color: '#f59e0b', fmt: v => String(v) },
+      { label: 'Overdue', value: Number(invx.overdue_count) || 0, color: '#dc2626', fmt: v => String(v) },
+      { label: 'Failed', value: Number(invx.failed_count) || 0, color: '#6b7280', fmt: v => String(v) }
+    ]));
+    _topCustData = (sales.rows || []).slice();
+    const top = (sales.rows || []).filter(r => Number(r.period_paid) > 0).slice(0, 8);
+    pTopCust._body.innerHTML = '';
+    pTopCust._body.appendChild(top.length ? _bars(top.map(r => ({ label: r.org_name || r.slug, value: Number(r.period_paid) || 0 })), { color: '#7c3aed', fmt: _inr }) : h('div', { class: 'muted' }, 'No paid customers in this period.'));
+    pRenewMonthly._body.innerHTML = '';
+    pRenewMonthly._body.appendChild(months.length ? _bars(months.map(m => ({ label: m.month, value: m.invoices || 0 })), { color: '#0d9488', fmt: v => String(v) }) : h('div', { class: 'muted' }, 'No data'));
+    renderRecent(invList);
+    renderUpcoming(expiring, sales);
   }
 
-  // ---- Tenant-wise sale table -------------------------------------
-  let salesData = null;
-  async function loadSales() {
-    salesCard.innerHTML = '';
-    salesCard.appendChild(h('h2', { style: { marginTop: 0 } }, '🏢 Tenant-wise sale'));
-
-    const statusSel = h('select', {},
-      h('option', { value: '' }, 'All statuses'),
-      ...['active','trial','past_due','suspended','pending_delete','pending_payment','deleted']
-        .map(s => h('option', { value: s }, s))
-    );
-    const qInp = h('input', { type: 'search', placeholder: 'Search org / email / slug…', style: { minWidth: '14rem' } });
-    const applyBtn = h('button', { class: 'btn sm' }, 'Apply');
-    salesCard.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginBottom: '.6rem', flexWrap: 'wrap' } },
-      statusSel, qInp, applyBtn));
-
-    const tblWrap = h('div', { style: { overflowX: 'auto' } });
-    salesCard.appendChild(tblWrap);
-
-    async function reload() {
-      tblWrap.innerHTML = '<div class="muted">Loading…</div>';
-      try {
-        const filt = Object.assign({ status: statusSel.value || null, q: qInp.value.trim() || null }, _rangePayload());
-        const d = await api('api_saas_finance_tenantSales', filt);
-        salesData = d;
-        renderTable(d.rows || []);
-      } catch (e) { tblWrap.innerHTML = ''; tblWrap.appendChild(h('div', { class: 'error-box' }, e.message)); }
-    }
-    function renderTable(rows) {
-      tblWrap.innerHTML = '';
-      if (!rows.length) { tblWrap.appendChild(h('div', { class: 'muted' }, 'No tenants match.')); return; }
-      const tbl = h('table', { class: 'data-table', style: { width: '100%', fontSize: '.85rem' } },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Tenant'), h('th', {}, 'Package'),
-          h('th', {}, 'Status'), h('th', {}, 'Created'),
-          h('th', {}, 'Period end'), h('th', {}, 'Days'),
-          h('th', {}, '₹/mo'), h('th', {}, '₹/yr'),
-          h('th', { style: { background:'#eef2ff', color:'#4338ca' }, title: 'Filtered by selected date range' }, '₹ in period'),
-          h('th', { style: { background:'#eef2ff', color:'#4338ca' }, title: 'Filtered by selected date range' }, '# in period'),
-          h('th', {}, 'Lifetime ₹'), h('th', {}, '# paid'),
-          h('th', {}, 'Pending ₹'), h('th', {}, 'Last paid'))),
-        h('tbody', {}, ...rows.map(r => h('tr', {},
-          h('td', {}, h('a', { href: '#/tenants', style: { color: '#4f46e5', fontWeight: '500' } }, r.org_name),
-            h('div', { class: 'muted', style: { fontSize: '.72rem' } }, r.slug + ' · ' + (r.contact_email || ''))),
-          h('td', {}, r.package || '—'),
-          h('td', {}, h('span', { class: 'pill pill-' + (r.status || ''), style: { fontSize: '.72rem' } }, r.status)),
-          h('td', {}, fmtDate(r.created_at)),
-          h('td', {}, fmtDate(r.current_period_end)),
-          h('td', { style: {
-              color: r.days_to_expiry == null ? '#94a3b8'
-                : r.days_to_expiry < 0 ? '#dc2626'
-                : r.days_to_expiry <= 7 ? '#92400e'
-                : '#0f172a',
-              fontWeight: '500'
-            } },
-            r.days_to_expiry == null ? '—' : r.days_to_expiry + 'd'),
-          h('td', {}, fmtRupees(r.monthly_value)),
-          h('td', {}, fmtRupees(r.annual_value)),
-          h('td', { style: { fontWeight: '700', background: r.period_paid > 0 ? '#eef2ff' : '#f8fafc', color: r.period_paid > 0 ? '#4338ca' : '#94a3b8' } }, fmtRupees(r.period_paid)),
-          h('td', { style: { background: r.period_paid_count > 0 ? '#eef2ff' : '#f8fafc', color: r.period_paid_count > 0 ? '#4338ca' : '#94a3b8' } }, r.period_paid_count || 0),
-          h('td', { style: { fontWeight: '600' } }, fmtRupees(r.lifetime_paid)),
-          h('td', {}, r.paid_count),
-          h('td', { style: { color: r.pending_total > 0 ? '#92400e' : '#94a3b8' } }, fmtRupees(r.pending_total)),
-          h('td', {}, fmtDate(r.last_paid_at))
-        )))
-      );
-      tblWrap.appendChild(tbl);
-      tblWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
-        rows.length + ' tenants'));
-    }
-    applyBtn.onclick = reload;
-    qInp.addEventListener('keydown', ev => { if (ev.key === 'Enter') reload(); });
-    reload();
-  }
-
-  // ---- Export tenants CSV (uses last loaded sales table) -----------
   exportBtn.onclick = () => {
-    if (!salesData || !salesData.rows || !salesData.rows.length) {
-      toast('Load the tenant table first', 'error'); return;
-    }
-    const cols = ['org_name','slug','contact_email','status','package',
-      'created_at','current_period_end','days_to_expiry',
-      'monthly_value','annual_value','lifetime_paid','paid_count',
-      'pending_total','last_paid_at'];
+    if (!_topCustData.length) { toast('Load the dashboard first', 'err'); return; }
+    const cols = ['org_name', 'slug', 'status', 'package', 'period_paid', 'lifetime_paid', 'pending_total', 'current_period_end', 'days_to_expiry'];
     const esc = v => v == null ? '' : ('"' + String(v).replace(/"/g, '""') + '"');
-    const lines = [cols.join(',')];
-    salesData.rows.forEach(r => lines.push(cols.map(c => esc(r[c])).join(',')));
+    const lines = [cols.join(',')].concat(_topCustData.map(r => cols.map(c => esc(r[c])).join(',')));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'tenant-sales-' + new Date().toISOString().slice(0,10) + '.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'finance-customers-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); URL.revokeObjectURL(a.href);
   };
 
   // ---- Refresh everything -----------------------------------------
@@ -4729,10 +4598,9 @@ VIEWS.finance = async (view) => {
     }
   }
 
-  function refreshAll() { try { loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales && loadSales(); loadExpenses(); } catch(_){} }
-  refreshBtn.onclick = () => Promise.all([loadOverview(), loadChart(), loadPackages(), loadExpiring(), loadOverdue(), loadSales(), loadExpenses()]);
-  // Initial parallel load
-  loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales(); loadExpenses();
+  function refreshAll() { try { loadDash(); loadExpenses(); } catch(_){} }
+  refreshBtn.onclick = () => { loadDash(); loadExpenses(); };
+  loadDash(); loadExpenses();
 };
 
 // ─────────────────────────────────────────────────────────────
