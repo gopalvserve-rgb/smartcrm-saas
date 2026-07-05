@@ -47,6 +47,14 @@ try { require('./utils/invoicingModuleBackfill').startSweep(); } catch (e) { con
   } catch (e) { console.warn('[COPILOT_KB_BUILTIN_OFF_v1] init failed:', e.message); }
 })();
 
+/* COPILOT_KB_VIDEOS_SEED_v1 (2026-07-05) — seed the 12 Smart CRM video
+ * tutorials into the Copilot KB so users can ask "how do I connect
+ * WhatsApp" / "how do I import leads" / etc and get the right video link. */
+setTimeout(() => {
+  try { require('./utils/copilotKbSeedVideos').seed().catch(() => {}); }
+  catch (e) { console.warn('[copilotKbSeedVideos] not loaded:', e.message); }
+}, 8000);
+
 
 // ---- SaaS modules (control plane) -----------------------------
 const superAdmin = require('./routes/saas/superAdminAuth');
