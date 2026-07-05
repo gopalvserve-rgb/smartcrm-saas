@@ -252,19 +252,67 @@
   /* User asked to remove Demo Reminders nav entry — it's superseded by
    * Follow-up Reminders. Kill the DOM node whenever it appears. Backend
    * & route file kept intact in case we want to bring it back later. */
+  /* SIDEBAR_FIX_v4 (2026-07-05) — Demo Reminders lives in the SETTINGS
+   * inner sidebar (button.admin-settings-item with data-tab="demoreminder"),
+   * NOT the outer sidebar. Target both locations. */
   function _hideDemoReminders() {
     try {
+      /* 1. Settings inner sidebar buttons */
+      var btns = document.querySelectorAll('button.admin-settings-item, [data-tab="demoreminder"]');
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        if (b.getAttribute('data-tab') === 'demoreminder' ||
+            /demo\s*reminder/i.test(b.textContent || '')) {
+          b.remove();
+        }
+      }
+      /* 2. Outer sidebar nav links (legacy) */
       var nav = document.querySelector('.sidebar nav');
-      if (!nav) return;
-      var links = nav.querySelectorAll('a');
-      for (var i = 0; i < links.length; i++) {
-        var a = links[i];
-        var t = String(a.textContent || '').trim().toLowerCase();
-        if (t.indexOf('demo reminder') === 0 || /^📅\s*demo reminders?/i.test(a.textContent||'')) {
-          a.remove();
+      if (nav) {
+        var links = nav.querySelectorAll('a');
+        for (var j = 0; j < links.length; j++) {
+          var a = links[j];
+          if (/demo\s*reminder/i.test(a.textContent || '')) a.remove();
         }
       }
     } catch (e) { /* silent */ }
+  }
+
+  /* SIDEBAR_FIX_v4 — inject Follow-up Reminders into the SETTINGS inner
+   * sidebar (admin-settings-rail) under the AI Features group, matching
+   * the same button.admin-settings-item structure. */
+  function _injectSettingsInnerButton() {
+    try {
+      if (document.getElementById('rf-settings-btn')) return;
+      /* Find the AI Features group (title text is 'AI Features' exactly) */
+      var groups = document.querySelectorAll('.admin-settings-group');
+      var target = null;
+      for (var i = 0; i < groups.length; i++) {
+        var title = groups[i].querySelector('.admin-settings-group-title');
+        if (title && /^ai\s*features/i.test(title.textContent.trim())) {
+          target = groups[i]; break;
+        }
+      }
+      if (!target) return;
+      var btn = document.createElement('button');
+      btn.id = 'rf-settings-btn';
+      btn.className = 'admin-settings-item';
+      btn.setAttribute('data-tab', 'followupreminders');
+      btn.setAttribute('data-label', '🔔 follow-up reminders');
+      btn.setAttribute('data-search', '🔔 follow-up reminders whatsapp email alert time before flow');
+      btn.textContent = '🔔 Follow-up Reminders';
+      btn.onclick = function (e) {
+        e.preventDefault();
+        try {
+          if (typeof window.navigateTo === 'function') return window.navigateTo('followupreminders');
+          if (window.go) return window.go('followupreminders');
+          if (window.VIEWS && window.VIEWS.followupreminders) return window.VIEWS.followupreminders();
+          viewFollowupReminders();
+        } catch (_) { viewFollowupReminders(); }
+      };
+      target.appendChild(btn);
+      console.log('[reminderFlows] settings inner button injected under AI Features');
+    } catch (e) { console.warn('[reminderFlows] settings inject failed:', e.message); }
   }
 
   /* SIDEBAR_FIX_v3 (2026-07-05) — removed admin role gate (was blocking
@@ -355,6 +403,7 @@
     _lastRun = now;
     try { _registerViews(); } catch (_) {}
     try { _injectSidebarLink(); } catch (_) {}
+    try { _injectSettingsInnerButton(); } catch (_) {}   /* v4: real target */
     try { _hideDemoReminders(); } catch (_) {}
     try { _ensureFab(); } catch (_) {}
   }
