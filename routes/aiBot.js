@@ -953,7 +953,7 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   const cap = Number(settings.max_replies_per_thread || 0);
   if (cap > 0) {
     const r = await db.query(
-      `SELECT COUNT(*)::int AS c FROM ai_chat_log WHERE phone = $1 AND status IN ('sent', 'draft')`,
+      `SELECT COUNT(*)::int AS c FROM ai_chat_log WHERE phone = $1 AND status IN ('sent', 'draft') AND (mode_used IS NULL OR mode_used != 'welcome')`,
       [phone]
     );
     if (Number(r.rows[0]?.c || 0) >= cap) return 'max replies per thread reached';
@@ -1046,6 +1046,40 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     }
     if (buf.trim()) kb = '\n\n=== KNOWLEDGE BASE ===' + buf + '\n=== END KNOWLEDGE BASE ===';
   }
+
+  /* ─────────────────────────────────────────────────────────────
+   * AIBOT_HALLUCINATION_v1 (2026-07-05) — URL ALLOWLIST
+   * -----------------------------------------------------------
+   * LLMs invent URLs. Scan the assembled KB for every http(s) link
+   * and expose the exact list to the model with a HARD RULE that
+   * every shared URL must be quoted verbatim from this list.
+   * ───────────────────────────────────────────────────────────── */
+  let urlAllowlistBlock = '';
+  try {
+    const urlSet = new Set();
+    if (kb) {
+      const matches = kb.match(/https?:\/\/[^\s<>"'`)\]]+/g) || [];
+      matches.forEach(u => {
+        /* Trim trailing punctuation Gemini shouldn't include */
+        const clean = u.replace(/[.,;!?)\]]+$/, '');
+        if (clean.length > 8 && clean.length < 400) urlSet.add(clean);
+      });
+    }
+    if (urlSet.size > 0) {
+      urlAllowlistBlock = '\n\n=== URL ALLOWLIST ===\n' +
+        'These are the ONLY URLs you may share with customers.\n' +
+        'Quote each URL EXACTLY — character-for-character, no shortening, no modifications.\n\n' +
+        Array.from(urlSet).sort().map(u => '  • ' + u).join('\n') +
+        '\n\nHARD RULES:\n' +
+        '  1. If the customer asks for a link (demo video, brochure, pricing, portfolio, catalog, etc.)\n' +
+        '     → share ONLY a URL from the list above, copied exactly.\n' +
+        '  2. If the customer asks for content that has no URL in the list above,\n' +
+        '     → DO NOT invent a URL. Say: "I\'ll ask the team to send that to you separately."\n' +
+        '  3. NEVER change domains, paths, or shorten URLs. NEVER use bit.ly/example.com/vserve.io/etc\n' +
+        '     unless it appears verbatim above.\n' +
+        '=== END URL ALLOWLIST ===';
+    }
+  } catch (_) {}
 
   // AIBOT_CONTEXT_v1 — lead snapshot injected into the system prompt.
   // Without this block the bot answered every customer the same way
@@ -1320,7 +1354,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     businessHoursBlock = '\n\n=== BUSINESS HOURS POLICY ===\n' + lines.join('\n') + '\n=== END BUSINESS HOURS POLICY ===';
   } catch (e) { console.warn('[aiBot] business-hours block failed:', e && e.message); }
 
-  const system = personaWithLang + leadContextBlock + commitmentsBlock + hardRulesBlock + businessHoursBlock + kb;
+  const system = personaWithLang + leadContextBlock + commitmentsBlock + hardRulesBlock + businessHoursBlock + kb + urlAllowlistBlock;
 
   // History: last N inbound + outbound messages (chronological), but
   // exclude the just-arrived inbound that whatsbot already wrote to
@@ -2660,7 +2694,92 @@ async function api_aiBot_clearFlowSession(token, payload) {
   return { ok: true, cleared: r.rowCount || 0 };
 }
 
+
+/* ─────────────────────────────────────────────────────────────
+ * AIBOT_HALLUCINATION_v1 (2026-07-05)
+ * api_aibot_diagnose_thread({phone: '9876543210'})
+ * -----------------------------------------------------------
+ * Admin-only. Returns why the bot is (or isn't) replying to a
+ * specific phone. Call from browser console:
+ *   await window.api('api_aibot_diagnose_thread', { phone: '9876543210' })
+ * ───────────────────────────────────────────────────────────── */
+async function api_aibot_diagnose_thread(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  const phoneLast10 = String(p.phone || '').replace(/\D/g, '').slice(-10);
+  if (!phoneLast10) throw new Error('phone required');
+
+  const log = await db.query(
+    `SELECT id, status, mode_used, suppressed_reason, error_text, model,
+            phone_number_id,
+            LEFT(COALESCE(reply_text, draft_text), 240) AS preview,
+            created_at
+       FROM ai_chat_log
+      WHERE RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = $1
+      ORDER BY id DESC LIMIT 20`,
+    [phoneLast10]
+  );
+
+  const counts = await db.query(
+    `SELECT
+       COUNT(*)::int                                          AS total,
+       COUNT(*) FILTER (WHERE status = 'sent')::int           AS sent,
+       COUNT(*) FILTER (WHERE status = 'draft')::int          AS draft,
+       COUNT(*) FILTER (WHERE status = 'suppressed')::int     AS suppressed,
+       COUNT(*) FILTER (WHERE status = 'failed')::int         AS failed,
+       COUNT(*) FILTER (WHERE mode_used = 'welcome')::int     AS welcome_sent,
+       COUNT(*) FILTER (WHERE status IN ('sent','draft') AND (mode_used IS NULL OR mode_used != 'welcome'))::int AS toward_cap
+     FROM ai_chat_log
+     WHERE RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = $1`,
+    [phoneLast10]
+  );
+
+  const settings = await db.query(`SELECT * FROM ai_bot_settings ORDER BY id LIMIT 5`);
+  const settingsSummary = settings.rows.map(s => ({
+    id: s.id, phone_number_id: s.phone_number_id,
+    is_enabled: s.is_enabled,
+    max_replies_per_thread: s.max_replies_per_thread,
+    pause_after_human_handoff: s.pause_after_human_handoff,
+    welcome_message_set: !!(s.welcome_message && String(s.welcome_message).trim()),
+    reply_modes: s.reply_modes
+  }));
+
+  const kbDocs = await db.query(
+    `SELECT id, title, source_type, phone_number_id, is_active, char_count
+       FROM ai_kb_documents
+      WHERE is_active = 1
+      ORDER BY id DESC LIMIT 30`
+  );
+
+  const diagnosis = [];
+  const c = counts.rows[0] || {};
+  const cap = settings.rows[0] && Number(settings.rows[0].max_replies_per_thread || 0);
+  if (cap > 0 && Number(c.toward_cap || 0) >= cap) {
+    diagnosis.push('❗ CAP HIT: max_replies_per_thread = ' + cap + ' AND ' + c.toward_cap + ' non-welcome replies already exist. Bot is silenced. Set to 0 in Settings → AI Bot → Safety & advanced.');
+  } else if (cap > 0) {
+    diagnosis.push('ℹ Cap ' + cap + ' | ' + c.toward_cap + '/' + cap + ' used (' + (cap - Number(c.toward_cap || 0)) + ' remaining before silence)');
+  } else {
+    diagnosis.push('✓ No cap set (unlimited replies)');
+  }
+  const lastSuppress = log.rows.find(r => r.status === 'suppressed');
+  if (lastSuppress) diagnosis.push('Last suppression reason: ' + (lastSuppress.suppressed_reason || 'unknown'));
+  if (kbDocs.rows.length) {
+    diagnosis.push('Active KB docs (across ALL bots): ' + kbDocs.rows.length + ' — check if a duplicate content is scoped to another phone_number_id.');
+  }
+
+  return {
+    phone_last10: phoneLast10,
+    counts: c,
+    settings_summary: settingsSummary,
+    active_kb_docs: kbDocs.rows,
+    recent_log: log.rows,
+    diagnosis
+  };
+}
+
 module.exports = {
+  api_aibot_diagnose_thread,
   api_aiBot_diagnose, api_aiBot_clearFlowSession,  /* BOT_DIAGNOSE_v1 */
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
