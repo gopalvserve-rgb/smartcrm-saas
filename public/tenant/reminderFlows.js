@@ -284,22 +284,16 @@
         else if (window.go) window.go('followupreminders');
         else if (window.VIEWS && window.VIEWS.followupreminders) window.VIEWS.followupreminders();
       };
-      /* SIDEBAR_MKT_v1 (2026-07-05) — user asked Follow-up Reminders to live
-       * under 'Marketing & Communication' group, not AI Features. */
-      var groups = Array.from(nav.querySelectorAll('.nav-group-head'));
-      var mktGroup = groups.find(function (h) {
-        return /market|communication|messaging|outreach|campaign/i.test(h.textContent);
-      });
-      if (mktGroup && mktGroup.nextElementSibling) {
-        mktGroup.nextElementSibling.appendChild(link);
-        return;
-      }
-      var aiGroup = groups.find(function (h) { return /ai\s*features/i.test(h.textContent); });
+      /* Try to place under "AI FEATURES" group next to Demo Reminders */
+      var aiGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
+        .find(function (h) { return /ai\s*features/i.test(h.textContent); });
       if (aiGroup && aiGroup.nextElementSibling) {
         aiGroup.nextElementSibling.appendChild(link);
         return;
       }
-      var settingsGroup = groups.find(function (h) { return /settings/i.test(h.textContent); });
+      /* Fallback — Settings group */
+      var settingsGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
+        .find(function (h) { return /settings/i.test(h.textContent); });
       if (settingsGroup && settingsGroup.nextElementSibling) {
         settingsGroup.nextElementSibling.appendChild(link);
       } else {
@@ -307,18 +301,44 @@
       }
     } catch (e) { console.warn('[reminderFlows] sidebar inject failed:', e.message); }
   }
-  function _ready(fn) {
-    if (window.api && window.CRM) return fn();
-    setTimeout(function () { _ready(fn); }, 200);
+  /* FIX_v2 — persistent observer (2026-07-05)
+   * The 3-timeout approach missed cases where the sidebar mounts >2.4s
+   * after boot, or re-renders on route change (which re-adds Demo Reminders
+   * back to the DOM). Switch to a MutationObserver on document.body that
+   * throttles to at most once per 400ms — catches every render forever. */
+  var _lastRun = 0;
+  var _observerStarted = false;
+  function _runInject() {
+    var now = Date.now();
+    if (now - _lastRun < 400) return;
+    _lastRun = now;
+    try { _registerViews(); } catch (_) {}
+    try { _injectSidebarLink(); } catch (_) {}
+    try { _hideDemoReminders(); } catch (_) {}
   }
-  _ready(function () {
-    _registerViews();
-    _injectSidebarLink();
-    _hideDemoReminders();
-    setTimeout(function () { _injectSidebarLink(); _hideDemoReminders(); }, 800);
-    setTimeout(function () { _injectSidebarLink(); _hideDemoReminders(); }, 2400);
+  function _startObserver() {
+    if (_observerStarted) return;
+    _observerStarted = true;
+    try {
+      var mo = new MutationObserver(function () { _runInject(); });
+      mo.observe(document.body, { childList: true, subtree: true });
+      console.log('[reminderFlows] observer started');
+    } catch (e) { console.warn('[reminderFlows] observer failed:', e.message); }
+    /* Also run once immediately + a few quick polls in case the sidebar
+     * mounts before the observer catches its first mutation. */
+    _runInject();
+    setTimeout(_runInject, 200);
+    setTimeout(_runInject, 600);
+    setTimeout(_runInject, 1500);
+    setTimeout(_runInject, 3000);
+    /* Deep-link handler */
     if (location.hash === '#/followupreminders' || location.hash === '#/reminderflows') {
-      setTimeout(function () { viewFollowupReminders(); }, 300);
+      setTimeout(function () { viewFollowupReminders(); }, 400);
     }
-  });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _startObserver);
+  } else {
+    _startObserver();
+  }
 })();
