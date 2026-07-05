@@ -1427,6 +1427,23 @@ async function _reassignChatForLead({ lead, newOwnerId, actorId, reason }) {
   return { ok: true, moved };
 }
 
+/* REMINDER_FLOWS_v1 (2026-07-05) — auto-cancel scheduled reminders when a
+ * status change moves the lead to a terminal state (Won/Lost/Junk/Not Interested).
+ * The rep no longer needs the follow-up reminder for a closed deal. */
+async function _reminderFlowAutoCancel(leadId, newStatusId) {
+  try {
+    const statuses = await db.getAll('statuses');
+    const s = statuses.find(x => Number(x.id) === Number(newStatusId));
+    if (!s) return;
+    const terminal = /(^|\s)(won|lost|junk|closed|not\s*interested|converted|duplicate)(\s|$)/i;
+    if (!terminal.test(String(s.name || ''))) return;
+    const mod = require('./followupReminders');
+    if (mod && typeof mod._cancelForLead === 'function') {
+      await mod._cancelForLead(leadId, 'status=' + s.name);
+    }
+  } catch (_) {}
+}
+
 async function api_leads_update(token, id, patch) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
