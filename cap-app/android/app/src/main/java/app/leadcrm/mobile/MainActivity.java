@@ -882,6 +882,163 @@ public class MainActivity extends BridgeActivity {
                 }
             });
         }
+
+        // ==== CALLLOG_SYNC_v1 — device call-log batch read + per-SIM selection ====
+
+        /** Active SIMs as JSON: [{slot, subId, label}]. Needs READ_PHONE_STATE. */
+        @JavascriptInterface
+        public String getSims() {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            try {
+                if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_PHONE_STATE)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    android.telephony.SubscriptionManager sm =
+                        (android.telephony.SubscriptionManager) getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+                    java.util.List<android.telephony.SubscriptionInfo> subs =
+                        sm != null ? sm.getActiveSubscriptionInfoList() : null;
+                    if (subs != null) {
+                        for (android.telephony.SubscriptionInfo si : subs) {
+                            org.json.JSONObject o = new org.json.JSONObject();
+                            int slot = si.getSimSlotIndex();
+                            String carrier = si.getCarrierName() != null ? si.getCarrierName().toString() : "";
+                            o.put("slot", slot);
+                            o.put("subId", si.getSubscriptionId());
+                            o.put("label", "SIM " + (slot + 1) + (carrier.isEmpty() ? "" : " · " + carrier));
+                            arr.put(o);
+                        }
+                    }
+                }
+            } catch (Exception e) { Log.e(TAG, "getSims: " + e.getMessage()); }
+            return arr.toString();
+        }
+
+        /** Persist which SIM slots to sync (CSV of slot indices, e.g. "0" or "0,1"). Empty = all. */
+        @JavascriptInterface
+        public void setSimSyncPref(String csv) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString("sim_sync_allow", csv == null ? "" : csv).apply();
+        }
+
+        @JavascriptInterface
+        public String getSimSyncPref() {
+            return getSharedPreferences(PREFS, MODE_PRIVATE).getString("sim_sync_allow", "");
+        }
+
+        /** Read CallLog.Calls in [sinceMs, untilMs], filtered by the saved SIM selection,
+         *  and hand the rows to window[callback] as a JSON string. Runs off the UI thread. */
+        @JavascriptInterface
+        public void syncCallLog(double sinceMs, double untilMs, String callback) {
+            final long since = (long) sinceMs, until = (long) untilMs;
+            final String cb = callback == null ? "" : callback;
+            new Thread(() -> {
+                String result;
+                try { result = readCallLogJson(since, until); }
+                catch (Exception e) {
+                    try {
+                        org.json.JSONObject er = new org.json.JSONObject();
+                        er.put("error", e.getMessage() == null ? "read failed" : e.getMessage());
+                        result = er.toString();
+                    } catch (Exception ex) { result = "{\"error\":\"read failed\"}"; }
+                }
+                final String r = result;
+                runOnUiThread(() -> {
+                    WebView wv = getBridge().getWebView();
+                    if (wv == null || cb.isEmpty()) return;
+                    String js = "try{window['" + cb + "'] && window['" + cb + "'](" + jsStr(r) + ");}catch(e){console.error(e);}";
+                    wv.evaluateJavascript(js, null);
+                });
+            }).start();
+        }
+
+        /** Build the call-log JSON payload for syncCallLog. */
+        private String readCallLogJson(long sinceMs, long untilMs) throws Exception {
+            // Saved SIM allow-list (slot indices). Empty => all SIMs.
+            String allow = getSharedPreferences(PREFS, MODE_PRIVATE).getString("sim_sync_allow", "");
+            java.util.Set<String> allowSet = new java.util.HashSet<>();
+            if (allow != null) for (String s : allow.split(",")) { String t = s.trim(); if (!t.isEmpty()) allowSet.add(t); }
+
+            // Map subscriptionId -> slot, and slot -> label.
+            java.util.HashMap<Integer, Integer> subToSlot = new java.util.HashMap<>();
+            java.util.HashMap<Integer, String> slotLabel = new java.util.HashMap<>();
+            try {
+                if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_PHONE_STATE)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    android.telephony.SubscriptionManager sm =
+                        (android.telephony.SubscriptionManager) getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+                    java.util.List<android.telephony.SubscriptionInfo> subs =
+                        sm != null ? sm.getActiveSubscriptionInfoList() : null;
+                    if (subs != null) for (android.telephony.SubscriptionInfo si : subs) {
+                        int slot = si.getSimSlotIndex();
+                        subToSlot.put(si.getSubscriptionId(), slot);
+                        String carrier = si.getCarrierName() != null ? si.getCarrierName().toString() : "";
+                        slotLabel.put(slot, "SIM " + (slot + 1) + (carrier.isEmpty() ? "" : " · " + carrier));
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            org.json.JSONArray rows = new org.json.JSONArray();
+            int total = 0;
+            ContentResolver cr = getContentResolver();
+            String[] proj = {
+                android.provider.CallLog.Calls.NUMBER,
+                android.provider.CallLog.Calls.TYPE,
+                android.provider.CallLog.Calls.DATE,
+                android.provider.CallLog.Calls.DURATION,
+                android.provider.CallLog.Calls.PHONE_ACCOUNT_ID
+            };
+            String sel = android.provider.CallLog.Calls.DATE + " >= ? AND " + android.provider.CallLog.Calls.DATE + " <= ?";
+            String[] args = { String.valueOf(sinceMs), String.valueOf(untilMs) };
+            Cursor c = cr.query(android.provider.CallLog.Calls.CONTENT_URI, proj, sel, args,
+                                android.provider.CallLog.Calls.DATE + " DESC");
+            if (c != null) {
+                int iNum = c.getColumnIndex(android.provider.CallLog.Calls.NUMBER);
+                int iType = c.getColumnIndex(android.provider.CallLog.Calls.TYPE);
+                int iDate = c.getColumnIndex(android.provider.CallLog.Calls.DATE);
+                int iDur = c.getColumnIndex(android.provider.CallLog.Calls.DURATION);
+                int iAcc = c.getColumnIndex(android.provider.CallLog.Calls.PHONE_ACCOUNT_ID);
+                while (c.moveToNext()) {
+                    total++;
+                    String number = iNum >= 0 ? c.getString(iNum) : "";
+                    int type = iType >= 0 ? c.getInt(iType) : 0;
+                    long date = iDate >= 0 ? c.getLong(iDate) : 0;
+                    int dur = iDur >= 0 ? c.getInt(iDur) : 0;
+                    String acc = iAcc >= 0 ? c.getString(iAcc) : null;
+
+                    Integer slot = null;
+                    if (acc != null) {
+                        try {
+                            int a = Integer.parseInt(acc.trim());
+                            if (subToSlot.containsKey(a)) slot = subToSlot.get(a);   // acc == subscriptionId
+                            else if (a == 0 || a == 1) slot = a;                     // acc == slot index
+                        } catch (Exception ignore) {}
+                    }
+                    if (!allowSet.isEmpty()) {
+                        if (slot == null || !allowSet.contains(String.valueOf(slot))) continue;
+                    }
+                    String direction = type == 2 ? "out" : (type == 3 || type == 5 ? "missed" : (type == 1 ? "in" : ""));
+                    if (direction.isEmpty()) continue;   // skip voicemail/blocked/unknown
+
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("phone", number == null ? "" : number);
+                    o.put("direction", direction);
+                    o.put("type", type);
+                    o.put("ts", date);
+                    o.put("duration_s", dur);
+                    if (slot != null) {
+                        o.put("sim_slot", (int) slot);
+                        String lb = slotLabel.get(slot);
+                        if (lb != null) o.put("sim_label", lb);
+                    }
+                    rows.put(o);
+                }
+                c.close();
+            }
+            org.json.JSONObject out = new org.json.JSONObject();
+            out.put("ok", true);
+            out.put("total", total);
+            out.put("rows", rows);
+            return out.toString();
+        }
     }
 
     /** Schedule the recordings background sync to run every ~15 min (Android minimum). */
