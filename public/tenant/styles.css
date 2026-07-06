@@ -4303,3 +4303,22 @@ body.focus-mode table.leads-tbl {
   border-collapse: separate !important;
   border-spacing: 0 !important;
 }
+
+/* ================= MOBILE_LEAD_CARD_v2 ================= */
+/* Call + WhatsApp action labels white (text sits on the coloured button). */
+.lc-actions .la-btn.btn-call .la-label,
+.lc-actions .la-btn.wa-cloud-btn .la-label,
+.lc-actions .la-btn.wa-personal-btn .la-label { color: #ffffff !important; }
+/* Phone moved to the right, larger; assigned date underlined beneath it. */
+.lead-card .lc-head { align-items: flex-start !important; }
+.lead-card .lc-rightinfo {
+  display: flex; flex-direction: column; align-items: flex-end;
+  flex-shrink: 0; gap: 2px; margin-left: 10px; text-align: right;
+}
+.lead-card .lc-phone-big {
+  font-size: 1.12rem; font-weight: 700; color: #0f172a;
+  text-decoration: none; white-space: nowrap; letter-spacing: .2px;
+}
+.lead-card .lc-assigned-date {
+  font-size: .74rem; color: #64748b; text-decoration: underline; white-space: nowrap;
+}

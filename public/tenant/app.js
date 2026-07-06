@@ -6751,21 +6751,17 @@ function renderLeadsMobile(rows) {
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
             h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, ((l.shared_with_me || (l.co_owners && l.co_owners.length)) ? '🤝 ' : '') + (l.name || '—')),
-            h('span', {
-              class: 'lc-status',
-              style: {
-                backgroundColor: statusColor,
-                background: statusColor,
-                color: _textOnBg(statusColor),
-                borderColor: statusColor
-              }
-            }, l.status_name || '')
+            // MOBILE_LEAD_CARD_v2 — phone (large) top-right + underlined assigned date below.
+            h('div', { class: 'lc-rightinfo' },
+              l.phone ? h('a', { href: 'tel:' + digits, class: 'lc-phone-big', onclick: ev => ev.stopPropagation() }, l.phone) : null,
+              (l.assigned_at || l.created_at) ? h('span', { class: 'lc-assigned-date', title: 'Assigned ' + fmtDate(l.assigned_at || l.created_at, 'short') }, fmtDate(l.assigned_at || l.created_at, 'short')) : null
+            )
           ),
-          // Source + phone in one row
-          (srcBadge || l.phone) ? h('div', { class: 'lc-meta' },
-            srcBadge ? h('span', { class: 'src-badge', style: { color: srcBadge.color } }, srcBadge.icon + ' ', srcBadge.text) : null,
-            l.phone ? h('span', { class: 'phone-text' }, '·  ', l.phone) : null
-          ) : null,
+          // Status chip + source (phone moved to the right block above)
+          h('div', { class: 'lc-meta' },
+            h('span', { class: 'lc-status', style: { backgroundColor: statusColor, background: statusColor, color: _textOnBg(statusColor), borderColor: statusColor } }, l.status_name || ''),
+            srcBadge ? h('span', { class: 'src-badge', style: { color: srcBadge.color } }, srcBadge.icon + ' ', srcBadge.text) : null
+          ),
           // Campaign line (only when present) — CRM-brand indigo
           l.campaign_name ? h('div', { class: 'lc-campaign' },
             '📣 ', l.campaign_name,
@@ -6806,35 +6802,7 @@ function renderLeadsMobile(rows) {
       l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark },
         '✎  ' + String(l.recent_remark || '')
       ) : null,
-      // LEAD_LIST_WA_v2 — show last 2 WhatsApp on the mobile card (compact, 2 lines max),
-      // hover/long-press title shows last 3 with timestamps.
-      (() => {
-        const mList = Array.isArray(l.last_wa_msgs) && l.last_wa_msgs.length
-          ? l.last_wa_msgs
-          : ((l.last_wa_text || l.last_wa_at) ? [{ body: l.last_wa_text || '', direction: l.last_wa_direction || '', created_at: l.last_wa_at || '' }] : []);
-        if (!mList.length) return null;
-        const tip = mList.slice(0, 3).map(m => {
-          const dir = String(m.direction || '').toLowerCase();
-          const arrow = (dir === 'in' || dir === 'inbound') ? '↓ IN ' : '↑ OUT';
-          const ts = m.created_at ? '  [' + fmtDate(m.created_at, 'short') + ']' : '';
-          return arrow + ts + '\n' + String(m.body || '(media)');
-        }).join('\n\n');
-        const wrap = h('div', { class: 'lc-wa', title: tip,
-          style: { display: 'flex', flexDirection: 'column', gap: '.1rem', marginTop: '.15rem' } });
-        mList.slice(0, 2).forEach(m => {
-          const dir = String(m.direction || '').toLowerCase();
-          const isIn = (dir === 'in' || dir === 'inbound');
-          wrap.appendChild(h('div', { style: { display: 'flex', gap: '.25rem', alignItems: 'center', fontSize: '.78rem', color: '#334155', lineHeight: '1.2' } },
-            h('span', { style: { color: isIn ? '#0ea5e9' : '#16a34a', fontWeight: 600, flexShrink: 0 } }, isIn ? '💬↓' : '💬↑'),
-            h('span', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 } },
-              String(m.body || '(media)').slice(0, 80))
-          ));
-        });
-        if (mList[0] && mList[0].created_at) {
-          wrap.appendChild(h('span', { class: 'muted', style: { fontSize: '.7rem' } }, fmtDate(mList[0].created_at, 'relative')));
-        }
-        return wrap;
-      })(),
+      null, /* MOBILE_LEAD_CARD_v2 — 'Last WhatsApp' removed; last note/remark shows above (lc-note). */
       // LEADS_ICON_LABELS_v2 (v47): SVG icons; brand colour set on the button.
       h('div', { class: 'lc-actions' },
         digits ? _laItem('call', 'Call',     () => callLead(l), 'btn-call') : null,
