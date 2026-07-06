@@ -77,6 +77,10 @@ async function _ensureSchema() {
     )
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_wa_bot_flow_sessions_phone ON wa_bot_flow_sessions(phone)`);
+  // WA_FLOW_SESSION_FIX_v1 — older tenants' session table may lack UNIQUE(phone).
+  // Dedupe any stray rows, then ensure a unique index so one session per phone.
+  try { await db.query(`DELETE FROM wa_bot_flow_sessions a USING wa_bot_flow_sessions b WHERE a.phone = b.phone AND a.id < b.id`); } catch (_) {}
+  try { await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_wa_bot_flow_sessions_phone ON wa_bot_flow_sessions(phone)`); } catch (_) {}
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -213,6 +217,27 @@ function _findFlowByTrigger(rows, text) {
 
 function _findNode(flow, nodeId) {
   return (flow.nodes || []).find(n => n.id === nodeId) || null;
+}
+
+// WA_FLOW_BTN_MATCH_v1 — match an inbound reply to a node button by the id we
+// actually sent (id || next_node_id || label), by full or 20-char-truncated
+// label (WhatsApp caps button titles at 20 chars), or a 1/2/3 numeric reply.
+function _matchButton(buttons, inboundButtonId, inboundText) {
+  buttons = Array.isArray(buttons) ? buttons : [];
+  const bid = String(inboundButtonId || '').trim();
+  const tx  = String(inboundText || '').trim().toLowerCase();
+  if (bid) {
+    let b = buttons.find(x => String(x.id || '') === bid)
+         || buttons.find(x => String(x.id || x.next_node_id || x.label || '') === bid);
+    if (b) return b;
+  }
+  if (tx) {
+    let b = buttons.find(x => String(x.label || '').trim().toLowerCase() === tx)
+         || buttons.find(x => String(x.label || '').trim().toLowerCase().slice(0, 20) === tx);
+    if (b) return b;
+  }
+  if (/^[1-9]$/.test(tx)) { const b = buttons[Number(tx) - 1]; if (b) return b; }
+  return null;
 }
 
 /**
@@ -486,24 +511,11 @@ async function handleInbound({ phone, leadId, inboundText, inboundButtonId, inbo
       const k = String(node.save_to_var || node.id).trim();
       vars[k] = String(inboundText || '').trim();
       // Then advance to default_next or first matching button
-      if (inboundButtonId && Array.isArray(node.buttons)) {
-        const btn = node.buttons.find(b => String(b.id || '') === String(inboundButtonId));
-        if (btn && btn.next_node_id) nextNode = _findNode(flow, btn.next_node_id);
-      }
+      const btn = _matchButton(node.buttons, inboundButtonId, inboundText);
+      if (btn && btn.next_node_id) nextNode = _findNode(flow, btn.next_node_id);
       if (!nextNode && node.default_next) nextNode = _findNode(flow, node.default_next);
     } else if (Array.isArray(node.buttons) && node.buttons.length) {
-      // Match button reply by id or label
-      let btn = null;
-      if (inboundButtonId) btn = node.buttons.find(b => String(b.id || '') === String(inboundButtonId));
-      if (!btn) {
-        const tx = String(inboundText || '').trim().toLowerCase();
-        btn = node.buttons.find(b => String(b.label || '').toLowerCase() === tx);
-        // Also match by 1/2/3 numeric reply
-        if (!btn && /^[1-9]$/.test(tx)) {
-          const idx = Number(tx) - 1;
-          if (node.buttons[idx]) btn = node.buttons[idx];
-        }
-      }
+      const btn = _matchButton(node.buttons, inboundButtonId, inboundText);
       if (btn && btn.next_node_id) nextNode = _findNode(flow, btn.next_node_id);
       else if (node.default_next) nextNode = _findNode(flow, node.default_next);
     } else if (node.default_next) {
@@ -539,10 +551,13 @@ async function handleInbound({ phone, leadId, inboundText, inboundButtonId, inbo
   // Create the session
   let sessionId;
   try {
+    // WA_FLOW_SESSION_FIX_v1 — manual upsert so a session ALWAYS persists, even
+    // on older tables missing UNIQUE(phone) where ON CONFLICT throws (which left
+    // the flow unable to advance and re-triggered the welcome).
+    await db.query(`DELETE FROM wa_bot_flow_sessions WHERE phone = $1`, [phoneNorm]).catch(() => {});
     const ins = await db.query(
       `INSERT INTO wa_bot_flow_sessions (phone, phone_number_id, flow_id, current_node_id, vars, lead_id)
        VALUES ($1, $2, $3, $4, '{}'::jsonb, $5)
-       ON CONFLICT (phone) DO UPDATE SET flow_id = EXCLUDED.flow_id, current_node_id = EXCLUDED.current_node_id, vars = '{}'::jsonb, lead_id = EXCLUDED.lead_id, started_at = NOW(), last_at = NOW(), is_completed = 0
        RETURNING id`,
       [phoneNorm, inboundPhoneId || null, flow.id, startId, leadId || null]
     );
