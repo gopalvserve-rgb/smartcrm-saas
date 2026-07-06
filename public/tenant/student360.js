@@ -428,6 +428,9 @@
                 h('div', { style: { textAlign: 'right' } },
                   h('div', { style: { fontWeight: '800', fontSize: '16px', color: '#1e293b' } }, money(e.total_amount)),
                   _pill((e.status || 'active').toUpperCase(), e.status === 'cancelled' ? '#94a3b8' : e.status === 'completed' ? '#16a34a' : '#3b82f6'))))),
+        /* STU360_RECEIPTS_v1 (2026-07-05) — receipts section container.
+         * Populated asynchronously by _loadStudentReceipts(). */
+        h('div', { id: 'stu360-receipts', style: { marginTop: '12px', display: 'none' } }),
         insts.length > 0 ? h('div', { style: { marginTop: '12px' } },
           h('div', { style: { fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' } },
             '📅 Installment Timeline (' + insts.length + ')'),
@@ -699,6 +702,51 @@
   }
 
   // ── Master render ─────────────────────────────────────────────────────
+  /* STU360_RECEIPTS_v1 (2026-07-05) — fetch + render receipts for this student.
+   * Runs async after _renderPage so the fees tab paints immediately. */
+  async function _loadStudentReceipts() {
+    try {
+      const leadId = DATA && DATA.lead && DATA.lead.id;
+      if (!leadId) return;
+      const d = await api('api_edu_receipts_list', { lead_id: leadId, limit: 200 }).catch(() => null);
+      const items = d && Array.isArray(d.items) ? d.items : [];
+      const box = document.getElementById('stu360-receipts');
+      if (!box) return;
+      if (!items.length) { box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = '';
+      const header = h('div', { style: { fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' } },
+        '🧾 Fee Receipts (' + items.length + ')');
+      const tbl = h('table', { style: { width: '100%', fontSize: '13px', borderCollapse: 'collapse', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' } },
+        h('thead', {}, h('tr', { style: { background: '#f8fafc' } },
+          ['Receipt #', 'Date', 'Installment', 'Amount', 'Method', 'Actions'].map(k =>
+            h('th', { style: { textAlign: 'left', padding: '10px', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' } }, k)))),
+        h('tbody', {}, items.map(r => h('tr', {},
+          h('td', { style: { padding: '10px', fontWeight: '700', color: '#6366f1' } }, r.receipt_no || '#' + r.id),
+          h('td', { style: { padding: '10px' } }, String(r.receipt_date || r.created_at || '').slice(0, 10)),
+          h('td', { style: { padding: '10px' } }, r.installment_seq ? 'Seq ' + r.installment_seq : '—'),
+          h('td', { style: { padding: '10px', fontWeight: '700' } }, '₹' + Number(r.amount || 0).toLocaleString('en-IN')),
+          h('td', { style: { padding: '10px' } }, r.payment_method || '—'),
+          h('td', { style: { padding: '10px' } },
+            h('button', { class: 'btn sm primary', style: { padding: '4px 10px', fontSize: '11px' },
+              onclick: async () => {
+                try {
+                  const rr = await api('api_edu_receipts_html', r.id);
+                  if (!rr || !rr.html) throw new Error('No receipt HTML');
+                  const w = window.open('', '_blank', 'width=760,height=900');
+                  if (!w) { alert('Popup blocked — allow popups for this site'); return; }
+                  w.document.write(rr.html);
+                  w.document.close();
+                } catch (e) { alert('Preview failed: ' + (e && e.message || e)); }
+              } }, '🗄️ Preview / Print')
+          )
+        ))));
+      box.appendChild(header);
+      box.appendChild(tbl);
+    } catch (_) {}
+  }
+
+  // ── Master render ─────────────────────────────────────────────────────
   function _renderPage() {
     if (!VIEW_EL || !DATA) return;
     VIEW_EL.innerHTML = '';
@@ -727,6 +775,8 @@
       _renderJourney()  // STU360_PAGE_v2_FIX2: moved Lead Journey to bottom per user request
     );
     VIEW_EL.appendChild(container);
+    /* STU360_RECEIPTS_v1 — kick off receipts fetch after the fees tab paints */
+    setTimeout(_loadStudentReceipts, 100);
   }
 
   // ── Patch openLeadModal delegation (kept for safety) ──────────────────
