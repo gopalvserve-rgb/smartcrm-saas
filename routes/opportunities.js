@@ -33,22 +33,10 @@
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
-/* OPP_PRODUCT_ID_FIX_v1 (2026-07-05) — PER_TENANT_SCHEMA + product_id migration.
- * Old code: _schemaReady = false module-wide → once tenant A initialised,
- * tenant B was assumed ready → new tenants got 'relation does not exist' errors.
- * Also: v1 CREATE TABLE didn't include product_id, so INSERT into opportunities
- * with product_id failed on existing tenants. Both fixed here. */
-const _schemaReady = new Set();
-function _tenantKey() {
-  try {
-    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
-    return (store && store.slug) || 'default';
-  } catch (_) { return 'default'; }
-}
+let _schemaReady = false;
 
 async function _ensureSchema() {
-  const key = _tenantKey();
-  if (_schemaReady.has(key)) return;
+  if (_schemaReady) return;
 
   await db.query(`CREATE TABLE IF NOT EXISTS opportunity_types (
     id SERIAL PRIMARY KEY,
@@ -118,10 +106,6 @@ async function _ensureSchema() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_opportunities_lead ON opportunities(lead_id, created_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_opportunities_owner_stage ON opportunities(owner_user_id, stage_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_opportunities_pipeline_stage ON opportunities(pipeline_id, stage_id)`);
-  /* OPP_PRODUCT_ID_FIX_v1 (2026-07-05) — product_id was added AFTER v1 shipped.
-   * Existing tenants need the column added idempotently or Create/Edit Opportunity
-   * fails with 'column product_id does not exist'. */
-  await db.query(`ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS product_id INTEGER`).catch(()=>{});
 
   await db.query(`CREATE TABLE IF NOT EXISTS opportunity_stage_history (
     id SERIAL PRIMARY KEY,
@@ -180,7 +164,7 @@ async function _ensureSchema() {
   try { await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS creates_opportunity INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
   // Cross-table opp_id columns are opt-in — added by their own pack hooks later
 
-  _schemaReady.add(key);
+  _schemaReady = true;
 }
 
 // ──────────────────────────────────────────────────────────────────────

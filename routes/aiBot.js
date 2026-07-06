@@ -197,8 +197,6 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_after_minutes INTEGER NOT NULL DEFAULT 60`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_message TEXT NOT NULL DEFAULT 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_max_attempts INTEGER NOT NULL DEFAULT 1`);
-    /* AIBOT_CONCLUSION_v1 (2026-07-05) — admin-configurable stop conditions */
-    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS conclusion_signals JSONB DEFAULT '{}'::jsonb`).catch(()=>{});
     // Tenant-configurable heat detection (May 2026): client can add their own
     // high-intent keywords + choose which heat levels fire a notification.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_keywords JSONB NOT NULL DEFAULT '[]'::jsonb`);
@@ -301,8 +299,6 @@ async function api_aibot_settings_save(token, payload) {
   if (p.reengage_after_minutes    != null) addCol('reengage_after_minutes',    '$$',          Math.max(5, Math.min(10080, Number(p.reengage_after_minutes))));
   if (p.reengage_message          != null) addCol('reengage_message',          '$$',          String(p.reengage_message).slice(0, 1000));
   if (p.reengage_max_attempts     != null) addCol('reengage_max_attempts',     '$$',          Math.max(1, Math.min(5, Number(p.reengage_max_attempts))));
-  /* AIBOT_CONCLUSION_v1 — stop conditions as JSONB {presets:[], custom:''} */
-  if (p.conclusion_signals        != null) addCol('conclusion_signals',        '$$::jsonb',  typeof p.conclusion_signals === 'string' ? p.conclusion_signals : JSON.stringify(p.conclusion_signals || {}));
   if (p.heat_enabled              != null) addCol('heat_enabled',              '$$',          p.heat_enabled ? 1 : 0);
   if (p.pause_after_human_handoff != null) addCol('pause_after_human_handoff','$$',          p.pause_after_human_handoff ? 1 : 0);
   if (p.heat_keywords             != null) addCol('heat_keywords',             '$$::jsonb',   JSON.stringify(Array.isArray(p.heat_keywords) ? p.heat_keywords : []));
@@ -954,47 +950,13 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   }
 
   // max_replies_per_thread cap (0 = unlimited)
-  // AIBOT_HALLUCINATION_v1.1 (2026-07-05) — auto-bypass on Vserve so cap
-  // doesn't accidentally silence live bot on the flagship tenant.
-  // Global override: config AIBOT_IGNORE_CAP='1' bypasses everywhere.
   const cap = Number(settings.max_replies_per_thread || 0);
   if (cap > 0) {
-    let bypassCap = false;
-    try {
-      /* Slug-based auto-bypass — substring match so vserve/vserve-test/etc all pass */
-      if (String(tenantSlug || '').toLowerCase().includes('vserve')) bypassCap = true;
-      /* Global config override — set AIBOT_IGNORE_CAP=1 to bypass on any tenant */
-      if (!bypassCap) {
-        try {
-          const ovr = await db.getConfig('AIBOT_IGNORE_CAP', '');
-          if (String(ovr || '') === '1') bypassCap = true;
-        } catch (_) {}
-      }
-      /* AIBOT_HALLUCINATION_v1.2 — safer default: bypass unless admin
-       * explicitly sets AIBOT_ENFORCE_CAP=1. Prevents accidental silence. */
-      if (!bypassCap) {
-        try {
-          const enf = await db.getConfig('AIBOT_ENFORCE_CAP', '');
-          if (String(enf || '') !== '1') bypassCap = true;
-        } catch (_) { bypassCap = true; }
-      }
-    } catch (_) {}
-    if (!bypassCap) {
-      /* AIBOT_HALLUCINATION_v1.2 (2026-07-05) — rolling 24h window.
-       * Old code counted all-time ai_chat_log rows for this phone, so
-       * a customer that hit cap in a past test could never be replied
-       * to again forever. Now we count only the last 24h so each fresh
-       * conversation gets a fresh cap. */
-      const r = await db.query(
-        `SELECT COUNT(*)::int AS c FROM ai_chat_log
-          WHERE phone = $1 AND status IN ('sent', 'draft')
-            AND (mode_used IS NULL OR mode_used != 'welcome')
-            AND created_at > NOW() - INTERVAL '24 hours'`,
-        [phone]
-      );
-      const used = Number(r.rows[0]?.c || 0);
-      if (used >= cap) return 'max replies per thread reached (' + used + '/' + cap + ' in last 24h — set cap to 0 in Settings → AI Bot → Safety & advanced)';
-    }
+    const r = await db.query(
+      `SELECT COUNT(*)::int AS c FROM ai_chat_log WHERE phone = $1 AND status IN ('sent', 'draft')`,
+      [phone]
+    );
+    if (Number(r.rows[0]?.c || 0) >= cap) return 'max replies per thread reached';
   }
 
   return null;
@@ -1085,40 +1047,6 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     if (buf.trim()) kb = '\n\n=== KNOWLEDGE BASE ===' + buf + '\n=== END KNOWLEDGE BASE ===';
   }
 
-  /* ─────────────────────────────────────────────────────────────
-   * AIBOT_HALLUCINATION_v1 (2026-07-05) — URL ALLOWLIST
-   * -----------------------------------------------------------
-   * LLMs invent URLs. Scan the assembled KB for every http(s) link
-   * and expose the exact list to the model with a HARD RULE that
-   * every shared URL must be quoted verbatim from this list.
-   * ───────────────────────────────────────────────────────────── */
-  let urlAllowlistBlock = '';
-  try {
-    const urlSet = new Set();
-    if (kb) {
-      const matches = kb.match(/https?:\/\/[^\s<>"'`)\]]+/g) || [];
-      matches.forEach(u => {
-        /* Trim trailing punctuation Gemini shouldn't include */
-        const clean = u.replace(/[.,;!?)\]]+$/, '');
-        if (clean.length > 8 && clean.length < 400) urlSet.add(clean);
-      });
-    }
-    if (urlSet.size > 0) {
-      urlAllowlistBlock = '\n\n=== URL ALLOWLIST ===\n' +
-        'These are the ONLY URLs you may share with customers.\n' +
-        'Quote each URL EXACTLY — character-for-character, no shortening, no modifications.\n\n' +
-        Array.from(urlSet).sort().map(u => '  • ' + u).join('\n') +
-        '\n\nHARD RULES:\n' +
-        '  1. If the customer asks for a link (demo video, brochure, pricing, portfolio, catalog, etc.)\n' +
-        '     → share ONLY a URL from the list above, copied exactly.\n' +
-        '  2. If the customer asks for content that has no URL in the list above,\n' +
-        '     → DO NOT invent a URL. Say: "I\'ll ask the team to send that to you separately."\n' +
-        '  3. NEVER change domains, paths, or shorten URLs. NEVER use bit.ly/example.com/vserve.io/etc\n' +
-        '     unless it appears verbatim above.\n' +
-        '=== END URL ALLOWLIST ===';
-    }
-  } catch (_) {}
-
   // AIBOT_CONTEXT_v1 — lead snapshot injected into the system prompt.
   // Without this block the bot answered every customer the same way
   // regardless of who they were ("forgets who the lead is"). We fetch a
@@ -1184,7 +1112,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
           const rmk = await db.query(
             `SELECT remark, created_at FROM remarks
               WHERE lead_id = $1 AND remark IS NOT NULL AND remark <> ''
-              ORDER BY created_at DESC LIMIT 5`,
+              ORDER BY created_at DESC LIMIT 3`,
             [leadId]
           );
           if (rmk.rows.length) {
@@ -1220,149 +1148,6 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     }
   } catch (e) { console.warn('[aiBot] lead-context build failed:', e && e.message); }
 
-  /* ─────────────────────────────────────────────────────────────
-   * AIBOT_COMMITMENTS_v1 (2026-07-05)
-   * -----------------------------------------------------------
-   * Explicit "the customer has already done X" facts so the bot
-   * stops re-asking for demos/quotes that are already booked/sent.
-   *
-   * Gated ON for slug='vserve' automatically; OFF elsewhere unless
-   * the admin flips config AIBOT_COMMITMENTS_ENABLED='1'.
-   *
-   * Every source is wrapped in try/catch so a missing table on a
-   * particular tenant never breaks the reply pipeline.
-   * ───────────────────────────────────────────────────────────── */
-  let commitmentsBlock = '';
-  let hardRulesBlock = '';
-  try {
-    let tenantSlug = '';
-    try {
-      const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
-      tenantSlug = (store && store.slug) || '';
-    } catch (_) {}
-    let commitmentsEnabled = tenantSlug === 'vserve';
-    if (!commitmentsEnabled) {
-      try {
-        const v = await db.getConfig('AIBOT_COMMITMENTS_ENABLED', '');
-        commitmentsEnabled = String(v || '') === '1';
-      } catch (_) {}
-    }
-
-    if (commitmentsEnabled && leadId) {
-      const items = [];
-
-      /* 1. Current status + last-updated stamp */
-      try {
-        const lr = await db.query(
-          `SELECT s.name AS status_name, l.updated_at
-             FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
-            WHERE l.id = $1`,
-          [leadId]
-        );
-        if (lr.rows[0] && lr.rows[0].status_name) {
-          const upd = lr.rows[0].updated_at ? new Date(lr.rows[0].updated_at).toISOString().slice(0, 16).replace('T', ' ') : '';
-          items.push('📊 Current lead status: ' + lr.rows[0].status_name + (upd ? ' (last updated ' + upd + ' UTC)' : ''));
-        }
-      } catch (_) {}
-
-      /* 2. Pending follow-ups over the next 30 days */
-      try {
-        const fu = await db.query(
-          `SELECT due_at, note FROM followups
-            WHERE lead_id = $1 AND (is_done = 0 OR is_done IS NULL)
-              AND due_at IS NOT NULL
-              AND due_at >= NOW() - INTERVAL '1 hour'
-              AND due_at <= NOW() + INTERVAL '30 days'
-            ORDER BY due_at ASC LIMIT 5`,
-          [leadId]
-        );
-        fu.rows.forEach(f => {
-          const when = new Date(f.due_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
-          items.push('📅 Scheduled meeting/call: ' + when + (f.note ? ' — ' + String(f.note).slice(0, 100) : ''));
-        });
-      } catch (_) {}
-
-      /* 3. Demo reminders (if table exists) */
-      try {
-        const dr = await db.query(
-          `SELECT scheduled_at, status FROM demo_reminders
-            WHERE lead_id = $1
-              AND scheduled_at >= NOW() - INTERVAL '7 days'
-            ORDER BY scheduled_at DESC LIMIT 3`,
-          [leadId]
-        );
-        dr.rows.forEach(d => {
-          const when = new Date(d.scheduled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
-          items.push('🎯 Demo reminder ' + (d.status || 'queued') + ' for ' + when);
-        });
-      } catch (_) {}
-
-      /* 4. Recent quotations (last 60 days) with status */
-      try {
-        const qz = await db.query(
-          `SELECT number, status, total, created_at FROM quotations
-            WHERE lead_id = $1 AND created_at >= NOW() - INTERVAL '60 days'
-            ORDER BY created_at DESC LIMIT 3`,
-          [leadId]
-        );
-        qz.rows.forEach(q => {
-          items.push('💰 Quote #' + q.number + ' (' + (q.status || 'sent') + ', ₹' + Number(q.total || 0).toLocaleString('en-IN') + ') sent ' + new Date(q.created_at).toISOString().slice(0, 10));
-        });
-      } catch (_) {}
-
-      /* 5. Invoices (last 30 days) with balance / payment status */
-      try {
-        const iv = await db.query(
-          `SELECT number, status, total, balance, created_at FROM invoices
-            WHERE lead_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
-            ORDER BY created_at DESC LIMIT 3`,
-          [leadId]
-        );
-        iv.rows.forEach(i => {
-          const bal = Number(i.balance || 0);
-          const tot = Number(i.total || 0);
-          items.push('🧾 Invoice #' + i.number + ' (' + (i.status || '') + ', ₹' + tot.toLocaleString('en-IN') + (bal > 0 ? ', balance ₹' + bal.toLocaleString('en-IN') + ' pending' : ', fully paid') + ')');
-        });
-      } catch (_) {}
-
-      /* 6. Recent status transitions (last 30 days) from activity_log */
-      try {
-        const at = await db.query(
-          `SELECT description, created_at FROM activity_log
-            WHERE lead_id = $1
-              AND (action ILIKE '%status%' OR description ILIKE '%status%' OR description ILIKE '%moved%')
-              AND created_at >= NOW() - INTERVAL '30 days'
-            ORDER BY created_at DESC LIMIT 3`,
-          [leadId]
-        );
-        at.rows.forEach(a => {
-          const desc = String(a.description || '').slice(0, 140);
-          if (desc) items.push('🔄 ' + desc + ' (' + new Date(a.created_at).toISOString().slice(0, 10) + ')');
-        });
-      } catch (_) {}
-
-      if (items.length) {
-        commitmentsBlock = '\n\n=== CUSTOMER COMMITMENTS ===\n'
-          + 'These are things this customer has ALREADY done, been scheduled for, or been sent.\n'
-          + 'Treat every line as a HARD FACT — do NOT contradict them, do NOT ask them to do it again.\n\n'
-          + items.join('\n')
-          + '\n=== END CUSTOMER COMMITMENTS ===';
-
-        hardRulesBlock = '\n\n=== HARD RULES (override the persona) ===\n'
-          + '1. Read CUSTOMER COMMITMENTS above carefully BEFORE composing every reply.\n'
-          + '2. If a demo/meeting is already scheduled → DO NOT ask them to book one. '
-          + 'Acknowledge the existing booking and answer their current question.\n'
-          + '3. If a quote is already sent → reference it by number. DO NOT offer to send a fresh quote unless they ask.\n'
-          + '4. If an invoice is fully paid → thank them. If a balance is pending → only bring it up '
-          + 'if the customer touched on payment or delivery timing; otherwise stay silent on it.\n'
-          + '5. Answer the CURRENT question directly and briefly. DO NOT append a generic "book a demo" / '
-          + '"share your details" CTA when the prior request has already been addressed.\n'
-          + '6. New topic from customer → answer it normally. Only skip a CTA if it would be redundant.\n'
-          + '=== END HARD RULES ===';
-      }
-    }
-  } catch (e) { console.warn('[aiBot] commitments block failed:', e && e.message); }
-
   // AIBOT_HOURS_v1 — working hours awareness so the bot proposes callbacks
   // at the next business slot instead of promising immediate action.
   let businessHoursBlock = '';
@@ -1392,7 +1177,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     businessHoursBlock = '\n\n=== BUSINESS HOURS POLICY ===\n' + lines.join('\n') + '\n=== END BUSINESS HOURS POLICY ===';
   } catch (e) { console.warn('[aiBot] business-hours block failed:', e && e.message); }
 
-  const system = personaWithLang + leadContextBlock + commitmentsBlock + hardRulesBlock + businessHoursBlock + kb + urlAllowlistBlock;
+  const system = personaWithLang + leadContextBlock + businessHoursBlock + kb;
 
   // History: last N inbound + outbound messages (chronological), but
   // exclude the just-arrived inbound that whatsbot already wrote to
@@ -1509,80 +1294,6 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
 
   const modes = Array.isArray(settings.reply_modes) ? settings.reply_modes : ['always'];
   const isManual = modes.includes('manual') && !modes.includes('always');
-
-  /* ─────────────────────────────────────────────────────────────
-   * AIBOT_WELCOME_v1 (2026-07-05)
-   * -----------------------------------------------------------
-   * If the tenant configured a welcome_message AND this looks like
-   * a first-touch inbound (no prior outbound WA to this phone) OR
-   * a plain greeting ("Hi", "Hello", "Namaste", etc.) with no
-   * welcome sent in the last 24h → send the welcome directly and
-   * skip the Gemini call. Saves cost + guarantees consistent first
-   * impression across every conversation.
-   * ───────────────────────────────────────────────────────────── */
-  try {
-    const welcomeMsg = String(settings.welcome_message || '').trim();
-    if (welcomeMsg && !isManual) {
-      const phoneTail = String(phone || '').replace(/\D/g, '').slice(-10);
-      /* Any prior outbound WA to this phone? (includes agent + bot messages) */
-      let hasPriorOut = false;
-      try {
-        const r = await db.query(
-          `SELECT 1 FROM whatsapp_messages
-            WHERE direction = 'out'
-              AND (
-                RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
-                OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1
-              )
-            LIMIT 1`,
-          [phoneTail]
-        );
-        hasPriorOut = r.rows.length > 0;
-      } catch (_) {}
-
-      /* Greeting-only detection */
-      const _t = String(inboundText || '').trim().toLowerCase();
-      const isGreetingOnly = /^(hi+|hii+|hey+|hello+|helo+|hlo+|namaste+|namaskar+|salam+|salaam+|hola+|good\s*(morning|afternoon|evening|day)|hi\s*there|start)[\s!.?😊😀🙏]*$/i.test(_t);
-
-      /* Has a welcome already been sent to this phone in the last 24h? */
-      let welcomeSentRecent = false;
-      try {
-        const w = await db.query(
-          `SELECT 1 FROM ai_chat_log
-            WHERE phone = $1 AND status = 'sent' AND mode_used = 'welcome'
-              AND created_at > NOW() - INTERVAL '24 hours'
-            LIMIT 1`,
-          [phone]
-        );
-        welcomeSentRecent = w.rows.length > 0;
-      } catch (_) {}
-
-      const shouldSendWelcome = (!hasPriorOut) || (isGreetingOnly && !welcomeSentRecent);
-      if (shouldSendWelcome) {
-        const wb = _wb();
-        const cfg = {};
-        try {
-          if (inboundPhoneId) cfg.phone_number_id = String(inboundPhoneId);
-        } catch (_) {}
-        try {
-          const send = await wb._sendText(
-            { to: phone, text: welcomeMsg, leadId: leadId || null, userId: null },
-            cfg
-          );
-          await db.query(
-            `INSERT INTO ai_chat_log (phone, lead_id, inbound_msg_id, status, reply_text, mode_used, phone_number_id)
-             VALUES ($1, $2, $3, 'sent', $4, 'welcome', $5)`,
-            [phone, leadId || null, inboundMsgId || null,
-             welcomeMsg.slice(0, 4000), inboundPhoneId || null]
-          );
-          return;   /* Welcome sent — skip Gemini entirely for this turn */
-        } catch (e) {
-          console.warn('[aiBot] welcome send failed, falling through to Gemini:', e && e.message);
-          /* Fall through — if send fails, still try Gemini so customer gets SOME reply */
-        }
-      }
-    }
-  } catch (e) { console.warn('[aiBot] welcome trigger failed:', e && e.message); }
 
   let { system, history, prompt } = await _buildPrompt(settings, phone, leadId, inboundText);
 
@@ -1811,56 +1522,6 @@ async function api_aibot_discard_draft(token, draftId) {
 // Returns { committed: bool, reason: '...' }.
 async function _hasCommitSignal(phone) {
   if (!phone) return { committed: false };
-
-  /* AIBOT_CONCLUSION_v1 (2026-07-05) — load admin-configured conclusion signals */
-  var _adminIn = [];   /* customer phrases */
-  var _adminOut = [];  /* bot phrases */
-  var _presets = [];
-  try {
-    const cs = await db.query(`SELECT conclusion_signals FROM ai_bot_settings ORDER BY id ASC LIMIT 1`);
-    let raw = cs.rows[0] && cs.rows[0].conclusion_signals;
-    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (_) { raw = {}; } }
-    if (raw && Array.isArray(raw.presets)) _presets = raw.presets;
-    if (raw && typeof raw.custom === 'string' && raw.custom.trim()) {
-      raw.custom.split(/\r?\n/).forEach(line => {
-        const t = String(line || '').trim().toLowerCase();
-        if (t) { _adminIn.push(t); _adminOut.push(t); }
-      });
-    }
-  } catch (_) {}
-
-  /* Preset library — maps preset IDs to phrase lists */
-  const PRESET_LIB = {
-    demo_booked:        { in: ['book demo','book a demo','book the demo','demo book','yes book','confirm demo','demo confirm'],
-                          out: ['demo scheduled','demo booked','confirmed your demo','demo is confirmed','your demo for','see you tomorrow','see you at'] },
-    callback_requested: { in: ['call me tomorrow','call me at','call back tomorrow','callback at','call back at','baat karte','baat karo','phone karo','call karo','call kar','ring me','phone me','tomorrow at','call at','call tomorrow','callback','call back'],
-                          out: ['callback scheduled','arranged a callback','will arrange a callback','agent will call','our team will call'] },
-    appointment_fixed:  { in: ['appointment','site visit','visit office','meet up','meet you','meeting scheduled','meeting fixed','fix the meeting','meeting confirm'],
-                          out: ['meeting confirmed','meeting scheduled','see you soon','team will be ready','look forward to speaking','look forward to seeing'] },
-    quote_accepted:     { in: ['i agree','approved','accept quote','accept quotation','quotation approved','quote approved','sounds good','looks good','that works','works for me'],
-                          out: ['quotation approved','quote approved','thanks for confirming','look forward to speaking'] },
-    quote_requested:    { in: ['send quote','send quotation','share quote','share quotation','send proposal','send the proposal','how much','pricing','send pricing','send rate','send price'],
-                          out: ['sending you the quote','sending the quote','sharing quotation','share the quote'] },
-    proposal_sent:      { in: [],
-                          out: ['proposal sent','brochure sent','sent you the brochure','sent you our','sent the pdf','check the pdf','check the attachment'] },
-    ready_to_buy:       { in: ['ready to buy','want to buy','go ahead','lets proceed',"let's proceed",'proceed with','sign up','sign me up','kharidna hai','lena hai','finalize','finalise','confirm order','place order','count me in',"i'll buy",'i will buy','we are in','we will go ahead','i have decided','decision taken','going with you','will sign'],
-                          out: ['thanks for confirming','deal done','order placed','congratulations on'] },
-    payment_confirmed:  { in: ['paid','payment done','transfer done','tranferred','sent the money','sent money','upi done','advance paid','advance done'],
-                          out: ['payment received','received the payment','payment confirmed','advance received'] },
-    address_shared:     { in: ['my address','my location','pin code','pincode','send to','deliver to','shipping address'],
-                          out: ['noted the address','address noted','delivery scheduled'] },
-    not_interested:     { in: ['not interested','no thanks','no thank you','wrong number','wrong person','stop messaging','stop sending','unsubscribe','do not call',"don't call",'do not message',"don't message",'remove me','mat karo','nahi chahiye','nahin chahiye','mujhe nahi','mujhe nahin'],
-                          out: ['understood, we will not','removed you from','sorry to hear that','apologies for the'] },
-    later_promised:     { in: ['later','next week','next month','after diwali','after holi','after the weekend','busy now','busy right now','in a meeting','will call you','will get back',"i'll get back",'will reach out',"i'll reach out",'circle back'],
-                          out: ['no problem, please reach out','feel free to reach','will wait for your','look forward to hearing'] },
-    human_takeover:     { in: [],
-                          out: [] /* handled elsewhere by pause_after_human_handoff */ }
-  };
-  _presets.forEach(pid => {
-    const p = PRESET_LIB[pid];
-    if (p) { _adminIn = _adminIn.concat(p.in); _adminOut = _adminOut.concat(p.out); }
-  });
-
   try {
     const r = await db.query(
       `SELECT direction, body, created_at FROM whatsapp_messages
@@ -1893,100 +1554,21 @@ async function _hasCommitSignal(phone) {
       // Time-bound future commitments
       'busy now', 'busy right now', 'in a meeting', 'will call you', 'will get back',
       "i'll get back", 'will reach out', "i'll reach out", 'circle back', 'later in the week',
-      'next week', 'next month', 'after diwali', 'after holi', 'after the weekend',
-      /* AIBOT_COMMIT_v3 (2026-07-05) — plain acknowledgements when a bot has JUST
-       * proposed a demo/time. 'ok' / 'ok done' etc as a single word confirms the
-       * proposed action. We only match short standalone 'ok' via a strict pattern
-       * further below (not this list). */
-      'demo', 'demo please', 'demo book', 'book demo', 'yes book',
-      'yes confirmed', 'yes please', 'sounds good', 'that works', 'works for me',
-      'perfect', 'confirmed', 'done', 'chalega', 'chalta hai', 'kar do', 'karo book'
+      'next week', 'next month', 'after diwali', 'after holi', 'after the weekend'
     ];
     // Bot / agent acknowledgements
     const COMMIT_KW_OUT = [
-      /* existing */
       'callback scheduled', 'demo scheduled', 'demo booked', 'meeting confirmed',
       'i will arrange', 'will arrange a callback', 'arranged a callback',
-      'agent will call', 'our team will call', 'thanks for confirming',
-      /* AIBOT_COMMIT_v3 (2026-07-05) — broader phrasing that the current bot actually uses */
-      'confirmed your demo', 'demo is confirmed', 'your demo for',
-      'noted that', 'i have noted', "i've noted",
-      'look forward to speaking', 'look forward to showing', 'look forward to seeing',
-      'team will be ready', 'team is ready', 'our team will be',
-      'see you soon', 'see you tomorrow', 'see you at',
-      /* Time-committed acknowledgements */
-      'tomorrow at 11', 'tomorrow at 12', 'tomorrow at 1', 'tomorrow at 2',
-      'tomorrow at 3', 'tomorrow at 4', 'tomorrow at 5', 'tomorrow at 6', 'tomorrow at 7',
-      'at 3 pm', 'at 4 pm', 'at 5 pm', 'at 11 am', 'at 10 am',
-      'perfect!', 'great!', 'wonderful evening', 'have a lovely'
+      'agent will call', 'our team will call', 'thanks for confirming'
     ];
-    /* AIBOT_CONCLUSION_v1 — merge admin phrases with built-in library */
-    const _finalIn  = COMMIT_KW_IN.concat(_adminIn);
-    const _finalOut = COMMIT_KW_OUT.concat(_adminOut);
     for (const m of msgs) {
-      const kws = m.dir === 'in' ? _finalIn : _finalOut;
+      const kws = m.dir === 'in' ? COMMIT_KW_IN : COMMIT_KW_OUT;
       for (const kw of kws) {
-        if (kw && m.txt.includes(kw)) return { committed: true, reason: 'commit signal: "' + kw + '" (' + m.dir + ')' };
+        if (m.txt.includes(kw)) return { committed: true, reason: 'commit signal: "' + kw + '" (' + m.dir + ')' };
       }
     }
   } catch (e) { /* fail open — don't block legit re-engagement */ }
-
-  /* AIBOT_COMMIT_v3 (2026-07-05) — CRM-state check.
-   * If the lead has an upcoming followup, an active demo_reminder, or a
-   * "closed" status (Won / Demo Scheduled / Meeting Fixed / Not Interested /
-   * Junk), skip re-engagement. This catches cases where the bot phrasing
-   * doesn't match our keyword lists but the CRM already knows the customer
-   * is committed. */
-  try {
-    const digits = String(phone || '').replace(/\D/g, '').slice(-10);
-    if (digits) {
-      const l = await db.query(
-        `SELECT l.id, l.next_followup_at, s.name AS status_name
-           FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
-          WHERE RIGHT(regexp_replace(l.phone, '[^0-9]', '', 'g'), 10) = $1
-          ORDER BY l.id DESC LIMIT 1`,
-        [digits]
-      );
-      const lead = l.rows[0];
-      if (lead) {
-        /* Upcoming follow-up scheduled in next 30 days → committed */
-        if (lead.next_followup_at) {
-          const fu = new Date(lead.next_followup_at).getTime();
-          const now = Date.now();
-          if (fu > now - 3600_000 && fu < now + 30 * 86400_000) {
-            return { committed: true, reason: 'CRM state: follow-up scheduled ' + lead.next_followup_at };
-          }
-        }
-        /* Status-based skip */
-        const closedStatuses = /demo\s*scheduled|meeting\s*fixed|meeting\s*scheduled|won|deal\s*done|closed\s*won|not\s*interested|junk|lost|dnp|dnd/i;
-        if (lead.status_name && closedStatuses.test(String(lead.status_name))) {
-          return { committed: true, reason: 'CRM state: status="' + lead.status_name + '"' };
-        }
-        /* Any pending followup row for this lead */
-        try {
-          const fu = await db.query(
-            `SELECT 1 FROM followups
-              WHERE lead_id = $1 AND (is_done = 0 OR is_done IS NULL)
-                AND due_at BETWEEN NOW() - INTERVAL '1 hour' AND NOW() + INTERVAL '30 days'
-              LIMIT 1`,
-            [lead.id]
-          );
-          if (fu.rows.length) return { committed: true, reason: 'CRM state: pending followup row exists' };
-        } catch (_) {}
-        /* Any pending demo_reminder for this lead */
-        try {
-          const dr = await db.query(
-            `SELECT 1 FROM demo_reminders
-              WHERE lead_id = $1 AND scheduled_at > NOW() - INTERVAL '1 hour'
-              LIMIT 1`,
-            [lead.id]
-          );
-          if (dr.rows.length) return { committed: true, reason: 'CRM state: demo_reminder scheduled' };
-        } catch (_) {}
-      }
-    }
-  } catch (_) {}
-
   return { committed: false };
 }
 
@@ -2861,92 +2443,7 @@ async function api_aiBot_clearFlowSession(token, payload) {
   return { ok: true, cleared: r.rowCount || 0 };
 }
 
-
-/* ─────────────────────────────────────────────────────────────
- * AIBOT_HALLUCINATION_v1 (2026-07-05)
- * api_aibot_diagnose_thread({phone: '9876543210'})
- * -----------------------------------------------------------
- * Admin-only. Returns why the bot is (or isn't) replying to a
- * specific phone. Call from browser console:
- *   await window.api('api_aibot_diagnose_thread', { phone: '9876543210' })
- * ───────────────────────────────────────────────────────────── */
-async function api_aibot_diagnose_thread(token, payload) {
-  const me = await authUser(token);
-  if (me.role !== 'admin') throw new Error('Admin only');
-  const p = payload || {};
-  const phoneLast10 = String(p.phone || '').replace(/\D/g, '').slice(-10);
-  if (!phoneLast10) throw new Error('phone required');
-
-  const log = await db.query(
-    `SELECT id, status, mode_used, suppressed_reason, error_text, model,
-            phone_number_id,
-            LEFT(COALESCE(reply_text, draft_text), 240) AS preview,
-            created_at
-       FROM ai_chat_log
-      WHERE RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = $1
-      ORDER BY id DESC LIMIT 20`,
-    [phoneLast10]
-  );
-
-  const counts = await db.query(
-    `SELECT
-       COUNT(*)::int                                          AS total,
-       COUNT(*) FILTER (WHERE status = 'sent')::int           AS sent,
-       COUNT(*) FILTER (WHERE status = 'draft')::int          AS draft,
-       COUNT(*) FILTER (WHERE status = 'suppressed')::int     AS suppressed,
-       COUNT(*) FILTER (WHERE status = 'failed')::int         AS failed,
-       COUNT(*) FILTER (WHERE mode_used = 'welcome')::int     AS welcome_sent,
-       COUNT(*) FILTER (WHERE status IN ('sent','draft') AND (mode_used IS NULL OR mode_used != 'welcome'))::int AS toward_cap
-     FROM ai_chat_log
-     WHERE RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = $1`,
-    [phoneLast10]
-  );
-
-  const settings = await db.query(`SELECT * FROM ai_bot_settings ORDER BY id LIMIT 5`);
-  const settingsSummary = settings.rows.map(s => ({
-    id: s.id, phone_number_id: s.phone_number_id,
-    is_enabled: s.is_enabled,
-    max_replies_per_thread: s.max_replies_per_thread,
-    pause_after_human_handoff: s.pause_after_human_handoff,
-    welcome_message_set: !!(s.welcome_message && String(s.welcome_message).trim()),
-    reply_modes: s.reply_modes
-  }));
-
-  const kbDocs = await db.query(
-    `SELECT id, title, source_type, phone_number_id, is_active, char_count
-       FROM ai_kb_documents
-      WHERE is_active = 1
-      ORDER BY id DESC LIMIT 30`
-  );
-
-  const diagnosis = [];
-  const c = counts.rows[0] || {};
-  const cap = settings.rows[0] && Number(settings.rows[0].max_replies_per_thread || 0);
-  if (cap > 0 && Number(c.toward_cap || 0) >= cap) {
-    diagnosis.push('❗ CAP HIT: max_replies_per_thread = ' + cap + ' AND ' + c.toward_cap + ' non-welcome replies already exist. Bot is silenced. Set to 0 in Settings → AI Bot → Safety & advanced.');
-  } else if (cap > 0) {
-    diagnosis.push('ℹ Cap ' + cap + ' | ' + c.toward_cap + '/' + cap + ' used (' + (cap - Number(c.toward_cap || 0)) + ' remaining before silence)');
-  } else {
-    diagnosis.push('✓ No cap set (unlimited replies)');
-  }
-  const lastSuppress = log.rows.find(r => r.status === 'suppressed');
-  if (lastSuppress) diagnosis.push('Last suppression reason: ' + (lastSuppress.suppressed_reason || 'unknown'));
-  if (kbDocs.rows.length) {
-    diagnosis.push('Active KB docs (across ALL bots): ' + kbDocs.rows.length + ' — check if a duplicate content is scoped to another phone_number_id.');
-  }
-
-  return {
-    phone_last10: phoneLast10,
-    counts: c,
-    settings_summary: settingsSummary,
-    active_kb_docs: kbDocs.rows,
-    recent_log: log.rows,
-    diagnosis
-  };
-}
-
 module.exports = {
-  api_aibot_diagnose_thread,
   api_aiBot_diagnose, api_aiBot_clearFlowSession,  /* BOT_DIAGNOSE_v1 */
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
