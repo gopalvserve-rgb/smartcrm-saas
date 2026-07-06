@@ -124,6 +124,7 @@ const ROUTE_FILES = [
   'followupReminders',  /* REMINDER_FLOWS_v1 — runtime scheduling + log view APIs */
   'fbQnaBackfill',      /* FB_META_QNA_BACKFILL_v1 — retroactively add Q&A remarks */
   'fbLeadDiag',         /* FB_LEAD_DIAG_v1 — inspector for why Q&A didn't show */
+  'waCatalogue',        /* WA_CATALOGUE_v1 — WhatsApp Catalogue library (Vserve-gated) */
 ];
 
 const API = {};
