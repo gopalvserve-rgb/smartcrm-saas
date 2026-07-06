@@ -928,9 +928,32 @@
       : ((S.activeThread && S.activeThread.lead_name) || '');
     const ts = m.created_at || m.timestamp || m.ts;
     const ticks = m.read_at ? '✓✓' : m.delivered_at ? '✓✓' : m.status === 'sent' ? '✓' : '';
+    /* WB_CHAT_V2_MEDIA_RENDER_v1 (2026-07-06) — image/video/document
+     * messages were rendering as blank bubbles because we only looked at
+     * m.body. Media URL lives in m.media_url; render inline thumbnail
+     * (image) / video player / doc chip based on message_type. Falls
+     * back to text body if no media. */
+    const mtype = String(m.message_type || '').toLowerCase();
+    const murl = m.media_url || '';
+    let mediaNode = null;
+    if (murl && (mtype === 'image' || (!mtype && /\.(jpe?g|png|gif|webp)$/i.test(murl)))) {
+      mediaNode = h('a', { href: murl, target: '_blank', rel: 'noopener' },
+        h('img', { src: murl, alt: 'image',
+          style: { maxWidth: '260px', maxHeight: '260px', borderRadius: '8px', display: 'block', marginBottom: body ? '6px' : '0', cursor: 'zoom-in', background: '#f0f2f5' },
+          onerror: function () { this.replaceWith(document.createTextNode('🖼 Image (couldn\'t load — link expired?)')); } }));
+    } else if (murl && mtype === 'video') {
+      mediaNode = h('video', { src: murl, controls: true,
+        style: { maxWidth: '260px', borderRadius: '8px', display: 'block', marginBottom: body ? '6px' : '0' } });
+    } else if (murl && (mtype === 'document' || mtype === 'audio')) {
+      const icon = mtype === 'audio' ? '🎧' : '📄';
+      const label = m.filename || m.body || (mtype === 'audio' ? 'Audio' : 'Document');
+      mediaNode = h('a', { href: murl, target: '_blank', rel: 'noopener',
+        style: { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: 'rgba(0,0,0,0.05)', borderRadius: '6px', textDecoration: 'none', color: 'inherit', fontSize: '13px', marginBottom: body ? '6px' : '0' } },
+        icon + ' ' + label);
+    }
     return h('div', { class: cls },
       dir === 'out' && whoName ? h('div', { class: 'who' + (isTpl ? ' tpl' : '') }, isTpl ? '📋 Template · ' + whoName : whoName) : null,
-      h('div', { class: 'body' }, body),
+      h('div', { class: 'body' }, mediaNode, body ? h('div', {}, body) : null),
       h('div', { class: 'meta' },
         /* WB_CHAT_V2_MSG_USER_v1 — show sender name INSIDE the meta line
          * for outbound messages too. Compact "· by Sanjana" after the timestamp. */
