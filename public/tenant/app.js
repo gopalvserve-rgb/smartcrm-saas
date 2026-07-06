@@ -23199,6 +23199,21 @@ async function loadReports() {
   // ---------- "By date" — daily breakdown chart + table ----------
   renderDailyBreakdown(daily, filters);
 
+  /* CF_REPORT_DATE_FILTER_v1 (2026-07-06) — when Apply is clicked, the top
+   * charts refresh but the two CF pivot cards ("📋 Leads by custom field"
+   * and "🧮 Custom-field matrix") kept their stale all-time counts because
+   * loadReports() never re-ran them. Both API calls (api_reports_pivot) DO
+   * honor filters.from / filters.to server-side; we just weren't calling
+   * them again. Fire both if their picker has a value. */
+  try {
+    if (document.getElementById('rep-cfcount-pick')?.value) {
+      if (typeof _loadReportsCfCountTable === 'function') _loadReportsCfCountTable();
+    }
+    if (document.getElementById('rep-cf-pick')?.value) {
+      if (typeof _loadReportsCfMatrix === 'function') _loadReportsCfMatrix();
+    }
+  } catch (_) {}
+
   const byUserEl = $('#rep-by-user');
   byUserEl.innerHTML = '';
   if (!summary.by_user.length) { byUserEl.innerHTML = '<p class="muted">No user activity in this period.</p>'; return; }
@@ -56275,20 +56290,4 @@ VIEWS.ecorders = async (view) => {
   view.appendChild(tbl);
 };
 
-// Stub views — other pack sidebar items show "coming soon" instead of nothing.
-['finpremiums', 'finclaims', 'finrenewals',
- 'solarquotes', 'solarinstalls', 'solarsubsidies', 'solaramc',
- 'mfgproduction', 'mfgdispatch', 'mfgreceivables',
- 'tourpackages', 'tourupcoming', 'tourvouchers',
- 'eccarts', 'ecreturns', 'ecloyalty'].forEach(id => {
-  if (!VIEWS[id]) {
-    VIEWS[id] = async (view) => {
-      view.innerHTML = '';
-      view.appendChild(h('h2', {}, 'Industry Pack'));
-      view.appendChild(h('div', { class: 'card', style: { padding: '1.5rem', textAlign: 'center' } },
-        h('p', {}, '🚧 This pack-specific view is being built.'),
-        h('p', { class: 'muted' }, 'Backend APIs and dummy data are already available — call them directly while we ship the polished UI.')
-      ));
-    };
-  }
-});
+// Stub views — other pack sidebar items show "com
