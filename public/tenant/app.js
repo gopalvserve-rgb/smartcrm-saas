@@ -41667,15 +41667,19 @@ function _initFloatingChat() {
     _activeThreadCache = thread;
     const body = drawer.querySelector('#chat-drawer-body');
     body.innerHTML = `
-      <div style="padding: .55rem .85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: .4rem;">
-        <button id="chat-back-btn" style="background: transparent; border: none; cursor: pointer; font-size: 1rem;">\u2190</button>
-        <div style="flex: 1; min-width: 0;">
-          <div style="font-size: .9rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(thread.lead_name || thread.phone)}</div>
-          ${(window._phoneIdToDisplay && window._phoneIdToDisplay[String(thread.phone_number_id || '')]) ? `<div style="font-size: .7rem; color: #6366f1;">on ${esc(window._phoneIdToDisplay[String(thread.phone_number_id || '')])}</div>` : ''}
+      <div style="padding: .5rem .7rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0;">
+        <div style="display: flex; align-items: center; gap: .35rem; min-height: 28px;">
+          <button id="chat-back-btn" style="background: transparent; border: none; cursor: pointer; font-size: 1rem; padding: 0 .2rem;">←</button>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;">
+            <div style="font-size: .88rem; font-weight: 600; color: #0f172a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(thread.lead_name || thread.phone)}</div>
+            ${(window._phoneIdToDisplay && window._phoneIdToDisplay[String(thread.phone_number_id || '')]) ? `<div style="font-size: .68rem; color: #6366f1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">on ${esc(window._phoneIdToDisplay[String(thread.phone_number_id || '')])}</div>` : ''}
+          </div>
+          <a href="#/whatsbot/chat" style="font-size: .78rem; color: #6366f1; white-space: nowrap; text-decoration: none;">Open full ↗</a>
         </div>
-        <div id="chat-dock-status-slot" style="display: flex; align-items: center;"></div>
-        <div id="chat-dock-assign-slot" style="display: flex; align-items: center;"></div>
-        <a href="#/whatsbot/chat" style="font-size: .78rem; color: #6366f1;">Open full</a>
+        <div style="display: flex; align-items: center; gap: .3rem; margin-top: .4rem; flex-wrap: wrap;">
+          <div id="chat-dock-status-slot" style="display: flex; align-items: center; flex: 1 1 45%; min-width: 100px;"></div>
+          <div id="chat-dock-assign-slot" style="display: flex; align-items: center; flex: 1 1 45%; min-width: 100px;"></div>
+        </div>
       </div>
       <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
       <div id="chat-thread-preview" style="padding: .35rem .55rem; display: none; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: .8rem;"></div>
