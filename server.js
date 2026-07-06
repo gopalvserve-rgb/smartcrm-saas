@@ -2332,14 +2332,40 @@ app.post('/api/wa/upload', _waUpload.single('file'), (req, res) => {
           const msg = (j.error && (j.error.message || j.error.error_user_msg)) || ('upload failed (HTTP ' + r.status + ')');
           return res.status(500).json({ error: 'Meta upload failed: ' + msg });
         }
+        /* WA_CHAT_MEDIA_STORE_v1 (2026-07-06) — also persist the bytes
+         * in wa_chat_media + return a durable path-based URL, so the
+         * SPA can render the sent image inline. Previously we only
+         * returned a base64 data URI that the client threw away, and
+         * the DB row for the outbound image had media_url = NULL —
+         * chat bubble showed blank. Mirror wa_template_samples storage
+         * shape. Auth-required GET (this URL is only for our own SPA,
+         * not for Meta). */
+        try {
+          await tenantDb.query(`CREATE TABLE IF NOT EXISTS wa_chat_media (
+            token TEXT PRIMARY KEY,
+            mime TEXT,
+            filename TEXT,
+            bytes BYTEA,
+            wa_media_id TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+          try { await tenantDb.query(`DELETE FROM wa_chat_media WHERE created_at < NOW() - INTERVAL '90 days'`); } catch (_) {}
+        } catch (_schemaErr) { console.warn('[wa-media] schema create failed:', _schemaErr.message); }
+        const mediaTok = require('crypto').randomBytes(18).toString('hex');
+        try {
+          await tenantDb.query(
+            `INSERT INTO wa_chat_media (token, mime, filename, bytes, wa_media_id) VALUES ($1,$2,$3,$4,$5)`,
+            [mediaTok, req.file.mimetype || 'application/octet-stream',
+             req.file.originalname || '', req.file.buffer, j.id]
+          );
+        } catch (_insErr) { console.warn('[wa-media] insert failed:', _insErr.message); }
+        const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+        const host  = req.get('host');
+        const durableUrl = proto + '://' + host + '/t/' + req.tenantSlug + '/api/wa-media/' + mediaTok;
         return res.json({
           wa_media_id: j.id,
           mime_type:   req.file.mimetype || '',
           filename:    req.file.originalname || '',
-          // Local preview URL — not durable, just for the composer's
-          // optimistic rendering before send.
-          url: 'data:' + (req.file.mimetype || 'application/octet-stream') + ';base64,' +
-                req.file.buffer.toString('base64')
+          url:         durableUrl
         });
       } catch (e) {
         console.error('[/api/wa/upload] error:', e && e.message);
@@ -2408,6 +2434,39 @@ app.get('/api/wa-sample/:token', (req, res) => {
     });
 });
 
+
+// WA_CHAT_MEDIA_STORE_v1 (2026-07-06) — serve bytes uploaded via /api/wa/upload
+// back to the SPA. Auth'd (only the CRM UI uses it; Meta already has the
+// media_id it needs). Path-based /t/<slug>/ so tenant resolution works from
+// the URL stored in whatsapp_messages.media_url.
+app.get('/t/:slug/api/wa-media/:token', (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        // Accept token via ?tok= for <img src> that can't set headers, OR
+        // Authorization header for API-style callers. Both prove the caller
+        // is a signed-in user for THIS tenant.
+        const { authUser } = require('./utils/auth');
+        const hdrTok = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const authTok = hdrTok || req.query.tok || '';
+        try { await authUser(authTok); } catch (_) { return res.status(401).json({ error: 'auth required' }); }
+        const tok = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
+        if (!tok) return res.status(404).end();
+        const r = await tenantDb.query(`SELECT mime, bytes, filename FROM wa_chat_media WHERE token = $1 LIMIT 1`, [tok]);
+        if (!r.rows.length) return res.status(404).json({ error: 'media not found' });
+        const row = r.rows[0];
+        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        if (row.filename) res.setHeader('Content-Disposition', 'inline; filename="' + row.filename.replace(/["\\]/g, '') + '"');
+        return res.end(row.bytes);
+      } catch (e) {
+        console.error('[wa-media GET] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'read failed' });
+      }
+    });
+});
 app.get('/api/wa/media/:msgId', async (req, res) => {
   if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
   const tenantDb = require('./db/pg');
