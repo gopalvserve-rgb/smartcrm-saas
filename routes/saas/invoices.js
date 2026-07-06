@@ -147,8 +147,10 @@ async function api_saas_email_send(token, payload) {
   if (!subject) throw new Error('Subject required');
   const bodyText = String(p.body || p.html || '').trim();
   if (!bodyText) throw new Error('Message body required');
-  // If the body has no HTML tags, wrap plain text into simple HTML paragraphs.
-  const html = /<[a-z][\s\S]*>/i.test(bodyText)
+  // SAAS_EMAIL_HTML_v1 — an explicit is_html flag sends the body as raw HTML
+  // (paste-a-template mode). Otherwise auto-detect tags, else wrap plain text.
+  const _isHtml = (p.is_html === true || p.is_html === 1 || p.is_html === '1') || /<[a-z][\s\S]*>/i.test(bodyText);
+  const html = _isHtml
     ? bodyText
     : '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a">' +
       bodyText.split(/\n\s*\n/).map(par => '<p>' + par.replace(/\n/g, '<br>') + '</p>').join('') +

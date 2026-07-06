@@ -5133,18 +5133,38 @@ function _openInvoiceSendModal(inv) {
 function _openTenantEmailModal(inv) {
   inv = inv || {};
   const m = h('div', { class: 'modal-bd' });
-  const card = h('div', { class: 'modal', style: { maxWidth: '560px' } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '640px' } });
   m.appendChild(card); document.body.appendChild(m);
   const subj = h('input', { type: 'text', value: inv.number ? ('Regarding invoice ' + inv.number) : '', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
-  const body = h('textarea', { rows: '8', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
+  const fmtSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+    h('option', { value: 'plain' }, 'Plain text'),
+    h('option', { value: 'html' }, 'HTML template (paste HTML)'));
+  const body = h('textarea', { rows: '10', placeholder: 'Type your message…', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontFamily: 'inherit' } });
+  const previewWrap = h('div', { style: { display: 'none', border: '1px solid #e2e8f0', borderRadius: '6px', marginTop: '8px', overflow: 'hidden' } });
+  const previewFrame = h('iframe', { style: { width: '100%', height: '320px', border: 'none', background: '#fff' } });
+  previewWrap.appendChild(previewFrame);
+  const previewBtn = h('button', { class: 'btn ghost', style: { display: 'none', padding: '.3rem .6rem', fontSize: '.8rem' } }, '👁 Preview');
+  let previewing = false;
+  previewBtn.onclick = () => {
+    previewing = !previewing;
+    if (previewing) { try { previewFrame.srcdoc = body.value; } catch (_) {} previewWrap.style.display = 'block'; body.style.display = 'none'; previewBtn.textContent = '✏ Edit'; }
+    else { previewWrap.style.display = 'none'; body.style.display = 'block'; previewBtn.textContent = '👁 Preview'; }
+  };
+  fmtSel.onchange = () => {
+    const isHtml = fmtSel.value === 'html';
+    body.placeholder = isHtml ? 'Paste your HTML template here…' : 'Type your message…';
+    body.style.fontFamily = isHtml ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit';
+    previewBtn.style.display = isHtml ? '' : 'none';
+    if (!isHtml && previewing) { previewing = false; previewWrap.style.display = 'none'; body.style.display = 'block'; previewBtn.textContent = '👁 Preview'; }
+  };
   const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
   const send = h('button', { class: 'btn primary' }, 'Send email');
   send.onclick = async () => {
     if (!subj.value.trim() || !body.value.trim()) { out.innerHTML = '<span style="color:#dc2626">Subject and message required</span>'; return; }
     send.disabled = true; send.textContent = 'Sending…';
     try {
-      const r = await api('api_saas_email_send', { tenant_id: inv.tenant_id, to: inv.contact_email || undefined, subject: subj.value.trim(), body: body.value.trim() });
-      out.innerHTML = '<span style="color:#15803d">✓ Sent to ' + r.to + '</span>';
+      const r = await api('api_saas_email_send', { tenant_id: inv.tenant_id, to: inv.contact_email || undefined, subject: subj.value.trim(), body: body.value.trim(), is_html: fmtSel.value === 'html' });
+      out.innerHTML = '<span style="color:#15803d">✓ Sent to ' + r.to + (fmtSel.value === 'html' ? ' (HTML)' : '') + '</span>';
     } catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
     send.disabled = false; send.textContent = 'Send email';
   };
@@ -5152,8 +5172,11 @@ function _openTenantEmailModal(inv) {
   card.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '8px' } }, 'Sends from your platform email to the tenant\'s contact email' + (inv.contact_email ? (' (' + inv.contact_email + ')') : '') + '.'));
   card.appendChild(h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600' } }, 'Subject'));
   card.appendChild(subj);
-  card.appendChild(h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600', marginTop: '8px', display: 'block' } }, 'Message'));
+  card.appendChild(h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', margin: '8px 0 4px' } },
+    h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600' } }, 'Format'), fmtSel,
+    h('span', { style: { flex: '1' } }), previewBtn));
   card.appendChild(body);
+  card.appendChild(previewWrap);
   card.appendChild(out);
   card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } },
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), send));
