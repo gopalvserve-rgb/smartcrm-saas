@@ -46864,59 +46864,118 @@ try { window.openMarginEditorModal = openMarginEditorModal; } catch (_) {}
 
 
 // ═════════════════════════════════════════════════════════════════════
-// FEE_DUES_RECEIPT_BTN_v1 (2026-07-05) — modal that lists all receipts for a
-// specific lead. Called from the 🧾 Receipt button on Fee Dues rows.
+// FEE_DUES_RECEIPT_BTN_v2 (2026-07-05) — Fee Receipts modal for one lead.
+// Now shows EVERY installment (paid + unpaid). Paid rows have a Preview
+// button; unpaid rows have a "Mark Paid + Generate Receipt" button.
 async function _openFeeReceiptsForLead(leadId, studentName) {
   if (!leadId) return toast('No lead attached to this row', 'err');
   const modal = h('div', { class:'modal-backdrop', onclick: (e) => { if (e.target === modal) modal.remove(); } });
-  const box = h('div', { class:'modal', style:{ maxWidth:'820px', width:'92%', padding:'1.2rem 1.4rem' } });
-  const bodyEl = h('div', {}, h('div', { class:'muted' }, 'Loading receipts…'));
+  const box = h('div', { class:'modal', style:{ maxWidth:'860px', width:'92%', padding:'1.2rem 1.4rem', maxHeight:'88vh', overflowY:'auto' } });
+  const bodyEl = h('div', {}, h('div', { class:'muted' }, 'Loading…'));
   box.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem' } },
-    h('h3', { style:{ margin:0 } }, '🧾 Fee Receipts' + (studentName ? ' — ' + studentName : '')),
+    h('h3', { style:{ margin:0 } }, '🧾 Fees & Receipts' + (studentName ? ' — ' + studentName : '')),
     h('button', { class:'btn ghost', onclick: () => modal.remove(), style:{ fontSize:'1.2rem', lineHeight:1 } }, '✕')
   ));
   box.appendChild(bodyEl);
   modal.appendChild(box);
   document.body.appendChild(modal);
-  try {
-    const d = await api('api_edu_receipts_list', { lead_id: leadId, limit: 200 });
-    const items = Array.isArray(d && d.items) ? d.items : [];
-    bodyEl.innerHTML = '';
-    if (!items.length) {
-      bodyEl.appendChild(h('div', { style:{ padding:'2rem', textAlign:'center', background:'#fff', border:'2px dashed #e5e7eb', borderRadius:'10px' } },
-        h('div', { style:{ fontSize:'2rem', marginBottom:'.4rem' } }, '🧾'),
-        h('div', { style:{ fontWeight:600, marginBottom:'.3rem' } }, 'No receipts yet for this student'),
-        h('div', { style:{ fontSize:'.85rem', color:'#64748b' } }, 'Receipts are generated automatically when an installment is marked paid.')));
-      return;
+
+  async function refreshBody() {
+    bodyEl.innerHTML = '<div class="muted">Loading…</div>';
+    try {
+      const [enrolls, recData] = await Promise.all([
+        api('api_edu_enrollment_byLead', leadId).catch(() => []),
+        api('api_edu_receipts_list', { lead_id: leadId, limit: 200 }).catch(() => ({ items: [] }))
+      ]);
+      const receipts = Array.isArray(recData && recData.items) ? recData.items : [];
+      const rxByInst = {};
+      receipts.forEach(r => { if (r.installment_id) rxByInst[String(r.installment_id)] = r; });
+
+      const flat = [];
+      (Array.isArray(enrolls) ? enrolls : []).forEach(e => {
+        (e.installments || []).forEach(i => flat.push({
+          ...i,
+          course_name: e.course_name,
+          batch_name: e.batch_name
+        }));
+      });
+      flat.sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
+
+      bodyEl.innerHTML = '';
+
+      if (!flat.length) {
+        bodyEl.appendChild(h('div', { style:{ padding:'2rem', textAlign:'center', background:'#fff', border:'2px dashed #e5e7eb', borderRadius:'10px' } },
+          h('div', { style:{ fontSize:'2rem', marginBottom:'.4rem' } }, '🧾'),
+          h('div', { style:{ fontWeight:600 } }, 'No enrollments / installments yet for this student.')));
+        return;
+      }
+
+      const paidCount = flat.filter(i => (i.status||'').toLowerCase() === 'paid').length;
+      bodyEl.appendChild(h('div', { class:'muted', style:{ marginBottom:'.6rem' } },
+        flat.length + ' installment' + (flat.length===1?'':'s') + ' · ' + paidCount + ' paid · ' + receipts.length + ' receipt' + (receipts.length===1?'':'s') + ' on file'));
+
+      bodyEl.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, '#'),
+          h('th', {}, 'Course / Batch'),
+          h('th', {}, 'Due date'),
+          h('th', { style:{ textAlign:'right' } }, 'Amount'),
+          h('th', {}, 'Status'),
+          h('th', {}, 'Actions'))),
+        h('tbody', {}, flat.map(i => {
+          const st = String(i.status || '').toLowerCase();
+          const isPaid = st === 'paid';
+          const isPartial = st === 'partial';
+          const outstanding = Number(i.amount || 0) - Number(i.paid_amount || 0);
+          const rx = rxByInst[String(i.id)];
+          const statusColor = isPaid ? '#16a34a' : isPartial ? '#f59e0b' : '#dc2626';
+          const statusText = isPaid ? '✓ PAID' : isPartial ? '◐ PARTIAL' : (i.due_date && new Date(i.due_date) < new Date() ? '⚠ OVERDUE' : 'DUE');
+
+          const actionsCell = [];
+          if (rx) {
+            actionsCell.push(h('button', { class:'btn xs primary', style:{ marginRight:'.25rem' }, onclick: async () => {
+              try {
+                const rr = await api('api_edu_receipts_html', rx.id);
+                if (!rr || !rr.html) throw new Error('No receipt HTML returned');
+                const w = window.open('','_blank','width=760,height=900');
+                if (!w) return toast('Popup blocked — allow popups for this site','err');
+                w.document.write(rr.html); w.document.close();
+              } catch (e) { toast('Preview failed: ' + e.message,'err'); }
+            } }, '🖨 Print receipt'));
+          }
+          if (!isPaid && outstanding > 0) {
+            actionsCell.push(h('button', { class:'btn xs', title:'Mark this installment paid and auto-generate receipt', onclick: async () => {
+              const amtStr = prompt('Amount received (₹):', String(outstanding));
+              if (amtStr == null) return;
+              const cleaned = String(amtStr).replace(/[^0-9.]/g, '');
+              const amt = Number(cleaned) || 0;
+              if (amt <= 0) return toast('Invalid amount','err');
+              try {
+                await api('api_edu_installment_markPaid', { installment_id: i.id, amount: amt });
+                toast('Marked paid — receipt generated','ok');
+                await refreshBody();
+              } catch (e) { toast('Failed: ' + e.message,'err'); }
+            } }, '✓ Mark Paid + Receipt'));
+          }
+          if (!actionsCell.length) actionsCell.push(h('span', { class:'muted' }, '—'));
+
+          return h('tr', {},
+            h('td', {}, 'Seq ' + i.seq),
+            h('td', {}, (i.course_name || '—') + (i.batch_name ? ' · ' + i.batch_name : '')),
+            h('td', {}, String(i.due_date || '').slice(0,10)),
+            h('td', { style:{ textAlign:'right', fontWeight:600 } }, '₹' + Number(i.amount||0).toLocaleString('en-IN') +
+              (isPartial ? ' (paid ₹' + Number(i.paid_amount||0).toLocaleString('en-IN') + ')' : '')),
+            h('td', {}, h('span', { style:{ background: statusColor, color:'#fff', padding:'2px 8px', borderRadius:'99px', fontSize:'10.5px', fontWeight:700 } }, statusText)),
+            h('td', {}, ...actionsCell)
+          );
+        }))
+      ));
+    } catch (e) {
+      bodyEl.innerHTML = '';
+      bodyEl.appendChild(h('div', { class:'error-box' }, 'Could not load: ' + e.message));
     }
-    const total = items.reduce((s,r)=> s + Number(r.amount||0), 0);
-    bodyEl.appendChild(h('div', { class:'muted', style:{ marginBottom:'.6rem' } },
-      items.length + ' receipt' + (items.length===1?'':'s') + ' · ₹' + Number(total).toLocaleString('en-IN') + ' collected'));
-    bodyEl.appendChild(h('table', { class:'mini-table' },
-      h('thead', {}, h('tr', {},
-        h('th', {}, 'Receipt #'), h('th', {}, 'Date'), h('th', {}, 'Installment'),
-        h('th', { style:{ textAlign:'right' } }, 'Amount'), h('th', {}, 'Method'), h('th', {}, ''))),
-      h('tbody', {}, items.map(r => h('tr', {},
-        h('td', { style:{ fontWeight:700, color:'#6366f1' } }, r.receipt_no || '#' + r.id),
-        h('td', {}, String(r.receipt_date || r.created_at || '').slice(0,10)),
-        h('td', {}, r.installment_seq ? 'Seq ' + r.installment_seq : '—'),
-        h('td', { style:{ textAlign:'right', fontWeight:700 } }, '₹' + Number(r.amount||0).toLocaleString('en-IN')),
-        h('td', {}, r.payment_method || '—'),
-        h('td', {}, h('button', { class:'btn xs primary', onclick: async () => {
-          try {
-            const rr = await api('api_edu_receipts_html', r.id);
-            if (!rr || !rr.html) throw new Error('No receipt HTML returned');
-            const w = window.open('','_blank','width=760,height=900');
-            if (!w) return toast('Popup blocked — allow popups for this site','err');
-            w.document.write(rr.html); w.document.close();
-          } catch (e) { toast('Preview failed: ' + e.message,'err'); }
-        } }, '🖨 Preview / Print'))
-      )))
-    ));
-  } catch (e) {
-    bodyEl.innerHTML = '';
-    bodyEl.appendChild(h('div', { class:'error-box' }, 'Could not load receipts: ' + e.message));
   }
+  refreshBody();
 }
 
 // 📋 Fee Dues — back-office follow-up view (Education Phase 6)
