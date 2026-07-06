@@ -737,8 +737,16 @@
     if (!leadId) throw new Error('No lead in context');
     const list = await api('api_edu_receipts_list', { lead_id: leadId, limit: 500 }).catch(function () { return null; });
     const items = (list && Array.isArray(list.items)) ? list.items : [];
-    const rc = items.find(function (r) { return Number(r.installment_id) === Number(instId); });
-    if (!rc) throw new Error('No receipt found for installment #' + seq + ' (backend may not have created one yet)');
+    let rc = items.find(function (r) { return Number(r.installment_id) === Number(instId); });
+    /* EDU_RECEIPT_BYINST_v1 (2026-07-06) — legacy paid installments (marked
+     * before FEE_DUES_RECEIPT_AUTO_v1 shipped) have no edu_receipts row.
+     * Fall back to auto-generating one from the installment_id so the PDF
+     * button always works, not just for freshly-paid installments. */
+    if (!rc) {
+      const gen = await api('api_edu_receipts_generate', { installment_id: instId }).catch(function (e) { throw new Error(e.message || 'Could not generate receipt for this installment'); });
+      rc = gen && gen.item;
+      if (!rc) throw new Error('Could not generate a receipt for installment #' + seq);
+    }
     const rr = await api('api_edu_receipts_html', rc.id);
     const html = (rr && rr.html) ? rr.html : rr;
     if (!html || typeof html !== 'string') throw new Error('Empty receipt HTML');
