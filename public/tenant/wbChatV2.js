@@ -865,7 +865,37 @@
     // scroll to bottom
     setTimeout(() => { body.scrollTop = body.scrollHeight; }, 50);
   }
+  /* WB_CHAT_V2_MSG_USER_v1 (2026-07-05) — cache users list once so we can
+   * resolve user_id → user_name for every outbound message. Populated
+   * lazily on first messageEl() call. */
+  const _userCache = {};
+  let _userCacheLoaded = false;
+  async function _ensureUserCache() {
+    if (_userCacheLoaded) return;
+    _userCacheLoaded = true;
+    try {
+      const users = await api('api_users_list');
+      (Array.isArray(users) ? users : []).forEach(u => {
+        if (u && u.id != null) _userCache[String(u.id)] = u.name || ('User #' + u.id);
+      });
+    } catch (_) {}
+  }
+  function _userNameFor(userId) {
+    if (userId == null || userId === '') return '';
+    const key = String(userId);
+    return _userCache[key] || '';
+  }
+
   function renderMessages(body) {
+    /* WB_CHAT_V2_MSG_USER_v1 — kick off user cache load; second render will
+     * pick up names populated after this async completes. */
+    _ensureUserCache().then(() => {
+      /* Re-render on 2nd tick when cache is ready and we're still on same thread */
+      if (body && body.parentNode && body.dataset && !body.dataset.userCacheApplied) {
+        body.dataset.userCacheApplied = '1';
+        renderMessages(body);
+      }
+    });
     body.innerHTML = '';
     if (!S.messages.length) {
       body.appendChild(h('div', { class: 'wbv2-c-empty' }, 'No messages yet.'));
@@ -888,15 +918,25 @@
     const isTpl = m.message_type === 'template' || /template/i.test(m.type || '');
     const cls = 'wbv2-msg ' + dir + (isTpl ? ' tpl' : '');
     const body = m.body || m.text || '';
-    const whoName = dir === 'out' ? (m.user_name || (m.user_id ? '' : '📱 Mobile') || 'You') : (S.activeThread && S.activeThread.lead_name) || '';
+    /* WB_CHAT_V2_MSG_USER_v1 — resolve sender name via users cache when
+     * the API didn't include user_name (older payloads). Fallback to
+     * '📱 Mobile' only when there's genuinely no user_id (agent sent
+     * from the WhatsApp Business mobile app, echoed by Meta). */
+    const resolvedName = m.user_name || _userNameFor(m.user_id) || '';
+    const whoName = dir === 'out'
+      ? (resolvedName || (m.user_id ? 'Agent #' + m.user_id : '📱 Mobile'))
+      : ((S.activeThread && S.activeThread.lead_name) || '');
     const ts = m.created_at || m.timestamp || m.ts;
     const ticks = m.read_at ? '✓✓' : m.delivered_at ? '✓✓' : m.status === 'sent' ? '✓' : '';
     return h('div', { class: cls },
       dir === 'out' && whoName ? h('div', { class: 'who' + (isTpl ? ' tpl' : '') }, isTpl ? '📋 Template · ' + whoName : whoName) : null,
       h('div', { class: 'body' }, body),
       h('div', { class: 'meta' },
+        /* WB_CHAT_V2_MSG_USER_v1 — show sender name INSIDE the meta line
+         * for outbound messages too. Compact "· by Sanjana" after the timestamp. */
         ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
-        ticks ? h('span', { class: 'ticks', style: { marginLeft: '4px' } }, ticks) : null));
+        dir === 'out' && whoName ? h('span', { style: { marginLeft: '6px', color: '#64748b', fontWeight: '500' } }, '· ' + whoName) : null,
+        ticks ? h('span', { class: 'ticks', style: { marginLeft: '6px' } }, ticks) : null));
   }
   function computeTat(msgs) {
     if (!msgs || !msgs.length) return null;
