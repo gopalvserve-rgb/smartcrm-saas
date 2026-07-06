@@ -934,7 +934,13 @@
      * (image) / video player / doc chip based on message_type. Falls
      * back to text body if no media. */
     const mtype = String(m.message_type || '').toLowerCase();
-    const murl = m.media_url || '';
+    /* WA_CHAT_MEDIA_STORE_v1 (2026-07-06) — our own /t/<slug>/api/wa-media/
+     * URLs need the auth token as a query param (browser can't set headers on
+     * <img src>). Rewrite here; external URLs (Meta CDN etc.) pass through. */
+    let murl = m.media_url || '';
+    if (murl && /\/api\/wa-media\//.test(murl) && !/[?&]tok=/.test(murl)) {
+      try { murl += (murl.indexOf('?') >= 0 ? '&' : '?') + 'tok=' + encodeURIComponent(_tok()); } catch (_) {}
+    }
     let mediaNode = null;
     if (murl && (mtype === 'image' || (!mtype && /\.(jpe?g|png|gif|webp)$/i.test(murl)))) {
       mediaNode = h('a', { href: murl, target: '_blank', rel: 'noopener' },
@@ -1103,10 +1109,15 @@
       });
       const j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || ('upload failed (HTTP ' + r.status + ')'));
-      // Now send via api_wb_chat_send with media_id
+      // Now send via api_wb_chat_send with media_id + durable media_url
+      // WA_CHAT_MEDIA_STORE_v1 (2026-07-06) — pass j.url through so the
+      // outbound bubble has a URL to render inline. /api/wa/upload now
+      // returns a durable /t/<slug>/api/wa-media/<token> URL instead of
+      // a throwaway data URI.
       await api('api_wb_chat_send', {
         phone: t.phone,
         media_id: j.wa_media_id,
+        media_url: j.url || null,
         media_type: mediaType,
         filename: j.filename || file.name,
         text: '',
