@@ -2922,8 +2922,22 @@ async function api_edu_receipts_generate(token, payload) {
   await _requireEducation();
   await _ensureSchemaV2Fees();
   const p = payload || {};
-  if (!p.payment_id) throw new Error('payment_id required');
-  const pay = (await db.query(`SELECT * FROM edu_payments WHERE id=$1`, [Number(p.payment_id)])).rows[0];
+  /* EDU_RECEIPT_BYINST_v1 (2026-07-06) — accept installment_id as an
+   * alternative to payment_id, so the SPA can generate a receipt for
+   * a legacy paid installment even when the caller only knows the
+   * installment id (e.g. Fee Dues 🧾 Receipt PDF button). Pick the
+   * most-recent payment row for that installment. */
+  let paymentId = p.payment_id ? Number(p.payment_id) : null;
+  if (!paymentId && p.installment_id) {
+    const pr = await db.query(
+      `SELECT id FROM edu_payments WHERE installment_id=$1 ORDER BY id DESC LIMIT 1`,
+      [Number(p.installment_id)]
+    );
+    if (pr.rows.length) paymentId = pr.rows[0].id;
+    else throw new Error('No payment found for installment #' + p.installment_id + ' — mark it paid first, then generate the receipt');
+  }
+  if (!paymentId) throw new Error('payment_id or installment_id required');
+  const pay = (await db.query(`SELECT * FROM edu_payments WHERE id=$1`, [paymentId])).rows[0];
   if (!pay) throw new Error('Payment not found');
   if (pay.receipt_id) {
     // Return existing
