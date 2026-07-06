@@ -233,12 +233,33 @@ async function api_edu_installment_markPaid(token, payload) {
     `UPDATE edu_installments SET paid_amount = $1, status = $2 WHERE id = $3`,
     [newPaid, status, inst.id]
   );
-  await db.query(
-    `INSERT INTO edu_payments (installment_id, enrollment_id, amount, mode, receipt_no, note, recorded_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+  const payIns = await db.query(
+    `INSERT INTO edu_payments (installment_id, enrollment_id, amount, mode, receipt_no, note, recorded_by, paid_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7, NOW()) RETURNING id`,
     [inst.id, inst.enrollment_id, amount, String(p.mode || 'cash'), String(p.receipt_no || ''), String(p.note || ''), me.id]
   );
-  return { ok: true, status, paid_amount: newPaid };
+  /* FEE_DUES_RECEIPT_AUTO_v1 (2026-07-05) — auto-generate a receipt row on
+   * every markPaid so the Fee Dues 🧾 Receipt modal can find + preview it. */
+  let receiptId = null;
+  try {
+    await _ensureSchemaV2Fees();
+    const enrol = (await db.query(`SELECT * FROM edu_enrollments WHERE id=$1`, [inst.enrollment_id])).rows[0];
+    const lead = enrol && enrol.lead_id
+      ? (await db.query(`SELECT name, phone FROM leads WHERE id=$1`, [enrol.lead_id])).rows[0] || {}
+      : {};
+    const rno = await _genReceiptNumber();
+    const rc = await db.query(
+      `INSERT INTO edu_receipts (receipt_no, enrollment_id, lead_id, amount, mode, reference,
+                                  student_name, course, payment_id, issued_by, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [rno, inst.enrollment_id, enrol ? enrol.lead_id : null, amount, String(p.mode || 'cash'),
+       String(p.receipt_no || ''), String(lead.name || ''),
+       String(enrol ? enrol.course_name : ''), payIns.rows[0].id, me.id, String(p.note || '')]
+    );
+    receiptId = rc.rows[0].id;
+    await db.query(`UPDATE edu_payments SET receipt_id=$1 WHERE id=$2`, [receiptId, payIns.rows[0].id]);
+  } catch (e) { console.warn('[edu] auto-receipt failed:', e.message); }
+  return { ok: true, status, paid_amount: newPaid, receipt_id: receiptId };
 }
 
 async function api_edu_summary(token, opts) {
@@ -2911,7 +2932,7 @@ async function api_edu_receipts_generate(token, payload) {
   }
   const enrol = (await db.query(`SELECT * FROM edu_enrollments WHERE id=$1`, [pay.enrollment_id])).rows[0];
   const lead  = enrol && enrol.lead_id
-    ? (await db.query(`SELECT name, mobile FROM leads WHERE id=$1`, [enrol.lead_id])).rows[0] || {}
+    ? (await db.query(`SELECT name, phone FROM leads WHERE id=$1`, [enrol.lead_id])).rows[0] || {}
     : {};
   const rno = await _genReceiptNumber();
   const ins = await db.query(
@@ -2937,7 +2958,14 @@ async function api_edu_receipts_list(token, opts) {
   if (o.lead_id)       { args.push(Number(o.lead_id));       w.push(`lead_id = $${args.length}`); }
   if (o.from) { args.push(o.from); w.push(`issued_at >= $${args.length}::date`); }
   if (o.to)   { args.push(o.to);   w.push(`issued_at < ($${args.length}::date + INTERVAL '1 day')`); }
-  const sql = `SELECT * FROM edu_receipts ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY id DESC LIMIT ${Math.min(Number(o.limit||500),2000)}`;
+  /* FEE_DUES_RECEIPT_AUTO_v1 — include installment_id via edu_payments JOIN
+   * so the SPA can index receipts by installment_id (needed by the Fee Dues
+   * 🧾 Receipt modal). */
+  const sql = `SELECT r.*, p.installment_id
+                 FROM edu_receipts r
+                 LEFT JOIN edu_payments p ON p.id = r.payment_id
+                 ${w.length ? 'WHERE ' + w.map(x => x.replace(/^([a-z_]+) =/, 'r.$1 =').replace(/^issued_at/, 'r.issued_at')).join(' AND ') : ''}
+                 ORDER BY r.id DESC LIMIT ${Math.min(Number(o.limit||500),2000)}`;
   const r = await db.query(sql, args);
   return { items: r.rows };
 }
