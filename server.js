@@ -2439,7 +2439,7 @@ app.get('/api/wa-sample/:token', (req, res) => {
 // back to the SPA. Auth'd (only the CRM UI uses it; Meta already has the
 // media_id it needs). Path-based /t/<slug>/ so tenant resolution works from
 // the URL stored in whatsapp_messages.media_url.
-app.get('/t/:slug/api/wa-media/:token', (req, res) => {
+app.get('/api/wa-media/:token', (req, res) => {
   if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
   const tenantDb = require('./db/pg');
   return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
