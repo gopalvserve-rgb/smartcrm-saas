@@ -66,6 +66,7 @@ const settings = require('./routes/saas/saasSettings');
 const announcements = require('./routes/saas/announcements');
 const copilotKb = require('./routes/saas/copilotKb'); // COPILOT_KB_v1
 const saasWhatsapp = require('./routes/saas/saasWhatsapp'); // SAAS_WA_EMBEDDED_v1
+const dbVolume = require('./routes/saas/dbVolume'); // DB_VOLUME_v1 — tenant storage usage
 const customReqs = require('./routes/saas/customRequirements');
 const webhookLogs = require('./routes/saas/webhookLogs');
 const cashfreeWebhook = require('./routes/saas/cashfreeWebhook');
@@ -129,7 +130,7 @@ const SAAS_API = {};
   tenantModules, demoTenant,
   tickets,
   finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth,
-  copilotKb, saasWhatsapp
+  copilotKb, saasWhatsapp, dbVolume
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
