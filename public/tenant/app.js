@@ -41674,6 +41674,7 @@ function _initFloatingChat() {
           ${(window._phoneIdToDisplay && window._phoneIdToDisplay[String(thread.phone_number_id || '')]) ? `<div style="font-size: .7rem; color: #6366f1;">on ${esc(window._phoneIdToDisplay[String(thread.phone_number_id || '')])}</div>` : ''}
         </div>
         <div id="chat-dock-status-slot" style="display: flex; align-items: center;"></div>
+        <div id="chat-dock-assign-slot" style="display: flex; align-items: center;"></div>
         <a href="#/whatsbot/chat" style="font-size: .78rem; color: #6366f1;">Open full</a>
       </div>
       <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
@@ -41876,6 +41877,50 @@ function _initFloatingChat() {
         };
         const slot = drawer.querySelector('#chat-dock-status-slot');
         if (slot) slot.appendChild(sel);
+
+        /* WA_INBOX_ASSIGN_v1 (2026-07-05) — Assign dropdown next to status.
+         * Lets an agent reassign the lead to any active user without opening
+         * the full lead. Same api_leads_update path as the sidebar assignee. */
+        try {
+          const users = await api('api_users_list').catch(() => []);
+          if (Array.isArray(users) && users.length) {
+            const curOwner = Number(lead.assigned_to || 0);
+            const aSel = document.createElement('select');
+            aSel.style.cssText = 'padding: .2rem .35rem; font-size: .72rem; border: 1px solid #cbd5e1; border-radius: 4px; max-width: 130px; margin-left: .3rem;';
+            aSel.title = 'Assign this lead';
+            const unassignedOpt = document.createElement('option');
+            unassignedOpt.value = '';
+            unassignedOpt.textContent = '👤 Unassigned';
+            if (!curOwner) unassignedOpt.selected = true;
+            aSel.appendChild(unassignedOpt);
+            users
+              .filter(u => Number(u.is_active !== 0))
+              .slice()
+              .sort((a,b) => String(a.name || '').localeCompare(String(b.name || '')))
+              .forEach(u => {
+                const o = document.createElement('option');
+                o.value = String(u.id);
+                o.textContent = u.name || ('#' + u.id);
+                if (Number(u.id) === curOwner) o.selected = true;
+                aSel.appendChild(o);
+              });
+            aSel.onchange = async () => {
+              const newId = aSel.value ? Number(aSel.value) : null;
+              if (newId === curOwner || (newId == null && !curOwner)) return;
+              aSel.disabled = true;
+              try {
+                await api('api_leads_update', thread.lead_id, { assigned_to: newId });
+                if (typeof toast === 'function') toast(newId ? 'Assigned' : 'Unassigned', 'ok');
+              } catch (e) {
+                if (typeof toast === 'function') toast('Assign failed: ' + e.message, 'err');
+                aSel.value = curOwner ? String(curOwner) : '';
+              }
+              aSel.disabled = false;
+            };
+            const aSlot = drawer.querySelector('#chat-dock-assign-slot');
+            if (aSlot) aSlot.appendChild(aSel);
+          }
+        } catch (_) {}
       } catch (_) {}
     })();
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') send.click(); });
@@ -56123,59 +56168,3 @@ VIEWS.ecorders = async (view) => {
     };
   }
 });
-
-/* ==========================================================================
- * MODULE_HELP_FAB_v1 — floating, context-aware "Tutorial" button.
- * Opens the hosted tutorial (crm.smartcrmsolution.com/tutorial) deep-linked
- * to the CURRENT module's section, so users don't have to scroll/search.
- * ========================================================================== */
-(function () {
-  var TUT = 'https://crm.smartcrmsolution.com/tutorial/';
-  // Map CRM view id -> tutorial anchor (module #m* or a specific #slide-*).
-  var MAP = {
-    dashboard:'#m1', users:'#slide-3', customfields:'#slide-16',
-    leads:'#m2', newleads:'#m2', duetoday:'#m2', overdue:'#m2', pool:'#m2', inbox:'#m2', newleadsreview:'#m2',
-    whatsbot:'#m3', whatsappreport:'#m3', campaigns:'#slide-35', bots:'#slide-36', flows:'#slide-36',
-    assign:'#slide-38', automations:'#slide-39', nurturing:'#slide-40', calendar:'#slide-41',
-    aibot:'#slide-42', callratings:'#slide-43', aiaudit:'#slide-43', coaching:'#slide-43',
-    ask:'#slide-44', copilot:'#slide-44', tat:'#slide-45',
-    company:'#slide-48', products:'#slide-49', quotations:'#slide-50',
-    callactivity:'#slide-51', callinsights:'#slide-51', recordings:'#slide-52', attendance:'#slide-53'
-  };
-  function currentView() {
-    try { if (typeof parseHashView === 'function') { var v = parseHashView(); if (v) return v; } } catch (_) {}
-    var hraw = String(location.hash || '').replace(/^#\/?/, '');
-    return (hraw.split(/[\/?]/)[0] || '').toLowerCase();
-  }
-  function urlForCurrent() { return TUT + (MAP[currentView()] || ''); }
-  function ensureBtn() {
-    if (document.getElementById('tutorial-fab')) return;
-    var b = document.createElement('button');
-    b.id = 'tutorial-fab'; b.type = 'button';
-    b.title = 'Watch the tutorial for this page';
-    b.innerHTML = '<span style="font-size:17px;line-height:1">🎓</span><span style="white-space:nowrap">Tutorial</span>';
-    b.style.cssText = 'position:fixed;right:20px;bottom:88px;z-index:2147482000;display:flex;align-items:center;gap:8px;padding:11px 16px;border:none;border-radius:999px;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 8px 24px rgba(79,70,229,.45);transition:transform .15s ease,box-shadow .15s ease;';
-    b.addEventListener('mouseenter', function () { b.style.transform = 'translateY(-2px)'; b.style.boxShadow = '0 12px 30px rgba(79,70,229,.55)'; });
-    b.addEventListener('mouseleave', function () { b.style.transform = ''; b.style.boxShadow = '0 8px 24px rgba(79,70,229,.45)'; });
-    b.addEventListener('click', function () {
-      var v = currentView();
-      b.querySelector('span:last-child').textContent = MAP[v] ? 'Opening…' : 'Tutorial';
-      window.open(urlForCurrent(), '_blank', 'noopener');
-      setTimeout(function () { try { b.querySelector('span:last-child').textContent = 'Tutorial'; } catch (_) {} }, 1200);
-    });
-    document.body.appendChild(b);
-  }
-  function update() {
-    var loggedIn = !!(window.CRM && window.CRM.token);
-    var b = document.getElementById('tutorial-fab');
-    if (!loggedIn) { if (b) b.style.display = 'none'; return; }
-    ensureBtn();
-    b = document.getElementById('tutorial-fab');
-    if (b) b.style.display = 'flex';
-  }
-  try {
-    window.addEventListener('hashchange', update);
-    setTimeout(update, 400); setTimeout(update, 1500);
-    setInterval(update, 3000); // cheap: toggles a boolean; also handles login/logout transitions
-  } catch (_) {}
-})();
