@@ -580,7 +580,8 @@
    * ============================================================================ */
   async function viewEduFees() {
     _injectCss();
-    var root = document.querySelector('main') || document.body;
+    /* EDU_NAV_FIX_v1 (2026-07-06) — was 'main', which wiped out the SPA #view container so sidebar clicks stopped rendering. Now target #view; keep main+body as safety fallbacks. */
+    var root = document.getElementById('view') || document.querySelector('main') || document.body;
     root.innerHTML = '<div class="edu-v2" id="edu-fees-root"><div class="topbar"><div><div class="crumb">Education Pack › <b>Fees & Dunning</b></div><h1>Fees & Dunning</h1></div>' +
       '<div><button class="btn ghost" data-tab="aging">Aging</button>&nbsp;' +
       '<button class="btn ghost" data-tab="reminders">Reminders</button>&nbsp;' +
@@ -728,7 +729,8 @@
   // ============================================================================
   async function viewEduReports() {
     _injectCss();
-    var root = document.querySelector('main') || document.body;
+    /* EDU_NAV_FIX_v1 (2026-07-06) — was 'main', which wiped out the SPA #view container so sidebar clicks stopped rendering. Now target #view; keep main+body as safety fallbacks. */
+    var root = document.getElementById('view') || document.querySelector('main') || document.body;
     root.innerHTML = '<div class="edu-v2" id="edu-reports-root">' +
       '<div class="topbar"><div><div class="crumb">Education Pack › <b>Reports</b></div><h1>Admission & Fees Reports</h1></div>' +
       '<div><button class="btn ghost" data-rtab="funnel">Funnel</button>&nbsp;' +
