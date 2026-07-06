@@ -456,7 +456,20 @@
                       if (!confirm('Mark installment #' + i.seq + ' as PAID (' + money(out) + ')?')) return;
                       try { await api('api_edu_installment_markPaid', { id: i.id, amount: out }); await _refresh(); }
                       catch (e) { alert(e.message || 'Mark paid failed'); }
-                    } }, '✓ Mark Paid') : null));
+                    } }, '✓ Mark Paid')
+                  /* STU360_RECEIPT_PDF_v1 (2026-07-06) — paid installments
+                   * get a 🧾 Receipt PDF button. On click we look up the
+                   * receipt for this installment (backend now returns
+                   * installment_id via edu_payments JOIN), fetch its HTML,
+                   * lazy-load html2pdf.js from CDN, and download a real PDF. */
+                  : h('button', { class: 'btn sm', style: { padding: '4px 10px', fontSize: '11px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' },
+                    onclick: async (ev) => {
+                      const btn = ev.currentTarget; const old = btn.textContent;
+                      btn.textContent = '⏳ Preparing…'; btn.disabled = true;
+                      try { await _downloadReceiptPdfForInst(i.id, i.seq); }
+                      catch (e) { alert('Receipt failed: ' + (e.message || e)); }
+                      finally { btn.textContent = old; btn.disabled = false; }
+                    } }, '🧾 Receipt PDF')));
             })))
         ) : h('div', { style: { color: '#94a3b8', fontSize: '12px', fontStyle: 'italic', textAlign: 'center', padding: '14px' } }, 'No installment schedule yet.')
       ));
@@ -699,6 +712,52 @@
               h('span', { style: { color: '#3b82f6', fontWeight: '700', marginRight: '8px' } },
                 (r.channel === 'whatsapp' ? '💬' : r.channel === 'call' ? '☎️' : r.channel === 'email' ? '✉️' : '💬') + ' ' + r.channel),
               h('span', { style: { color: r.direction === 'in' ? '#16a34a' : '#64748b' } }, esc(r.summary || ''))))));
+  }
+
+  /* STU360_RECEIPT_PDF_v1 (2026-07-06) — helpers for the paid-row 🧾 Receipt PDF button.
+   * 1. Lazy-loads html2pdf.js from CDN on first use so page load isn't slowed.
+   * 2. Fetches receipts for this lead, finds the one matching this installment
+   *    (backend api_edu_receipts_list now returns installment_id via JOIN),
+   *    fetches its HTML, renders it into a hidden div, and triggers a PDF download. */
+  let _stu360PdfLibLoading = null;
+  function _ensureHtml2Pdf() {
+    if (window.html2pdf) return Promise.resolve();
+    if (_stu360PdfLibLoading) return _stu360PdfLibLoading;
+    _stu360PdfLibLoading = new Promise(function (resolve, reject) {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+      s.onload = resolve;
+      s.onerror = function () { reject(new Error('html2pdf CDN unreachable — check network')); };
+      document.head.appendChild(s);
+    });
+    return _stu360PdfLibLoading;
+  }
+  async function _downloadReceiptPdfForInst(instId, seq) {
+    const leadId = DATA && DATA.lead && DATA.lead.id;
+    if (!leadId) throw new Error('No lead in context');
+    const list = await api('api_edu_receipts_list', { lead_id: leadId, limit: 500 }).catch(function () { return null; });
+    const items = (list && Array.isArray(list.items)) ? list.items : [];
+    const rc = items.find(function (r) { return Number(r.installment_id) === Number(instId); });
+    if (!rc) throw new Error('No receipt found for installment #' + seq + ' (backend may not have created one yet)');
+    const rr = await api('api_edu_receipts_html', rc.id);
+    const html = (rr && rr.html) ? rr.html : rr;
+    if (!html || typeof html !== 'string') throw new Error('Empty receipt HTML');
+    await _ensureHtml2Pdf();
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;padding:0;';
+    wrap.innerHTML = html;
+    document.body.appendChild(wrap);
+    try {
+      await window.html2pdf().set({
+        margin: [10, 10, 10, 10],
+        filename: 'Receipt-' + (rc.receipt_no || rc.id) + '.pdf',
+        image: { type: 'jpeg', quality: 0.95 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      }).from(wrap).save();
+    } finally {
+      wrap.remove();
+    }
   }
 
   // ── Master render ─────────────────────────────────────────────────────
