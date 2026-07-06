@@ -244,13 +244,39 @@ async function api_saas_sr_update(token, payload) {
   const ex = await control.query(`SELECT id FROM signups WHERE id=$1`, [p.id]);
   if (!ex.rows.length) throw new Error('Signup request not found');
   const allowed = ['name','email','mobile','org_name','desired_slug','package_id','status','metadata'];
+  // SIGNUP_META_MERGE_v1 — the review modal sends metadata fields flat (e.g.
+  // total_amount_inr, desired_tenure, transaction_id). Merge them into the
+  // signups.metadata JSON so they actually persist (previously dropped).
+  const META_FIELDS = ['submitted_by','desired_tenure','desired_users','payment_status',
+    'amount_paid_inr','total_amount_inr','next_payment_at','notes','transaction_mode',
+    'transaction_id','transaction_date','payment_remarks','gst_mode','industry_pack'];
+  let _metaChanged = false, _meta = {};
+  try { _meta = (typeof ex.rows[0]?.metadata === 'string') ? JSON.parse(ex.rows[0].metadata) : {}; } catch (_) { _meta = {}; }
+  if (!p.metadata) {
+    // reload current metadata to merge onto
+    try { const mr = await control.query('SELECT metadata FROM signups WHERE id=$1',[p.id]); _meta = (typeof mr.rows[0].metadata==='string')?JSON.parse(mr.rows[0].metadata||'{}'):(mr.rows[0].metadata||{}); } catch(_) { _meta = {}; }
+    for (const k of META_FIELDS) {
+      if (p[k] !== undefined) { _meta[k] = (p[k]===''||p[k]==null) ? '' : String(p[k]); _metaChanged = true; }
+    }
+    // GST split: total is GST-inclusive when gst_mode=with_gst.
+    const _tot = Number(_meta.total_amount_inr);
+    if (isFinite(_tot) && _tot > 0) {
+      if (String(_meta.gst_mode||'no_gst').toLowerCase() === 'with_gst') {
+        const sale = Math.round((_tot/1.18)*100)/100;
+        _meta.gst_mode='with_gst'; _meta.gst_percent=18; _meta.sale_amount_inr=sale; _meta.gst_amount_inr=Math.round((_tot-sale)*100)/100;
+      } else {
+        _meta.gst_mode='no_gst'; _meta.gst_percent=0; _meta.sale_amount_inr=_tot; _meta.gst_amount_inr=0;
+      }
+      _metaChanged = true;
+    }
+    if (_metaChanged) { p.metadata = _meta; }
+  }
   const sets = []; const args = [];
   for (const k of allowed) {
     if (p[k] !== undefined) {
-      // SR_PKG_COERCE_v1 — package_id is an integer column; an empty dropdown
-      // sends '' which crashes the UPDATE. Coerce ''/null -> null, else Number.
       let _v = p[k];
       if (k === 'package_id') _v = (_v === '' || _v == null) ? null : Number(_v);
+      if (k === 'metadata')   _v = (typeof _v === 'string') ? _v : JSON.stringify(_v);
       args.push(_v); sets.push(`${k}=$${args.length}`);
     }
   }

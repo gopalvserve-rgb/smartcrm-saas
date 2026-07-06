@@ -196,10 +196,10 @@ async function provisionFromSignup(signupId) {
   // SR_PKG_COERCE_v1 — guard empty/invalid package_id (integer col) so a
   // request approved without a package gives a clear message, not a raw
   // 'invalid input syntax for type integer' Postgres error.
+  // SIGNUP_NOPACKAGE_v1 — package is OPTIONAL now (period from tenure, amount
+  // from the custom total entered in the review form when no package chosen).
   const _pkgId = Number(signup.package_id);
-  if (!_pkgId) throw new Error('No package selected — open the request, pick a Package, click Save, then Approve.');
-  const pkg = await control.findById('packages', _pkgId);
-  if (!pkg) throw new Error('Package missing: ' + signup.package_id);
+  const pkg = _pkgId ? await control.findById('packages', _pkgId) : null;
 
   const slug = signup.desired_slug;
   const dbName = 'tenant_' + slug.replace(/-/g, '_');
@@ -221,49 +221,73 @@ async function provisionFromSignup(signupId) {
   // beyond the default cycle (e.g. promotional 14-month yearly plan).
   let _meta = {};
   try { _meta = typeof signup.metadata === 'string' ? JSON.parse(signup.metadata) : (signup.metadata || {}); } catch (_) { _meta = {}; }
+  function _tenureEnd(start, tenure) {
+    const d = new Date(start);
+    const map = { month:1, quarter:3, half_year:6, year:12, '2year':24, '3year':36 };
+    d.setMonth(d.getMonth() + (map[String(tenure||'').toLowerCase()] || 1));
+    return d;
+  }
   const _now = new Date();
   const now = (_meta.start_date_override && !isNaN(new Date(_meta.start_date_override).getTime()))
     ? new Date(_meta.start_date_override) : _now;
   const periodEnd = (_meta.end_date_override && !isNaN(new Date(_meta.end_date_override).getTime()))
-    ? new Date(_meta.end_date_override) : _computePeriodEnd(now, pkg);
+    ? new Date(_meta.end_date_override)
+    : (pkg ? _computePeriodEnd(now, pkg) : _tenureEnd(now, _meta.desired_tenure));
+  // SIGNUP_TXN_v1 — amounts (GST-inclusive custom total preferred) + txn snapshot.
+  const _bnum = v => (v == null || v === '' || isNaN(Number(v))) ? null : Number(v);
+  const _bMetaTotal = _bnum(_meta.total_amount_inr) != null ? _bnum(_meta.total_amount_inr) : _bnum(_meta.amount_override);
+  let _bGrand, _bTax, _bSub;
+  if (_bMetaTotal != null) { _bGrand=_bMetaTotal; _bTax=_bnum(_meta.gst_amount_inr)!=null?_bnum(_meta.gst_amount_inr):0; _bSub=_bnum(_meta.sale_amount_inr)!=null?_bnum(_meta.sale_amount_inr):Math.max(0,_bGrand-_bTax); }
+  else if (pkg) { _bSub=Number(pkg.base_price_inr)||0; _bTax=Math.round((_bSub*Number(pkg.tax_percent||0)/100)*100)/100; _bGrand=Math.round((_bSub+_bTax)*100)/100; }
+  else { _bSub=0; _bTax=0; _bGrand=0; }
+  const _fullyPaid = String(_meta.payment_status||'').toLowerCase()==='fully_paid';
+  const _invPaid = _fullyPaid || _bGrand <= 0;
+  const _txnDate = (_meta.transaction_date && !isNaN(new Date(_meta.transaction_date).getTime())) ? new Date(_meta.transaction_date).toISOString() : null;
+  const _tenantBilling = {
+    total_amount_inr: _bGrand,
+    amount_paid_inr: _fullyPaid ? _bGrand : (_bnum(_meta.amount_paid_inr)!=null?_bnum(_meta.amount_paid_inr):(_invPaid?_bGrand:0)),
+    sale_amount_inr: _bSub, gst_amount_inr: _bTax,
+    transaction_mode: _meta.transaction_mode || null,
+    transaction_id: _meta.transaction_id || null,
+    transaction_date: _txnDate,
+    tenure: _meta.desired_tenure || null,
+    admin_remarks: _meta.payment_remarks || null
+  };
   let tenantId;
   const existing = await control.findOneBy('tenants', 'slug', slug);
   if (existing) {
     tenantId = existing.id;
-    await control.update('tenants', tenantId, {
-      package_id: pkg.id,
+    await control.update('tenants', tenantId, Object.assign({
+      package_id: pkg ? pkg.id : null,
       status: 'active',
       current_period_start: now.toISOString(),
       current_period_end: periodEnd.toISOString()
-    });
+    }, _tenantBilling));
   } else {
-    tenantId = await control.insert('tenants', {
+    tenantId = await control.insert('tenants', Object.assign({
       slug, org_name: signup.org_name || signup.name,
       contact_name: signup.name, contact_email: signup.email, contact_mobile: signup.mobile,
-      db_name: dbName, package_id: pkg.id,
+      db_name: dbName, package_id: pkg ? pkg.id : null,
       status: 'active',
       current_period_start: now.toISOString(),
       current_period_end: periodEnd.toISOString()
-    });
+    }, _tenantBilling));
   }
 
-  // 5. First invoice + mark paid
-  // BILL_OVERRIDES_v1 - use amount_override when super-admin entered a custom price.
-  const total = (_meta.amount_override != null && !isNaN(Number(_meta.amount_override)))
-    ? Number(_meta.amount_override)
-    : (Number(pkg.base_price_inr) || 0);
-  const tax = Math.round((total * Number(pkg.tax_percent || 0) / 100) * 100) / 100;
-  const grand = Math.round((total + tax) * 100) / 100;
+  // 5. First invoice + mark paid (amounts computed above as _bSub/_bTax/_bGrand).
   const invNumber = await _nextInvoiceNumber();
+  const _planLabel = pkg ? (pkg.name + ' — ' + (pkg.recurring_period_count || 1) + ' ' + pkg.recurring_period)
+                         : ('Custom plan — ' + (_meta.desired_tenure || 'custom tenure'));
   const invoiceId = await control.insert('invoices', {
     tenant_id: tenantId,
     number: invNumber,
-    package_id: pkg.id,
-    description: pkg.name + ' — ' + (pkg.recurring_period_count || 1) + ' ' + pkg.recurring_period,
-    subtotal_inr: total, tax_inr: tax, total_inr: grand,
+    package_id: pkg ? pkg.id : null,
+    description: _planLabel,
+    subtotal_inr: _bSub, tax_inr: _bTax, total_inr: _bGrand,
     period_start: now.toISOString(), period_end: periodEnd.toISOString(),
-    status: grand <= 0 ? 'paid' : 'pending',  // free plans auto-paid
-    paid_at: grand <= 0 ? now.toISOString() : null
+    // SIGNUP_AUTOPAID_v1 — fully-paid signups auto-mark the invoice paid.
+    status: _invPaid ? 'paid' : 'pending',
+    paid_at: _invPaid ? now.toISOString() : null
   });
 
   // 6. Mark signup provisioned
@@ -272,7 +296,7 @@ async function provisionFromSignup(signupId) {
   // 7. Audit
   await control.insert('audit_log', {
     actor_type: 'system', tenant_id: tenantId, event: 'tenant.provisioned',
-    detail: JSON.stringify({ slug, package: pkg.name, invoice: invNumber })
+    detail: JSON.stringify({ slug, package: pkg ? pkg.name : 'Custom', invoice: invNumber })
   });
 
   // 8. Email credentials (best-effort)
@@ -288,7 +312,7 @@ async function provisionFromSignup(signupId) {
         // SIGNUP_FIX_v1 — show the SAME normalised email that we stored
         email: String(signup.email || '').toLowerCase().trim(),
         password: oneTimePassword,
-        packageName: pkg.name
+        packageName: pkg ? pkg.name : 'Custom plan'
       })
     });
   } catch (e) { console.warn('[provisioning] welcome email failed:', e.message); }

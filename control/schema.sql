@@ -554,6 +554,13 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS balance_banner_dismissed_at TIMESTA
 -- TENANT_BILLING_NOTIFY_v1 (2026-06-20) — billing-reminder cron support.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_type TEXT NOT NULL DEFAULT 'live';
+-- SIGNUP_TXN_v1 — transaction + GST details captured at signup, stored on tenant
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_mode TEXT;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_id   TEXT;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_date TIMESTAMPTZ;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS gst_amount_inr   NUMERIC(12,2);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sale_amount_inr  NUMERIC(12,2);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenure           TEXT;
 
 -- SIGNUP_REQUEST_v2 (2026-06-20) — payment status on signup_requests.
 -- Carried into tenants on approve.

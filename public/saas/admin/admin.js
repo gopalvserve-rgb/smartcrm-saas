@@ -3026,6 +3026,9 @@ async function openSignupRequestModal(id, onClose) {
 
   // SR_DETAILS_v1 — show everything the customer submitted, incl. plan PRICE + payment.
   let _meta = {}; try { _meta = (typeof row.metadata === 'string') ? JSON.parse(row.metadata || '{}') : (row.metadata || {}); } catch (_) {}
+  // SIGNUP_AUTOFILL_v1 — metadata fields live in row.metadata; flatten them so
+  // the editable form (which reads row[key]) pre-fills instead of showing blank.
+  try { Object.keys(_meta).forEach(k => { if (row[k] == null || row[k] === '') row[k] = _meta[k]; }); } catch (_) {}
   const _inr = (v) => (v == null || v === '') ? '—' : ('₹' + Number(v).toLocaleString('en-IN'));
   const _txt = (v) => (v == null || String(v).trim() === '') ? '—' : String(v);
   const _TEN = { month:'Monthly', quarter:'Quarterly', half_year:'6-month', year:'Yearly', '2year':'2-year', '3year':'3-year' };
@@ -3115,81 +3118,38 @@ async function openSignupRequestModal(id, onClose) {
   const pkgOptions = [{ value: '', label: '— pick a package —' }].concat(
     packages.map(p => ({ value: String(p.id), label: p.name + ' — ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') + ' / ' + (p.is_lifetime ? 'lifetime' : ((p.recurring_period_count || 1) + ' ' + (p.recurring_period || 'month'))) }))
   );
-  const pkgSel = field('Package', 'package_id', 'select', false, pkgOptions);
-  pkgSel.value = String(row.package_id || '');
-  // End-date preview — recomputes whenever the package selection changes.
-  const endPreview = h('div', {
-    style: {
-      gridColumn: 'span 2', background: '#f1f5f9', padding: '.6rem .8rem',
-      borderRadius: '6px', fontSize: '.85rem', color: '#334155', marginTop: '.25rem'
-    }
-  }, 'Pick a package to see the end date');
-  function _computeEnd(pkg) {
-    if (!pkg) return null;
-    const d = new Date();
-    if (Number(pkg.is_lifetime) === 1) { d.setFullYear(d.getFullYear() + 99); return d; }
-    const n = Number(pkg.recurring_period_count) || 1;
-    const per = String(pkg.recurring_period || 'month').toLowerCase();
-    if (per === 'year') d.setFullYear(d.getFullYear() + n);
-    else if (per === 'quarter') d.setMonth(d.getMonth() + (3 * n));
-    else if (per === 'week') d.setDate(d.getDate() + (7 * n));
-    else d.setMonth(d.getMonth() + n);
-    return d;
-  }
+  // SIGNUP_NOPACKAGE_v1 — Plan/Package removed. Validity comes from Tenure +
+  // custom amount below; the preview is tenure-driven.
+  const endPreview = h('div', { style: { gridColumn: 'span 2', background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '6px', fontSize: '.85rem', color: '#334155', marginTop: '.25rem' } }, 'Pick a tenure to see the valid-till date');
+  function _tenureMonths(t) { return ({ month:1, quarter:3, half_year:6, year:12, '2year':24, '3year':36 })[String(t||'').toLowerCase()] || 0; }
   function _refreshEndPreview() {
-    const pkg = packages.find(p => String(p.id) === pkgSel.value);
-    if (!pkg) {
-      endPreview.textContent = 'Pick a package to see the end date';
-      endPreview.style.background = '#f1f5f9';
-      return;
-    }
-    const end = _computeEnd(pkg);
-    const today = new Date();
-    const ms = end - today;
-    const days = Math.round(ms / (1000 * 60 * 60 * 24));
-    const lifetimePkg = Number(pkg.is_lifetime) === 1;
-    endPreview.style.background = '#ecfdf5';
-    endPreview.style.color = '#065f46';
-    endPreview.innerHTML =
-      '<b>✓ ' + (lifetimePkg ? 'Lifetime plan' : 'Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })) + '</b>' +
-      (lifetimePkg ? ' — no renewal needed' : ' &nbsp;·&nbsp; ' + days + ' days from today &nbsp;·&nbsp; ₹' + Number(pkg.base_price_inr || 0).toLocaleString('en-IN'));
-    // SIGNUP_FIX_v1 (2026-06-26) — also auto-populate the Next payment due
-    // date input (unless admin already set a custom value). Lifetime plans
-    // get cleared since renewal isn't applicable.
-    try {
-      const due = f.querySelector('[data-field="next_payment_at"]');
-      if (due && !due.dataset.touched) {
-        if (lifetimePkg) { due.value = ''; }
-        else {
-          const yyyy = end.getFullYear();
-          const mm = String(end.getMonth() + 1).padStart(2, '0');
-          const dd = String(end.getDate()).padStart(2, '0');
-          due.value = yyyy + '-' + mm + '-' + dd;
-        }
-      }
-      if (due && !due._signupFixListener) {
-        due.addEventListener('input', () => { due.dataset.touched = '1'; });
-        due._signupFixListener = true;
-      }
-    } catch (_) {}
+    const tenEl = f.querySelector('[data-field="desired_tenure"]');
+    const mo = _tenureMonths(tenEl && tenEl.value);
+    if (!mo) { endPreview.textContent = 'Pick a tenure to see the valid-till date'; endPreview.style.background = '#f1f5f9'; endPreview.style.color = '#334155'; return; }
+    const end = new Date(); end.setMonth(end.getMonth() + mo);
+    const days = Math.round((end - new Date()) / 86400000);
+    endPreview.style.background = '#ecfdf5'; endPreview.style.color = '#065f46';
+    endPreview.innerHTML = '<b>✓ Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) + '</b> &nbsp;·&nbsp; ' + days + ' days from today';
+    try { const due = f.querySelector('[data-field="next_payment_at"]'); if (due && !due.dataset.touched) { const y=end.getFullYear(), m=String(end.getMonth()+1).padStart(2,'0'), d=String(end.getDate()).padStart(2,'0'); due.value=y+'-'+m+'-'+d; } if (due && !due._sfl){ due.addEventListener('input',()=>{ due.dataset.touched='1'; }); due._sfl=true; } } catch(_){}
   }
-  pkgSel.addEventListener('change', _refreshEndPreview);
   f.appendChild(endPreview);
-  _refreshEndPreview();
   field('Industry pack', 'industry_pack', 'select', false, [
     { value: '', label: 'Generic' },
     { value: 'education', label: 'Education' },
     { value: 'realestate', label: 'Real Estate' }
   ]).value = row.industry_pack || '';
-  field('Desired tenure', 'desired_tenure', 'select', false, [
-    { value: '', label: '— not specified —' },
+  const _tenSel = field('Tenure *', 'desired_tenure', 'select', false, [
+    { value: '', label: '— select tenure —' },
     { value: 'month', label: 'Monthly' },
     { value: 'quarter', label: 'Quarterly' },
     { value: 'half_year', label: 'Half-yearly (6 months)' },
     { value: 'year', label: 'Yearly' },
     { value: '2year', label: '2 years' },
     { value: '3year', label: '3 years' }
-  ]).value = row.desired_tenure || '';
+  ]);
+  _tenSel.value = row.desired_tenure || '';
+  _tenSel.addEventListener('change', _refreshEndPreview);
+  _refreshEndPreview();
   field('Number of users', 'desired_users', 'number');
   // SIGNUP_REQUEST_v2 — payment fields shown in the edit modal so admin
   // can correct or fill in if the customer didn't.
@@ -3198,9 +3158,32 @@ async function openSignupRequestModal(id, onClose) {
     { value: 'fully_paid', label: 'Fully paid' },
     { value: 'partial',    label: 'Partial paid' }
   ]).value = row.payment_status || '';
-  field('Total amount (₹)',     'total_amount_inr', 'number');
+  const _gstSel = field('GST', 'gst_mode', 'select', false, [
+    { value: 'no_gst', label: 'No GST' },
+    { value: 'with_gst', label: 'With GST (18% included)' }
+  ]);
+  _gstSel.value = row.gst_mode || 'no_gst';
+  const _totInp = field('Total amount (₹)', 'total_amount_inr', 'number');
+  const _gstOut = h('div', { style: { gridColumn: 'span 2', fontSize: '.82rem', color: '#334155', marginTop: '-.2rem' } });
+  f.appendChild(_gstOut);
+  function _refreshGst() {
+    const t = Number(_totInp.value);
+    if (!isFinite(t) || t <= 0) { _gstOut.textContent = ''; return; }
+    if (String(_gstSel.value) === 'with_gst') { const sale = Math.round((t/1.18)*100)/100, g = Math.round((t-sale)*100)/100; _gstOut.innerHTML = '<span style="color:#1e40af">Sale (excl GST): <b>₹' + sale.toLocaleString('en-IN') + '</b> &middot; GST 18%: <b>₹' + g.toLocaleString('en-IN') + '</b></span>'; }
+    else { _gstOut.innerHTML = '<span style="color:#475569">No GST — the full ₹' + t.toLocaleString('en-IN') + ' is the sale amount.</span>'; }
+  }
+  _gstSel.addEventListener('change', _refreshGst); _totInp.addEventListener('input', _refreshGst); _refreshGst();
   field('Amount paid so far (₹)','amount_paid_inr',  'number');
   field('Next payment due date','next_payment_at',  'date');
+  field('Transaction mode', 'transaction_mode', 'select', false, [
+    { value: '', label: '— not specified —' },
+    { value: 'upi', label: 'UPI' }, { value: 'bank_transfer', label: 'Bank transfer / NEFT' },
+    { value: 'card', label: 'Card' }, { value: 'cash', label: 'Cash' },
+    { value: 'cheque', label: 'Cheque' }, { value: 'gateway', label: 'Payment gateway' },
+    { value: 'other', label: 'Other' }
+  ]).value = row.transaction_mode || '';
+  field('Transaction ID / reference', 'transaction_id');
+  field('Transaction date', 'transaction_date', 'date');
   field('Notes', 'notes', 'textarea', true);
   body.appendChild(f);
   body.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.4rem' } },
