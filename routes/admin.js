@@ -84,7 +84,7 @@ const CONFIG_KEYS = [
   'LEAD_SCORING_ENABLED',     // LEAD_SCORING_v1 — Smart Lead Scoring engine
   'AI_QUICKNOTE_ENABLED',     // QNOTE_v1 — 2728 Quick Note row button
   'COPILOT_PROACTIVE_ENABLED',// COPILOT_v4 — Proactive Sales Coach (vserve beta)
-  'WB_CHAT_V2_ENABLED',      // WB_CHAT_v2 — redesigned 3-column WhatsApp chat (vserve beta)
+  'WB_CHAT_V2_ENABLED', 'WA_CATALOGUE_ENABLED',      // WB_CHAT_v2 — redesigned 3-column WhatsApp chat (vserve beta)
   'LEADS_V2_HEADER_V4_ENABLED',  // LEADS_V2 compact sticky header (Option C, vserve beta)
   'SUB_STATUS_ENABLED',      // SUB_STATUS_v1 — sub-statuses under each lead status (vserve beta)
   'LEADS_VIEW_V2_ENABLED',   // LEADS_VIEW_v2 — Modern + Inbox view styles (vserve beta)
