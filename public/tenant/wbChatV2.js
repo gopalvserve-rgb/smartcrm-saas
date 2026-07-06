@@ -1144,7 +1144,16 @@
           h('button', { class: 'btn-save', onclick: async () => {
             const v = $('#wbv2-as-sel').value || null;
             try {
-              await api('api_leads_update', S.activeLeadId, { assigned_to: v ? Number(v) : null });
+              /* WA_INBOX_ASSIGN_FIX_v1 (2026-07-06) — was calling
+               * api_leads_update(activeLeadId,...) which 404s "Not found"
+               * on chats with no linked lead yet. Switched to
+               * api_wb_chat_assign which works on the PHONE number and
+               * upserts wa_chat_assignments; it also auto-mirrors to
+               * the lead via _mirrorLeadOwner if one exists. */
+              await api('api_wb_chat_assign', {
+                phone: t.phone,
+                user_id: v ? Number(v) : null
+              });
               t.assigned_to = v ? Number(v) : null;
               const u = S.users.find(x => Number(x.id) === Number(v));
               t.assigned_name = u ? u.name : null;
