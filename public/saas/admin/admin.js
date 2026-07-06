@@ -702,7 +702,10 @@ function _tenantListTable(rows, sizeMap) {
       td(_tenantTypeBadge(t)),
       td(t.package_name || '—'),
       td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
-      td(sz ? (sz.pretty + ' · ' + sz.percent_of_volume + '%') : '—', { whiteSpace:'nowrap', color: sz ? '#475569' : '#94a3b8' }),
+      td(sz ? ((Number(sz.percent_of_volume) >= 80 ? '⚠ ' : '') + sz.pretty + ' · ' + sz.percent_of_volume + '%') : '—',
+         (sz && Number(sz.percent_of_volume) >= 80)
+           ? { whiteSpace:'nowrap', color:'#dc2626', fontWeight:'700', background:'#fef2f2' }
+           : { whiteSpace:'nowrap', color: sz ? '#475569' : '#94a3b8' }),  /* STORAGE_ALERT_v1 — red >80% */
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
       td(fmtDate(t.created_at) || '—', { whiteSpace:'nowrap', color:'#475569' }),
@@ -769,7 +772,8 @@ function renderTenantCard(t, sizeMap) {
       ? h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
       : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
   );
-  return h('div', { style:{ background:'#fff', border:'1px solid '+(usersOver?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
+  const _storageOver = sz && Number(sz.percent_of_volume) >= 80;  /* STORAGE_ALERT_v1 */
+  return h('div', { style:{ background:'#fff', border:'1px solid '+((usersOver||_storageOver)?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
     h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', marginBottom:'8px' } },
       h('div', { style:{ minWidth:'0' } },
         h('div', { style:{ fontWeight:'700', fontSize:'1rem', color:'#0f172a', wordBreak:'break-word' } }, t.org_name || t.slug, (String(t.tenant_type||'live').toLowerCase()==='demo' ? h('span', { style:{ marginLeft:'6px', fontSize:'.6rem', fontWeight:'800', color:'#7c3aed', background:'#f3e8ff', border:'1px solid #e9d5ff', borderRadius:'6px', padding:'1px 6px', verticalAlign:'middle' } }, 'DEMO') : null)),
@@ -782,7 +786,7 @@ function renderTenantCard(t, sizeMap) {
     _row('Period ends', fmtDate(t.current_period_end) || '—'),
     _row('Registered', fmtDate(t.created_at) || '—'),
     _row('Last login', t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', t.last_login_at ? '#0f172a' : '#94a3b8'),
-    sz ? _row('DB size', sz.pretty + ' · ' + sz.percent_of_volume + '%') : null,
+    sz ? _row('DB size', (Number(sz.percent_of_volume) >= 80 ? '⚠ ' : '') + sz.pretty + ' · ' + sz.percent_of_volume + '%', Number(sz.percent_of_volume) >= 80 ? '#dc2626' : undefined) : null,  /* STORAGE_ALERT_v1 */
     (String(t.admin_remarks||'').trim()) ? h('div', { style:{ marginTop:'8px', padding:'6px 8px', background:'#fffbeb', border:'1px solid #fde68a', borderRadius:'8px', fontSize:'.76rem', color:'#78350f', whiteSpace:'pre-wrap', wordBreak:'break-word' } }, '📝 ' + String(t.admin_remarks).trim()) : null,
     actions);
 }
