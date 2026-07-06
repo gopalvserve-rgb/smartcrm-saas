@@ -454,7 +454,7 @@
                   out > 0 ? h('button', { class: 'btn sm primary', style: { padding: '4px 10px', fontSize: '11px' },
                     onclick: async () => {
                       if (!confirm('Mark installment #' + i.seq + ' as PAID (' + money(out) + ')?')) return;
-                      try { await api('api_edu_installment_markPaid', { id: i.id, amount: out }); await _refresh(); }
+                      try { await api('api_edu_installment_markPaid', { installment_id: i.id, amount: out }); await _refresh(); }
                       catch (e) { alert(e.message || 'Mark paid failed'); }
                     } }, '✓ Mark Paid')
                   /* STU360_RECEIPT_PDF_v1 (2026-07-06) — paid installments
