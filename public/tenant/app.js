@@ -1729,6 +1729,7 @@ const NAV_GROUPS = [
     { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'],                requiresPack: 'education', search: 'courses programs' },
     { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education', search: 'dues pending fees' },
     { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education', search: 'revenue income' },
+    { id: 'edureceipts', label: '🧾 Fee Receipts',   icon: '🧾', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education', search: 'receipt receipts fee slip payment proof' },
     { id: 'edureports',   label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education', search: 'collection report fee report' },
     { id: 'eduattendance', label: '🗓 Attendance',    icon: '🗓', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'attendance presence' },
     // EDU_PACK_v2 — 2026-06-27 — new sidebar items (admission workflow + scholarships + batches)
@@ -46985,6 +46986,111 @@ VIEWS.edudues = async (view) => {
 
   branchSel.addEventListener('change', render);
   render();
+};
+
+// ═════════════════════════════════════════════════════════════════════
+// 🧾 Fee Receipts — printable/downloadable receipt viewer (EDU_FEE_RECEIPT_v1)
+// ═════════════════════════════════════════════════════════════════════
+VIEWS.edureceipts = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '🧾 Fee Receipts'));
+  view.appendChild(h('p', { class: 'muted' },
+    'Every paid installment auto-generates a receipt. Click Preview to open a print-ready view, then File → Print for a hard copy or File → Save as PDF.'));
+
+  // Filter row
+  const searchInp = h('input', { type: 'text', placeholder: '🔍 Search receipt no / student', style: { minWidth: '18rem' } });
+  const refreshBtn = h('button', { class: 'btn primary' }, '🔄 Refresh');
+  view.appendChild(h('div', { class: 'card', style: { padding: '.6rem .8rem', marginBottom: '.8rem', display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+    searchInp, refreshBtn));
+
+  const body = h('div', {});
+  view.appendChild(body);
+
+  let allItems = [];
+
+  async function load() {
+    body.innerHTML = '<div class="muted" style="padding: 1rem">Loading receipts…</div>';
+    try {
+      const d = await api('api_edu_receipts_list', { limit: 500 });
+      allItems = Array.isArray(d && d.items) ? d.items : [];
+      render();
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'error-box' }, 'Could not load receipts: ' + e.message));
+    }
+  }
+
+  function render() {
+    body.innerHTML = '';
+    const q = String(searchInp.value || '').toLowerCase().trim();
+    const items = q ? allItems.filter(r =>
+      String(r.receipt_no || '').toLowerCase().includes(q) ||
+      String(r.student_name || '').toLowerCase().includes(q)
+    ) : allItems;
+
+    // Totals strip
+    const total = items.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '.6rem', marginBottom: '1rem' } },
+      h('div', { class: 'card', style: { padding: '.7rem .9rem', borderLeft: '4px solid #6366f1' } },
+        h('div', { class: 'muted', style: { fontSize: '.72em' } }, 'TOTAL RECEIPTS'),
+        h('div', { style: { fontSize: '1.3rem', fontWeight: 700, color: '#6366f1' } }, String(items.length))),
+      h('div', { class: 'card', style: { padding: '.7rem .9rem', borderLeft: '4px solid #16a34a' } },
+        h('div', { class: 'muted', style: { fontSize: '.72em' } }, 'AMOUNT COLLECTED'),
+        h('div', { style: { fontSize: '1.3rem', fontWeight: 700, color: '#16a34a' } }, '₹' + Number(total).toLocaleString('en-IN')))
+    ));
+
+    if (!items.length) {
+      body.appendChild(h('div', { class: 'muted', style: { padding: '2rem', textAlign: 'center', background: '#fff', border: '2px dashed #e5e7eb', borderRadius: '10px' } },
+        h('div', { style: { fontSize: '2rem', marginBottom: '.4rem' } }, '🧾'),
+        h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, q ? 'No receipts match your search' : 'No receipts yet'),
+        h('div', { style: { fontSize: '.85rem' } }, q ? 'Try a different receipt number or student name.' : 'Receipts are generated automatically when you mark a fee installment as paid from a lead\'s fee schedule.')
+      ));
+      return;
+    }
+
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Receipt #'),
+        h('th', {}, 'Date'),
+        h('th', {}, 'Student'),
+        h('th', {}, 'Course / Batch'),
+        h('th', {}, 'Installment'),
+        h('th', { style: { textAlign: 'right' } }, 'Amount'),
+        h('th', {}, 'Payment method'),
+        h('th', {}, 'Actions')
+      )),
+      h('tbody', {}, items.map(r => h('tr', {},
+        h('td', { style: { fontWeight: 700, color: '#6366f1' } }, r.receipt_no || '#' + r.id),
+        h('td', {}, String(r.receipt_date || r.created_at || '').slice(0, 10)),
+        h('td', {},
+          h('div', { style: { fontWeight: 600 } }, r.student_name || '—'),
+          r.phone ? h('div', { class: 'muted', style: { fontSize: '.72em' } }, r.phone) : null),
+        h('td', {}, (r.course_name || '—') + (r.batch_name ? ' · ' + r.batch_name : '')),
+        h('td', {}, r.installment_seq ? 'Seq ' + r.installment_seq : '—'),
+        h('td', { style: { textAlign: 'right', fontWeight: 700 } }, '₹' + Number(r.amount || 0).toLocaleString('en-IN')),
+        h('td', {}, r.payment_method || '—'),
+        h('td', {},
+          h('button', { class: 'btn xs primary', style: { marginRight: '.2rem' }, onclick: () => previewReceipt(r.id) }, '🖨 Preview / Print'),
+          r.lead_id ? h('button', { class: 'btn xs ghost', onclick: () => openLeadModal(r.lead_id) }, 'Open lead') : null
+        )
+      ))));
+    body.appendChild(tbl);
+  }
+
+  async function previewReceipt(id) {
+    try {
+      const d = await api('api_edu_receipts_html', id);
+      if (!d || !d.html) throw new Error('No receipt HTML returned');
+      const w = window.open('', '_blank', 'width=760,height=900');
+      if (!w) { toast('Popup blocked — allow popups for this site', 'err'); return; }
+      w.document.write(d.html);
+      w.document.close();
+    } catch (e) { toast('Preview failed: ' + e.message, 'err'); }
+  }
+
+  refreshBtn.addEventListener('click', load);
+  searchInp.addEventListener('input', () => render());
+  await load();
 };
 
 // ═════════════════════════════════════════════════════════════════════
