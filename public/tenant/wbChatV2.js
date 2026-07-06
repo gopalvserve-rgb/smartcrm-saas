@@ -1065,7 +1065,20 @@
         h('div', { style: { display: 'grid', gap: '8px', marginTop: '8px' } },
           attachOption('🖼  Image', 'image/*', 'image'),
           attachOption('🎬  Video', 'video/*', 'video'),
-          attachOption('📎  Document', '*/*', 'document')),
+          attachOption('📎  Document', '*/*', 'document'),
+          /* WA_CATALOGUE_v1 (2026-07-06) — pick from shared library */
+          h('button', { class: 'wbv2-attach-opt',
+            style: { display: 'flex', alignItems: 'center', gap: '10px', width: '100%', padding: '10px 12px', background: 'none', border: '0', cursor: 'pointer', fontSize: '13px', textAlign: 'left' },
+            onclick: () => {
+              menuBg.remove();
+              if (window.WA_CATALOGUE && typeof window.WA_CATALOGUE.openPicker === 'function') {
+                window.WA_CATALOGUE.openPicker({
+                  phone: t.phone,
+                  from_phone_number_id: S.sendFromId || t.phone_number_id || undefined,
+                  onSent: () => setTimeout(() => loadMessages(t), 800)
+                });
+              } else { toast('Catalogue not available', 'err'); }
+            } }, '📚  Catalogue')),
         h('div', { class: 'acts' },
           h('button', { class: 'btn-cancel', onclick: () => bg.remove() }, 'Cancel'))));
     document.body.appendChild(bg);
