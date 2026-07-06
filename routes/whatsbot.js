@@ -1991,13 +1991,20 @@ async function api_wb_chat_messages(token, phone) {
   // strict surface that hides other agents' work; once you have the
   // phone, you're allowed to see the history.
 
+  /* WB_CHAT_V2_MSG_USER_v1 (2026-07-05) — also return user_id + resolved
+   * user_name so the 3-column chat SPA can label every outbound bubble
+   * with the actual sender's name. LEFT JOIN — messages sent from the
+   * WA mobile app have user_id NULL and get no join match (renders as
+   * '📱 Mobile' in the SPA). */
   const { rows } = await db.query(
-    `SELECT id, direction, body, message_type, media_url, media_id, status, reply_to,
-            created_at, read_at, delivered_at, error_text, template_name,
-            phone_number_id
-       FROM whatsapp_messages
-       WHERE from_number = $1 OR to_number = $1
-       ORDER BY created_at ASC
+    `SELECT w.id, w.direction, w.body, w.message_type, w.media_url, w.media_id,
+            w.status, w.reply_to, w.created_at, w.read_at, w.delivered_at,
+            w.error_text, w.template_name, w.phone_number_id,
+            w.user_id, u.name AS user_name
+       FROM whatsapp_messages w
+       LEFT JOIN users u ON u.id = w.user_id
+       WHERE w.from_number = $1 OR w.to_number = $1
+       ORDER BY w.created_at ASC
        LIMIT 500`,
     [p]
   );
