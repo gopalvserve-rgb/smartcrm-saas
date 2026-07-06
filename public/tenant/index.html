@@ -181,7 +181,7 @@
           document.body.appendChild(re);
           // EDU_PACK_v2 (2026-06-27) — isolated pack SPA
           var edu = document.createElement('script');
-          edu.src = 'education.js?v=2026-07-03-pack-v18-fees-reports';
+          edu.src = 'education.js?v=2026-07-06-navfix-v1';
           document.body.appendChild(edu);
           // REMINDER_FLOWS_v1 (2026-07-05) — admin flow builder + sidebar link
           var rf = document.createElement('script');
@@ -209,7 +209,7 @@
           // (config flag / installed pack) at render time, so loading them here
           // simply restores their prior rollout behaviour. Keep all of these.
           var st = document.createElement('script');          // STU360 — Student 360 (Education pack)
-          st.src = 'student360.js?v=2026-07-06-receipt-pdf-v1'; st.defer = true;
+          st.src = 'student360.js?v=2026-07-06-receipt-pdf-v2'; st.defer = true;
           document.body.appendChild(st);
           var cp = document.createElement('script');          // COPILOT_v4 — Proactive AI Coach / AI Assist
           cp.src = 'copilotProactive.js?v=2026-06-27-restore-v1'; cp.defer = true;
