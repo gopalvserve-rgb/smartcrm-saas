@@ -2846,7 +2846,7 @@ async function api_edu_reminders_dueList(token, opts) {
   if (on) { args.push(on); where += ` AND r.scheduled_for = $${args.length}::date`; }
   else    { where += ` AND r.scheduled_for <= CURRENT_DATE`; }
   const sql = `SELECT r.*, i.seq AS installment_seq, i.due_date, i.amount, i.paid_amount, i.status AS inst_status,
-                       e.course_name, e.batch_name, l.name AS lead_name, l.mobile AS lead_phone, l.email AS lead_email
+                       e.course_name, e.batch_name, l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email
                   FROM edu_fee_reminders r
                   JOIN edu_installments i ON i.id = r.installment_id
                   JOIN edu_enrollments  e ON e.id = r.enrollment_id
@@ -3076,7 +3076,7 @@ async function api_edu_reports_agingReceivables(token) {
   await _requireEducation();
   await _ensureSchemaV2Fees();
   const r = await db.query(`
-    SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name, l.name AS student_name, l.mobile AS phone,
+    SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name, l.name AS student_name, l.phone AS phone,
            SUM(i.amount + COALESCE(i.penalty_amount,0) - COALESCE(i.waiver_amount,0) - i.paid_amount)::numeric AS balance,
            MAX(CURRENT_DATE - i.due_date)::int AS max_days_overdue,
            COUNT(*)::int AS overdue_installments
@@ -3084,7 +3084,7 @@ async function api_edu_reports_agingReceivables(token) {
       JOIN edu_enrollments e ON e.id = i.enrollment_id
       LEFT JOIN leads l ON l.id = e.lead_id
      WHERE i.status IN ('due','partial') AND i.due_date < CURRENT_DATE
-     GROUP BY e.id, e.lead_id, e.course_name, e.batch_name, l.name, l.mobile
+     GROUP BY e.id, e.lead_id, e.course_name, e.batch_name, l.name, l.phone
      HAVING SUM(i.amount + COALESCE(i.penalty_amount,0) - COALESCE(i.waiver_amount,0) - i.paid_amount) > 0
      ORDER BY balance DESC
      LIMIT 200`);
