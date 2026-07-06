@@ -2845,6 +2845,14 @@ setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
 console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
 
 
-  app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
+  
+// WA_CATALOGUE_v1 (2026-07-06) — auto-enable on vserve at boot.
+// Runs after a short delay so tenant pools are ready.
+setTimeout(() => {
+  try { require('./utils/waCatalogueVserveAutoEnable').autoEnableOnVserve(); }
+  catch (e) { console.warn('[WA_CATALOGUE_v1] auto-enable hook skipped:', e && e.message); }
+}, 8000);
+
+app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
 boot().catch
