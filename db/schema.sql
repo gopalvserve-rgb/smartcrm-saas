@@ -100,21 +100,6 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS idx_leads_phone    ON leads(phone);
 CREATE INDEX IF NOT EXISTS idx_leads_email    ON leads(email);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned ON leads(assigned_to);
--- MOBILE_LEAD_CARD_v2 — track when a lead was (re)assigned so the card can show it.
-ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
-UPDATE leads SET assigned_at = created_at WHERE assigned_at IS NULL;
-CREATE OR REPLACE FUNCTION _leads_set_assigned_at() RETURNS trigger AS $$
-BEGIN
-  IF (TG_OP = 'INSERT') THEN
-    IF NEW.assigned_to IS NOT NULL AND NEW.assigned_at IS NULL THEN NEW.assigned_at := NOW(); END IF;
-  ELSIF (TG_OP = 'UPDATE') THEN
-    IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to AND NEW.assigned_to IS NOT NULL THEN NEW.assigned_at := NOW(); END IF;
-  END IF;
-  RETURN NEW;
-END; $$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS trg_leads_assigned_at ON leads;
-CREATE TRIGGER trg_leads_assigned_at BEFORE INSERT OR UPDATE ON leads
-  FOR EACH ROW EXECUTE FUNCTION _leads_set_assigned_at();
 CREATE INDEX IF NOT EXISTS idx_leads_status   ON leads(status_id);
 CREATE INDEX IF NOT EXISTS idx_leads_created  ON leads(created_at);
 CREATE INDEX IF NOT EXISTS idx_leads_source   ON leads(source);

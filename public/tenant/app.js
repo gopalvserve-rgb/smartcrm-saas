@@ -6754,7 +6754,7 @@ function renderLeadsMobile(rows) {
             // MOBILE_LEAD_CARD_v2 — phone (large) top-right + underlined assigned date below.
             h('div', { class: 'lc-rightinfo' },
               l.phone ? h('a', { href: 'tel:' + digits, class: 'lc-phone-big', onclick: ev => ev.stopPropagation() }, l.phone) : null,
-              (l.assigned_at || l.created_at) ? h('span', { class: 'lc-assigned-date', title: 'Assigned ' + fmtDate(l.assigned_at || l.created_at, 'short') }, fmtDate(l.assigned_at || l.created_at, 'short')) : null
+              l.assigned_at ? h('span', { class: 'lc-assigned-date', title: 'Assigned ' + fmtDate(l.assigned_at, 'short') }, fmtDate(l.assigned_at, 'short')) : null
             )
           ),
           // Status chip + source (phone moved to the right block above)
