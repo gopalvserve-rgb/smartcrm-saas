@@ -843,9 +843,19 @@ async function openTenantDetailsModal(t) {
     balEl.style.color = bal>0 ? '#b45309' : '#16a34a';
   };
   fTotal.inp.oninput = paintBal; fPaid.inp.oninput = paintBal; paintBal();
+  // TENANT_GST_VIEW_v1 — show the GST split + transaction captured at signup.
+  const _inrT = v => (v == null || v === '') ? '—' : ('₹' + Number(v).toLocaleString('en-IN'));
+  const _hasGstTxn = (t.gst_amount_inr != null && t.gst_amount_inr !== '') || (t.sale_amount_inr != null && t.sale_amount_inr !== '') || t.transaction_mode || t.transaction_id;
+  const gstInfo = _hasGstTxn
+    ? h('div', { style:{ marginTop:'8px', paddingTop:'8px', borderTop:'1px dashed #bae6fd', fontSize:'.82rem', color:'#334155' } },
+        h('div', {}, 'Sale (excl GST): ', h('b', {}, _inrT(t.sale_amount_inr)), '  ·  GST: ', h('b', { style:{ color:'#0891b2' } }, _inrT(t.gst_amount_inr))),
+        (t.transaction_mode || t.transaction_id || t.transaction_date)
+          ? h('div', { style:{ marginTop:'3px', color:'#475569' } }, '🧾 Txn: ', (t.transaction_mode || '—'), (t.transaction_id ? (' · ' + t.transaction_id) : ''), (t.transaction_date ? (' · ' + fmtDate(t.transaction_date)) : ''))
+          : null)
+    : h('div', { style:{ marginTop:'8px', fontSize:'.78rem', color:'#94a3b8' } }, 'No GST / transaction recorded (was a "No GST" signup or entered before this feature).');
   card.appendChild(h('div', { style:{ background:'#f0f9ff', border:'1px solid #bae6fd', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '💳 Billing & plan'),
-    fPkgWrap, fCap.wrap, fTotal.wrap, fPaid.wrap, fRemind.wrap, balEl));
+    fPkgWrap, fCap.wrap, fTotal.wrap, fPaid.wrap, fRemind.wrap, balEl, gstInfo));
 
   // TENANT_AUDIT_v1 — who/when edited + what changed.
   const _fmtV = (v) => { if (v===null||v===undefined||v==='') return '\u2205'; const x=String(v); return x.length>48? x.slice(0,48)+'\u2026' : x; };
@@ -3134,7 +3144,7 @@ async function openSignupRequestModal(id, onClose) {
     const days = Math.round((end - new Date()) / 86400000);
     endPreview.style.background = '#ecfdf5'; endPreview.style.color = '#065f46';
     endPreview.innerHTML = '<b>✓ Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) + '</b> &nbsp;·&nbsp; ' + days + ' days from today';
-    try { const due = f.querySelector('[data-field="next_payment_at"]'); if (due && !due.dataset.touched) { const y=end.getFullYear(), m=String(end.getMonth()+1).padStart(2,'0'), d=String(end.getDate()).padStart(2,'0'); due.value=y+'-'+m+'-'+d; } if (due && !due._sfl){ due.addEventListener('input',()=>{ due.dataset.touched='1'; }); due._sfl=true; } } catch(_){}
+    try { const due = f.querySelector('[data-field="next_payment_at"]'); if (due) { const y=end.getFullYear(), m=String(end.getMonth()+1).padStart(2,'0'), d=String(end.getDate()).padStart(2,'0'); due.value=y+'-'+m+'-'+d; } } catch(_){}  /* SIGNUP_NEXTDUE_v1 — always follow the selected tenure */
   }
   f.appendChild(endPreview);
   field('Industry pack', 'industry_pack', 'select', false, [

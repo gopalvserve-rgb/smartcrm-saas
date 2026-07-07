@@ -601,6 +601,22 @@ async function api_leads_list(token, filters) {
     if (!prev || String(r.created_at) > String(prev.created_at)) remarksByLead[k] = r;
   });
 
+  // LEAD_ASSIGNED_AT_DERIVE_v1 — assigned date from the existing lead_actions
+  // timeline (latest 'assigned' event). No new column; falls back per-lead below.
+  const assignedAtByLead = {};
+  if (_pagedIds.length) {
+    try {
+      const ar = await db.query(
+        `SELECT DISTINCT ON (lead_id) lead_id, created_at
+           FROM lead_actions
+          WHERE lead_id = ANY($1::int[]) AND action_type = 'assigned'
+          ORDER BY lead_id, created_at DESC`,
+        [_pagedIds]
+      );
+      ar.rows.forEach(r => { assignedAtByLead[Number(r.lead_id)] = r.created_at; });
+    } catch (_) { /* table may not exist on old tenants */ }
+  }
+
   // LEAD_LIST_WA_v2 — last 3 WhatsApp messages per lead (was just 1 in v1).
   // ROW_NUMBER OVER (PARTITION BY lead_id ORDER BY created_at DESC) <= 3
   // is the right shape — one query, indexed scan on lead_id. Body
@@ -656,6 +672,8 @@ async function api_leads_list(token, filters) {
     const r = remarksByLead[Number(l.id)];
     h.recent_remark = r ? r.remark : '';
     h.recent_remark_at = r ? r.created_at : '';
+    // Assigned date: derived from lead_actions, else the lead's own value, else created.
+    h.assigned_at = assignedAtByLead[Number(l.id)] || l.assigned_at || l.created_at;
     const c = l.campaign_id ? campaignsById[Number(l.campaign_id)] : null;
     h.campaign_name = c ? c.name : '';
     h.form_name = c ? (c.form_name || '') : '';
