@@ -290,6 +290,20 @@ async function provisionFromSignup(signupId) {
     paid_at: _invPaid ? now.toISOString() : null
   });
 
+  // SAAS_TXN_v1 — auto-record this signup payment in the transactions ledger.
+  try {
+    const txn = require('./transactions');
+    await txn.recordTransaction({
+      tenant_id: tenantId, type: 'auto', source: 'signup',
+      amount_inr: _bGrand, sale_amount_inr: _bSub, gst_amount_inr: _bTax,
+      gst_mode: (_bTax > 0 ? 'gst' : 'no_gst'),
+      transaction_mode: _meta.transaction_mode || null,
+      transaction_id: _meta.transaction_id || null,
+      txn_date: _txnDate ? String(_txnDate).slice(0, 10) : null,
+      invoice_id: invoiceId, notes: 'Signup provision'
+    });
+  } catch (_) {}
+
   // 6. Mark signup provisioned
   await control.update('signups', signup.id, { status: 'provisioned' });
 

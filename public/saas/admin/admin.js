@@ -157,6 +157,7 @@ const NAV = [
   { id: 'signup_requests', label: '🆕 Signup Requests',  requiresPerm: 'signup_req.view' },
   { id: 'packages',      label: '📦 Packages',           requiresPerm: 'packages.view' },
   { id: 'invoices',      label: '🧾 Invoices',           requiresPerm: 'invoices.view' },
+  { id: 'transactions',  label: '💳 Transactions' },  /* SAAS_TXN_v1 */
   { id: 'webhooks',      label: '📡 Webhook Logs',       requiresPerm: 'webhooks.view' },
   { id: 'errors',        label: '🐞 Errors',             requiresPerm: 'errors.view' },
   { id: 'crashes',       label: '🚨 Crashes',            requiresPerm: 'crashes.view' },
@@ -723,7 +724,8 @@ function _tenantListTable(rows, sizeMap) {
           h('button', { class:'btn ghost xs', onclick:()=>openAiRecordingModal(t), title:'AI Call Summary settings' }, '🎙️ AI Rec'),
           t.status === 'active'
             ? h('button', { class:'btn ghost xs', style:{ color:'#b91c1c' }, onclick: async()=>{ if (!confirm('Suspend ' + (t.org_name||t.slug) + '?')) return; await api('api_saas_tenants_suspend', t.id); navigate('tenants'); }, title:'Suspend tenant access' }, 'Suspend')
-            : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); }, title:'Restore suspended tenant' }, 'Restore')
+            : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); }, title:'Restore suspended tenant' }, 'Restore'),
+          _tenantDeleteBtn(t)
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
@@ -770,7 +772,8 @@ function renderTenantCard(t, sizeMap) {
     h('button', { class:'btn ghost xs', onclick:()=>openAiRecordingModal(t) }, '🎙️ AI Rec'),
     t.status === 'active'
       ? h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
-      : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
+      : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore'),
+    _tenantDeleteBtn(t)
   );
   const _storageOver = sz && Number(sz.percent_of_volume) >= 80;  /* STORAGE_ALERT_v1 */
   return h('div', { style:{ background:'#fff', border:'1px solid '+((usersOver||_storageOver)?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
@@ -5194,4 +5197,107 @@ function _openTenantEmailModal(inv) {
   card.appendChild(out);
   card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } },
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), send));
+}
+
+
+/* ==========================================================================
+ * SAAS_TXN_v1 — Transactions module + tenant hard-delete button
+ * ========================================================================== */
+function _tenantDeleteBtn(t) {
+  if (!t || t.status === 'deleted') return null;
+  return h('button', { class: 'btn ghost xs', style: { color: '#b91c1c', borderColor: '#fca5a5' }, title: 'Permanently delete + drop database',
+    onclick: async () => {
+      if (!confirm('Permanently DELETE "' + (t.org_name || t.slug) + '" and DROP its database?\n\nThis cannot be undone.')) return;
+      try { const r = await api('api_saas_tenants_delete', t.id); toast(r.db_dropped ? 'Deleted (database dropped)' : ('Deleted' + (r.db_error ? (' — DB drop failed: ' + r.db_error) : '')), 'ok'); navigate('tenants'); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '🗑 Delete');
+}
+
+VIEWS.transactions = async (view) => {
+  view.appendChild(h('h1', {}, '💳 Transactions'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } }, 'All tenant payments — auto-recorded from signups, plus manual entries. Filter by type/GST and search.'));
+  const _inr = v => '₹' + Number(v || 0).toLocaleString('en-IN');
+  const state = { page: 1, pageSize: 25, type: '', gst_mode: '', q: '' };
+  let tenants = [];
+  try { tenants = await api('api_saas_tenants_list', {}); } catch (_) {}
+
+  const sumHost = h('div', {}); view.appendChild(sumHost);
+  const typeSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, 'All types'), h('option', { value: 'auto' }, 'Auto (signup)'), h('option', { value: 'manual' }, 'Manual'));
+  const gstSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, 'GST + No GST'), h('option', { value: 'gst' }, 'With GST'), h('option', { value: 'no_gst' }, 'No GST'));
+  const qInp = h('input', { type: 'search', placeholder: 'Search tenant / txn id…', style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '180px' } });
+  const addBtn = h('button', { class: 'btn primary' }, '+ Manual entry');
+  addBtn.onclick = () => _openTxnCreateModal(tenants, reload);
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 12px' } }, typeSel, gstSel, qInp, h('span', { style: { flex: '1' } }), addBtn));
+  const tblHost = h('div', {}); view.appendChild(tblHost);
+  const pager = h('div', {}); view.appendChild(pager);
+  typeSel.onchange = () => { state.type = typeSel.value; state.page = 1; reload(); };
+  gstSel.onchange = () => { state.gst_mode = gstSel.value; state.page = 1; reload(); };
+  qInp.oninput = () => { state.q = qInp.value; state.page = 1; reload(); };
+
+  async function reload() {
+    tblHost.innerHTML = '<div class="muted">Loading…</div>';
+    let d;
+    try { d = await api('api_saas_txn_list', { type: state.type || null, gst_mode: state.gst_mode || null, q: state.q || null, page: state.page, pageSize: state.pageSize }); }
+    catch (e) { tblHost.innerHTML = ''; tblHost.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    const su = d.summary || {};
+    const kpi = (l, v, c) => h('div', { style: { flex: '1', minWidth: '130px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 14px' } }, h('div', { style: { fontSize: '1.3rem', fontWeight: '800', color: c || '#0f172a' } }, v), h('div', { style: { fontSize: '.72rem', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' } }, l));
+    sumHost.innerHTML = '';
+    sumHost.appendChild(h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' } },
+      kpi('Total collected', _inr(su.total), '#16a34a'), kpi('GST', _inr(su.gst), '#0891b2'), kpi('Sale (excl GST)', _inr(su.sale)),
+      kpi('Transactions', String(su.count)), kpi('Auto', String(su.auto), '#4f46e5'), kpi('Manual', String(su.manual), '#7c3aed')));
+    tblHost.innerHTML = '';
+    const rows = d.rows || [];
+    if (!rows.length) { tblHost.appendChild(h('div', { class: 'empty' }, 'No transactions match.')); pager.innerHTML = ''; return; }
+    const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
+    const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
+    tblHost.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '820px' } },
+      h('thead', {}, h('tr', {}, th('Date'), th('Tenant'), th('Type'), th('Amount'), th('Sale'), th('GST'), th('Mode'), th('Txn ID'), th(''))),
+      h('tbody', {}, ...rows.map(r => h('tr', {},
+        td(fmtDate(r.txn_date || r.created_at), { whiteSpace: 'nowrap' }),
+        td(r.org_name || ('#' + (r.tenant_id || '—'))),
+        td(h('span', { class: 'tag ' + (r.type === 'auto' ? 'ok' : 'warn') }, r.type)),
+        td(_inr(r.amount_inr), { fontWeight: '700' }),
+        td(_inr(r.sale_amount_inr)),
+        td(_inr(r.gst_amount_inr), { color: '#0891b2' }),
+        td(r.transaction_mode || '—'),
+        td(r.transaction_id || '—'),
+        td(r.type === 'manual' ? h('span', { style: { cursor: 'pointer', color: '#dc2626' }, title: 'Delete', onclick: async () => { if (!confirm('Delete this manual transaction?')) return; await api('api_saas_txn_delete', r.id); reload(); } }, '🗑') : null)
+      )))
+    )));
+    pager.innerHTML = '';
+    const totalPages = Math.max(1, Math.ceil((d.total || 0) / state.pageSize));
+    pager.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '10px' } },
+      h('button', { class: 'btn ghost xs', onclick: () => { if (state.page > 1) { state.page--; reload(); } } }, '‹ Prev'),
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Page ' + state.page + ' of ' + totalPages + ' · ' + (d.total || 0) + ' total'),
+      h('button', { class: 'btn ghost xs', onclick: () => { if (state.page < totalPages) { state.page++; reload(); } } }, 'Next ›')));
+  }
+  reload();
+};
+
+function _openTxnCreateModal(tenants, onDone) {
+  const m = h('div', { class: 'modal-bd' }); const card = h('div', { class: 'modal', style: { maxWidth: '480px' } }); m.appendChild(card); document.body.appendChild(m);
+  const _inr = v => '₹' + Number(v || 0).toLocaleString('en-IN');
+  const tenSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— choose tenant —'), ...(tenants || []).map(t => h('option', { value: String(t.id) }, (t.org_name || t.slug))));
+  const gstSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: 'no_gst' }, 'No GST'), h('option', { value: 'gst' }, 'With GST (18% included)'));
+  const amtInp = h('input', { type: 'number', min: '0', step: '0.01', placeholder: 'Amount ₹', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const modeSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— mode —'), ...['UPI', 'Bank transfer', 'Card', 'Cash', 'Cheque', 'Gateway', 'Other'].map(x => h('option', { value: x.toLowerCase().replace(' ', '_') }, x)));
+  const idInp = h('input', { type: 'text', placeholder: 'Transaction ID / ref (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const dateInp = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10), style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const split = h('div', { style: { fontSize: '.82rem', color: '#334155', marginTop: '4px' } });
+  const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+  function calc() { const t = Number(amtInp.value); if (!isFinite(t) || t <= 0) { split.textContent = ''; return; } if (gstSel.value === 'gst') { const s = Math.round((t / 1.18) * 100) / 100, g = Math.round((t - s) * 100) / 100; split.innerHTML = 'Sale: <b>' + _inr(s) + '</b> · GST 18%: <b style="color:#0891b2">' + _inr(g) + '</b>'; } else split.innerHTML = 'No GST — full ' + _inr(t) + ' is the sale amount.'; }
+  gstSel.onchange = calc; amtInp.oninput = calc; calc();
+  const save = h('button', { class: 'btn primary' }, 'Save transaction');
+  save.onclick = async () => {
+    if (!tenSel.value) { out.innerHTML = '<span style="color:#dc2626">Choose a tenant</span>'; return; }
+    if (!(Number(amtInp.value) > 0)) { out.innerHTML = '<span style="color:#dc2626">Enter a valid amount</span>'; return; }
+    save.disabled = true; save.textContent = 'Saving…';
+    try { await api('api_saas_txn_create', { tenant_id: Number(tenSel.value), gst_mode: gstSel.value, amount_inr: Number(amtInp.value), transaction_mode: modeSel.value || null, transaction_id: idInp.value.trim() || null, txn_date: dateInp.value || null }); m.remove(); if (onDone) onDone(); }
+    catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; save.disabled = false; save.textContent = 'Save transaction'; }
+  };
+  const fl = (lbl, el) => h('div', { style: { marginBottom: '8px' } }, h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600', display: 'block', marginBottom: '2px' } }, lbl), el);
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '+ Manual transaction'));
+  card.appendChild(fl('Tenant *', tenSel)); card.appendChild(fl('GST', gstSel)); card.appendChild(fl('Amount (₹) *', amtInp)); card.appendChild(split);
+  card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(out);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), save));
 }

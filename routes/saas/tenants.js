@@ -162,6 +162,34 @@ async function api_saas_tenants_pendingDelete(token, id) {
   return { ok: true };
 }
 
+async function api_saas_tenants_delete(token, id, opts) {
+  const me = await requireSuperAdmin(token);
+  try { await require('./saasPermissions').requirePerm(me, 'tenants.edit'); } catch (_) {}
+  const t = await control.findById('tenants', id);
+  if (!t) throw new Error('Tenant not found');
+  const dropDb = !opts || opts.dropDb !== false; // default: also drop the DB
+  let dbDropped = false, dbError = null;
+  if (dropDb && t.db_name) {
+    try {
+      await control.query(`DROP DATABASE IF EXISTS "${t.db_name}" WITH (FORCE)`);
+      dbDropped = true;
+    } catch (e) {
+      // Fallback for PG < 13 (no WITH FORCE): terminate connections, then drop.
+      try {
+        await control.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [t.db_name]);
+        await control.query(`DROP DATABASE IF EXISTS "${t.db_name}"`);
+        dbDropped = true;
+      } catch (e2) { dbError = e2.message; console.warn('[tenant-delete] drop db failed:', e2.message); }
+    }
+  }
+  await control.update('tenants', id, { status: 'deleted', pending_delete_at: null });
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email, tenant_id: id,
+    event: 'tenant.deleted', detail: JSON.stringify({ slug: t.slug, db_dropped: dbDropped, db_error: dbError })
+  }).catch(() => {});
+  return { ok: true, db_dropped: dbDropped, db_error: dbError };
+}
+
 async function api_saas_tenants_setModules(token, payload) {
   const me = await requireSuperAdmin(token);
   const t = await control.findById('tenants', payload.tenant_id);
@@ -1286,6 +1314,7 @@ module.exports = {
   api_saas_tenants_suspend,
   api_saas_tenants_restore,
   api_saas_tenants_pendingDelete,
+  api_saas_tenants_delete,
   api_saas_tenants_setModules,
   api_saas_tenants_loginAs,
   api_saas_tenants_reseedKb,

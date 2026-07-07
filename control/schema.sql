@@ -253,6 +253,28 @@ CREATE INDEX IF NOT EXISTS idx_signups_email ON signups(email);
 CREATE INDEX IF NOT EXISTS idx_signups_order ON signups(cashfree_order_id);
 CREATE INDEX IF NOT EXISTS idx_signups_status ON signups(status);
 
+-- ---- SAAS_TXN_v1 — platform transactions ledger -----------------
+CREATE TABLE IF NOT EXISTS transactions (
+  id               SERIAL PRIMARY KEY,
+  tenant_id        INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+  type             TEXT NOT NULL DEFAULT 'manual',   -- auto | manual
+  source           TEXT,                              -- signup | renewal | manual
+  amount_inr       NUMERIC(12,2) NOT NULL DEFAULT 0,  -- grand total (incl GST)
+  sale_amount_inr  NUMERIC(12,2),                     -- excl GST
+  gst_amount_inr   NUMERIC(12,2) DEFAULT 0,
+  gst_mode         TEXT DEFAULT 'no_gst',             -- gst | no_gst
+  transaction_mode TEXT,
+  transaction_id   TEXT,
+  txn_date         DATE,
+  notes            TEXT,
+  invoice_id       INTEGER,
+  created_by       INTEGER,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_transactions_tenant  ON transactions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_type    ON transactions(type);
+
 -- ============================================================
 -- Cashfree webhook logs — dedicated audit trail for /hook/cashfree
 -- ============================================================
