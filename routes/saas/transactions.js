@@ -120,7 +120,7 @@ async function api_saas_txn_backfill(token, opts) {
   let inserted = 0, skipped = 0;
   for (const r of ten.rows) {
     const total = (Number(r.total_amount_inr) > 0) ? Number(r.total_amount_inr) : (Number(r.inv_total) || 0);
-    if (!(total > 0)) { skipped++; continue; }
+    // Include EVERY July tenant — even 0-amount ones (admin can edit the amount later).
     const gst = (Number(r.gst_amount_inr) > 0) ? Number(r.gst_amount_inr) : (Number(r.inv_tax) || 0);
     const sale = (Number(r.sale_amount_inr) > 0) ? Number(r.sale_amount_inr)
                : (Number(r.inv_sub) > 0 ? Number(r.inv_sub) : Math.max(0, total - gst));
