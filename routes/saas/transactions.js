@@ -94,4 +94,38 @@ async function api_saas_txn_delete(token, id) {
   return { ok: true };
 }
 
-module.exports = { recordTransaction, api_saas_txn_list, api_saas_txn_create, api_saas_txn_delete };
+async function api_saas_txn_backfill(token, opts) {
+  await requireFullAdmin(token);
+  const o = opts || {};
+  const now = new Date();
+  const from = o.from ? new Date(o.from) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const to   = o.to   ? new Date(o.to)   : new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const inv = await control.query(
+    `SELECT i.id, i.tenant_id, i.number, i.subtotal_inr, i.tax_inr, i.total_inr, i.paid_at, i.updated_at
+       FROM invoices i LEFT JOIN tenants t ON t.id = i.tenant_id
+      WHERE i.status = 'paid'
+        AND COALESCE(i.paid_at, i.updated_at) >= $1
+        AND COALESCE(i.paid_at, i.updated_at) <  $2
+        AND COALESCE(t.tenant_type, 'live') <> 'demo'
+        AND i.id NOT IN (SELECT invoice_id FROM transactions WHERE invoice_id IS NOT NULL)
+      ORDER BY COALESCE(i.paid_at, i.updated_at) ASC`,
+    [from.toISOString(), to.toISOString()]
+  );
+  let inserted = 0;
+  for (const r of inv.rows) {
+    const total = Number(r.total_inr) || 0;
+    const tax = Number(r.tax_inr) || 0;
+    const sub = Number(r.subtotal_inr) != null && Number(r.subtotal_inr) > 0 ? Number(r.subtotal_inr) : Math.max(0, total - tax);
+    await recordTransaction({
+      tenant_id: r.tenant_id, type: 'auto', source: 'backfill',
+      amount_inr: total, sale_amount_inr: sub, gst_amount_inr: tax,
+      gst_mode: (tax > 0 ? 'gst' : 'no_gst'),
+      txn_date: (r.paid_at || r.updated_at) ? String(r.paid_at || r.updated_at).slice(0, 10) : null,
+      invoice_id: r.id, notes: 'Backfill · invoice ' + (r.number || r.id)
+    });
+    inserted++;
+  }
+  return { ok: true, inserted, scanned: inv.rows.length, from: from.toISOString(), to: to.toISOString() };
+}
+
+module.exports = { recordTransaction, api_saas_txn_list, api_saas_txn_create, api_saas_txn_delete, api_saas_txn_backfill };

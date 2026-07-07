@@ -5227,7 +5227,15 @@ VIEWS.transactions = async (view) => {
   const qInp = h('input', { type: 'search', placeholder: 'Search tenant / txn id…', style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '180px' } });
   const addBtn = h('button', { class: 'btn primary' }, '+ Manual entry');
   addBtn.onclick = () => _openTxnCreateModal(tenants, reload);
-  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 12px' } }, typeSel, gstSel, qInp, h('span', { style: { flex: '1' } }), addBtn));
+  const backfillBtn = h('button', { class: 'btn', title: 'Create transactions from this month\'s PAID invoices (skips ones already recorded)' }, '↺ Backfill this month');
+  backfillBtn.onclick = async () => {
+    if (!confirm('Backfill transactions from this month\'s paid invoices (with GST)? Already-recorded invoices are skipped.')) return;
+    backfillBtn.disabled = true; backfillBtn.textContent = 'Backfilling…';
+    try { const r = await api('api_saas_txn_backfill', {}); toast('Backfilled ' + r.inserted + ' of ' + r.scanned + ' invoice(s)', 'ok'); reload(); }
+    catch (e) { toast(e.message, 'err'); }
+    backfillBtn.disabled = false; backfillBtn.textContent = '↺ Backfill this month';
+  };
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 12px' } }, typeSel, gstSel, qInp, h('span', { style: { flex: '1' } }), backfillBtn, addBtn));
   const tblHost = h('div', {}); view.appendChild(tblHost);
   const pager = h('div', {}); view.appendChild(pager);
   typeSel.onchange = () => { state.type = typeSel.value; state.page = 1; reload(); };
