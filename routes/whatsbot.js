@@ -2412,13 +2412,21 @@ async function api_wb_campaigns_create(token, payload) {
     leads = ld.rows;
   } else {
     const all = await db.getAll('leads');
-    /* WA_CAMPAIGN_DATE_FILTER_v1 (2026-07-06) — Created from / to date range */
+    /* WA_CAMPAIGN_DATE_FILTER_v1 + WA_CAMPAIGN_MULTI_v1 (2026-07-06) — Created
+     * date range + multi-select status/source/assignee. Accept both legacy
+     * singular (status_id) and new plural (status_ids) shapes. */
     const _fromMs = filter.created_from ? new Date(filter.created_from + 'T00:00:00').getTime() : null;
     const _toMs   = filter.created_to   ? new Date(filter.created_to   + 'T23:59:59').getTime() : null;
+    const _statusIds = Array.isArray(filter.status_ids) ? filter.status_ids.map(Number).filter(Boolean)
+                     : (filter.status_id ? [Number(filter.status_id)] : []);
+    const _sources   = Array.isArray(filter.sources) ? filter.sources.map(String).filter(Boolean)
+                     : (filter.source ? [String(filter.source)] : []);
+    const _assignees = Array.isArray(filter.assigned_to_ids) ? filter.assigned_to_ids.map(Number).filter(Boolean)
+                     : (filter.assigned_to ? [Number(filter.assigned_to)] : []);
     leads = all.filter(l => {
-      if (filter.status_id && Number(l.status_id) !== Number(filter.status_id)) return false;
-      if (filter.source && l.source !== filter.source) return false;
-      if (filter.assigned_to && Number(l.assigned_to) !== Number(filter.assigned_to)) return false;
+      if (_statusIds.length && !_statusIds.includes(Number(l.status_id))) return false;
+      if (_sources.length   && !_sources.includes(String(l.source || ''))) return false;
+      if (_assignees.length && !_assignees.includes(Number(l.assigned_to))) return false;
       if (filter.tag) {
         const tags = String(l.tags || '').toLowerCase().split(',').map(s => s.trim());
         if (!tags.includes(String(filter.tag).toLowerCase())) return false;
