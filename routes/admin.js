@@ -90,6 +90,8 @@ const CONFIG_KEYS = [
   'LEADS_VIEW_V2_ENABLED',   // LEADS_VIEW_v2 — Modern + Inbox view styles (vserve beta)
   'AI_MANAGER_ENABLED',      // AI_MGR_v1 — virtual admin/supervisor (vserve beta)
   'AI_CALL_ENABLED',         // AICALL_v1 — Smart Call AI master switch (VAPI)
+  'AI_BOT_ENABLED',          // AI_SWITCHBOARD_v1 — WhatsApp AI Assistant on/off
+  'AI_CALL_SUMMARY_ENABLED', // AI_SWITCHBOARD_v1 — AI call summary + sample on/off
   'AI_CALL_PROVIDER',        // AICALL_v1 — 'vapi' (only provider for Phase 1)
   'VAPI_PRIVATE_API_KEY',    // AICALL_v1 — VAPI Bearer token for server calls
   'VAPI_PUBLIC_KEY',         // AICALL_v1 — VAPI public key for web SDK
@@ -385,6 +387,14 @@ async function api_admin_brand(_token) {
     LEADS_V2_HEADER_V4_ENABLED: cfg.LEADS_V2_HEADER_V4_ENABLED || '',
     LEADS_VIEW_V2_ENABLED:     cfg.LEADS_VIEW_V2_ENABLED     || '',
     AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
+    /* AI_SWITCHBOARD_v1 — expose every AI feature flag so all roles' SPA can
+       gate the feature. Unset => '' => treated as OFF (default off). */
+    AI_BOT_ENABLED:          cfg.AI_BOT_ENABLED          || '',
+    AI_CALL_SUMMARY_ENABLED: cfg.AI_CALL_SUMMARY_ENABLED || '',
+    AI_CALL_ENABLED:         cfg.AI_CALL_ENABLED         || '',
+    LEAD_SCORING_ENABLED:    cfg.LEAD_SCORING_ENABLED    || '',
+    AI_QUICKNOTE_ENABLED:    cfg.AI_QUICKNOTE_ENABLED    || '',
+    COPILOT_ACTIONS_ENABLED: cfg.COPILOT_ACTIONS_ENABLED || '',
     POOL_ENABLED: cfg.POOL_ENABLED || '',   /* LEAD_POOL_v1 — gate the Lead Pool menu */
     CALL_ACTIVITY_LEAD_ONLY: cfg.CALL_ACTIVITY_LEAD_ONLY || '',  /* CA_LEAD_ONLY — Call Activity default filter */
     CALL_CAPTURE_LEAD_ONLY: cfg.CALL_CAPTURE_LEAD_ONLY || '',  /* CALL_CAPTURE_LEAD_ONLY — capture gate */

@@ -1788,7 +1788,7 @@ const NAV_GROUPS = [
     { id: 'callactivity', label: 'Call Activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'], search: 'call activity call log outgoing incoming missed' },
     { id: 'callinsights', label: 'Call Insights', icon: '🎙', search: 'insights call analytics call performance' },
     { id: 'callratings',  label: 'Call Ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'], search: 'rating call rating quality score' },
-    { id: 'aiusage',      label: 'AI Usage',      icon: '🤖', roles: ['admin', 'manager'], search: 'ai usage ai summary call ai ai minutes' }
+    { id: 'aiusage',      label: 'AI Usage',      icon: '🤖', roles: ['admin', 'manager'], requiresBrandFlag: 'AI_CALL_SUMMARY_ENABLED', search: 'ai usage ai summary call ai ai minutes' }
   ] },
   /* META_MODULE_v1 — Marketing & Communication groups all outbound
    * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
@@ -1799,16 +1799,16 @@ const NAV_GROUPS = [
     { id: 'socialpublish',  label: 'Social Publisher',     icon: '📤', search: 'publisher post schedule post social post' },
     { id: 'socialads',      label: 'Ads Manager',          icon: '📊', search: 'ads meta ads facebook ads instagram ads ads manager' },
     { id: 'whatsbot',       label: 'WhatsApp Bot',         icon: '💬', search: 'whatsapp whatsbot bot whatsapp automation chat' },
-    { id: 'aibot',          label: 'AI Assistant',         icon: '🤖', roles: ['admin', 'manager'], search: 'ai bot assistant chatbot automation' }
+    { id: 'aibot',          label: 'AI Assistant',         icon: '🤖', roles: ['admin', 'manager'], requiresBrandFlag: 'AI_BOT_ENABLED', search: 'ai bot assistant chatbot automation' }
   ] },
   { label: 'Reports & Analytics', icon: '📉', items: [
     { id: 'reports',       label: 'Reports Dashboard', icon: '📉', roles: ['admin', 'manager', 'team_leader'], search: 'reports analytics dashboard summary report' },
     { id: 'reportbuilder', label: 'Report Builder',    icon: '🧪', roles: ['admin', 'manager', 'team_leader'], search: 'builder custom report create report' },
     { id: 'tatreport',     label: 'TAT Report',        icon: '⏱️', roles: ['admin', 'manager', 'team_leader'], search: 'tat turnaround time response time' },
     { id: 'activityreport', label: 'Activity Report',  icon: '📝', roles: ['admin', 'manager', 'team_leader'], search: 'activity report user activity work report' },
-    { id: 'leadscoring',    label: 'High-Intent Leads',  icon: '🎯', search: 'ai score ai lead rating hot leads warm leads smart score high intent' },
-    { id: 'leadscoringsettings', label: 'AI Scoring Settings', icon: '⚙', roles: ['admin', 'manager'], search: 'ai score ai lead rating lead scoring settings thresholds rules' },
-    { id: 'aimanager',       label: 'AI Manager',         icon: '🧑‍💼', roles: ['admin', 'manager'], brandFlag: 'AI_MANAGER_ENABLED', search: 'ai manager virtual admin supervisor violations rules idle nudge accountability' },
+    { id: 'leadscoring',    label: 'High-Intent Leads',  icon: '🎯', requiresBrandFlag: 'LEAD_SCORING_ENABLED', search: 'ai score ai lead rating hot leads warm leads smart score high intent' },
+    { id: 'leadscoringsettings', label: 'AI Scoring Settings', icon: '⚙', roles: ['admin', 'manager'], requiresBrandFlag: 'LEAD_SCORING_ENABLED', search: 'ai score ai lead rating lead scoring settings thresholds rules' },
+    { id: 'aimanager',       label: 'AI Manager',         icon: '🧑‍💼', roles: ['admin', 'manager'], requiresBrandFlag: 'AI_MANAGER_ENABLED', search: 'ai manager virtual admin supervisor violations rules idle nudge accountability' },
     { id: 'whatsappreport', label: 'WhatsApp Report',  icon: '💬', roles: ['admin', 'manager', 'team_leader'], search: 'whatsapp report message report whatsapp analytics' },
     { id: 'campaignreport', label: 'Campaign Report',  icon: '📊', roles: ['admin', 'manager', 'team_leader'], search: 'campaign report campaign analytics' }
   ] },
@@ -1859,10 +1859,10 @@ const NAV_GROUPS = [
   ] },
   /* AICALL_v1 — Smart Call AI moved to the bottom of the menu per user request. */
   { label: 'Smart Call AI', icon: '🎙️', items: [
-    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'smart call ai smartcall dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'smart call ai smartcall campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'smart call ai smartcall call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              search: 'smart call ai smartcall vapi phone numbers assistants knowledge base', brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall dashboard call volume outcomes' },
+    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall campaign csv outbound voice' },
+    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall call logs transcripts recordings' },
+    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall vapi phone numbers assistants knowledge base' },
     { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'smart call ai smartcall settings vapi api key provider' }
   ] }
 ];
@@ -5268,8 +5268,17 @@ VIEWS.leads = async (view) => {
         CRM._leadsPage = 1; loadLeads({ page: 1 });
       }
     }),
-    // Assignee filter — hidden for sales users because their scope is fixed.
-    (CRM.user && ['admin', 'manager', 'team_leader'].includes(CRM.user.role))
+    // Assignee filter — shown to admin/manager/team_leader AND to any custom
+    // role granted team/global lead visibility (leads.view scope team|global,
+    // or the reports.team_data permission). USER_FILTER_ROLE_v1.
+    (function(){
+      const u = CRM.user; if (!u) return false;
+      if (['admin', 'manager', 'team_leader'].includes(u.role)) return true;
+      const lv = (window.CRM && CRM.permMatrix && CRM.permMatrix[u.role] || {})['leads.view'];
+      if (lv === 'team' || lv === 'global') return true;
+      try { if (CRM.can && CRM.can('reports.team_data')) return true; } catch(_){}
+      return false;
+    })()
       ? multiSelectDropdown({
           id: 'f-assigned', label: 'Assigned',
           options: users.map(u => ({ id: u.id, name: u.name })),
@@ -6408,7 +6417,12 @@ function applyStatusChipFilter(statusId) {
 
 function getActiveColumns() {
   const saved = CRM.prefs.columns && CRM.prefs.columns.length ? CRM.prefs.columns : null;
-  return saved || LEAD_COLUMNS.filter(c => c.default).map(c => c.key);
+  let cols = saved || LEAD_COLUMNS.filter(c => c.default).map(c => c.key);
+  // AI_SWITCHBOARD_v1 — hide the AI Score column unless Lead Scoring is ON.
+  if (String((window.CRM && CRM.brand && CRM.brand.LEAD_SCORING_ENABLED) || '') !== '1') {
+    cols = cols.filter(k => k !== 'smart_score');
+  }
+  return cols;
 }
 
 function renderLeadsTable(rows) {
@@ -10833,6 +10847,13 @@ function recordingsBlock(leadId) {
 // Placeholder shown when a lead has no recordings yet — gives users a
 // preview of what the AI Summary section will look like once a call is logged.
 function aiSummaryPlaceholder() {
+  // AI_SWITCHBOARD_v1 — the sample/preview AI summary (with demo data) only
+  // renders when AI Call Summary is switched ON in Settings -> AI Settings.
+  // Default OFF => nothing shown (no test data). P1.
+  if (String((window.CRM && CRM.brand && CRM.brand.AI_CALL_SUMMARY_ENABLED) || '') !== '1') {
+    return h('li', { class: 'muted', style: { fontSize: '.8rem', padding: '.4rem .2rem' } },
+      'No call recordings yet.');
+  }
   return h('li', { class: 'rec-item rec-placeholder' },
     h('div', { class: 'placeholder-banner' },
       h('div', { class: 'placeholder-title' }, '🤖 AI Call Summary will appear here'),
@@ -24741,6 +24762,7 @@ VIEWS.admin = async (view) => {
   // a setting by either the old name (SMTP, Sources) or the new label.
   const groups = [
     { title: 'AI Features', items: [
+      { id: 'aisettings',   label: '🎛 AI Settings (On/Off)', roles: ['admin'], search: 'ai settings ai toggle switch on off enable disable ai features master switchboard bot summary scoring manager copilot' },
       { id: 'aifeatures',   label: '✨ AI Assist (Lead Diagnosis)', search: 'ai assist lead diagnosis copilot proactive coach summary next best action' },
       { id: 'demoreminder', label: '📅 Demo Reminders',            search: 'demo reminder whatsapp morning batch pre demo follow up' }
     ]},
@@ -24866,6 +24888,7 @@ async function showAdminTab(id) {
   const body = $('#admin-body');
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
+    if (id === 'aisettings')  body.replaceChildren(await adminAiSettings());
     if (id === 'aifeatures')  body.replaceChildren(await adminAIFeatures());
     if (id === 'demoreminder') body.replaceChildren(await adminDemoReminder());
     if (id === 'company')     body.replaceChildren(await adminCompany());
@@ -27290,6 +27313,64 @@ async function adminMenuOrder() {
  * Saved via api_admin_setConfig — already on the CONFIG_KEYS allowlist.
  * SPA picks up the new value on next page load (brand cache is per-session).
  * ============================================================================ */
+// AI_SWITCHBOARD_v1 — central Settings -> AI Settings page. One ON/OFF switch
+// per AI feature. Every switch defaults OFF (flag unset => OFF). Writes config
+// via api_admin_setConfig and updates CRM.brand in-place so gating reacts live.
+async function adminAiSettings() {
+  const FEATURES = [
+    { key: 'AI_BOT_ENABLED',          label: '🤖 WhatsApp AI Assistant',   desc: 'Gemini-powered AI bot that auto-replies to WhatsApp chats.' },
+    { key: 'AI_CALL_SUMMARY_ENABLED', label: '📞 AI Call Summary',         desc: 'Auto transcribe + summarise call recordings, sentiment, action items, sample preview.' },
+    { key: 'LEAD_SCORING_ENABLED',    label: '🎯 AI Lead Scoring',         desc: 'Smart 0–100 AI score + Hot/Warm/Cold buckets, the AI Score column, and High-Intent Leads.' },
+    { key: 'AI_MANAGER_ENABLED',      label: '🧑‍💼 AI Manager',            desc: 'Virtual supervisor — violations, idle nudges, accountability.' },
+    { key: 'COPILOT_PROACTIVE_ENABLED', label: '💡 Proactive Sales Coach', desc: 'Morning briefing, lead AI summary panel and proactive coaching chips.' },
+    { key: 'COPILOT_ACTIONS_ENABLED', label: '🛠 Ask-CRM Copilot Actions', desc: 'Let the Copilot perform write actions (create/update/assign) on your confirmation.' },
+    { key: 'AI_QUICKNOTE_ENABLED',    label: '✨ AI Quick Note',           desc: 'One-tap AI note button on the lead row.' },
+    { key: 'AI_CALL_ENABLED',         label: '🎙 Smart Call AI (VAPI)',    desc: 'Outbound AI voice calling campaigns via VAPI.' }
+  ];
+  const wrap = h('div', { class: 'admin-pane' });
+  wrap.appendChild(h('h3', { style: { margin: '0 0 .25rem' } }, '🎛 AI Settings'));
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+    'Turn each AI feature ON or OFF for this workspace. Everything is OFF by default — switch on only what you use.'));
+
+  const isOn = (k) => String((window.CRM && CRM.brand && CRM.brand[k]) || '') === '1';
+
+  async function setFlag(k, on, sw, statusEl) {
+    sw.disabled = true;
+    try {
+      await api('api_admin_setConfig', { key: k, value: on ? '1' : '0' });
+      window.CRM = window.CRM || {}; CRM.brand = CRM.brand || {};
+      CRM.brand[k] = on ? '1' : '';
+      statusEl.textContent = on ? 'ON' : 'OFF';
+      statusEl.style.color = on ? '#059669' : '#94a3b8';
+      toast((on ? 'Enabled' : 'Disabled') + ' — refresh to apply everywhere', 'ok');
+    } catch (e) {
+      sw.checked = !on;   // revert
+      toast('Could not save: ' + e.message, 'err');
+    }
+    sw.disabled = false;
+  }
+
+  FEATURES.forEach(f => {
+    const on = isOn(f.key);
+    const statusEl = h('span', { style: { fontSize: '.72rem', fontWeight: '700', minWidth: '28px', textAlign: 'right', color: on ? '#059669' : '#94a3b8' } }, on ? 'ON' : 'OFF');
+    const sw = h('input', { type: 'checkbox', checked: on ? 'checked' : null, style: { width: '18px', height: '18px', cursor: 'pointer' } });
+    sw.onchange = () => setFlag(f.key, sw.checked, sw, statusEl);
+    const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '10px', marginBottom: '8px', background: '#fff' } },
+      h('div', { style: { flex: '1', minWidth: '0' } },
+        h('div', { style: { fontWeight: '700', fontSize: '.92rem' } }, f.label),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '2px' } }, f.desc)
+      ),
+      statusEl,
+      h('label', { class: 'switch', style: { display: 'inline-flex', alignItems: 'center' } }, sw)
+    );
+    wrap.appendChild(row);
+  });
+
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.76rem', marginTop: '10px' } },
+    'Note: changes take full effect after a page refresh. New workspaces start with all AI OFF.'));
+  return wrap;
+}
+
 async function adminAIFeatures() {
   const cfg = await api('api_admin_getConfig').catch(() => ({}));
   const isOn = String((cfg && cfg.COPILOT_PROACTIVE_ENABLED) || '') === '1';

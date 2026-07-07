@@ -609,14 +609,14 @@ const CONFIG_DEFAULTS = [
   { key: 'WHATSAPP_COEXISTENCE_MODE', value: '1' },
   // LS_ROLLOUT_ALL_v1 — AI Lead Scoring ON for every tenant by default.
   // Gates the SPA-visible feature: column, filter, mode toggle, dashboard.
-  { key: 'LEAD_SCORING_ENABLED', value: '1' },
+  { key: 'LEAD_SCORING_ENABLED', value: '0' },   // AI_SWITCHBOARD_v1 — AI off by default
   // QNOTE_ROLLOUT_ALL_v1 — ✨ Quick Note row button ON for every tenant.
   // Gates the row-level AI note widget (slash menu: /note, /status, /followup).
   { key: 'AI_QUICKNOTE_ENABLED', value: '1' },
   // AI_ASSIST_ROLLOUT_v1 (2026-06-20) — Proactive AI Assist (lead summary
   // panel at top of Edit Lead: Last Activity / AI Summary / Next Best Action)
   // ON for every tenant. Backend is the COPILOT_v4 / Proactive Coach engine.
-  { key: 'COPILOT_PROACTIVE_ENABLED', value: '1' },
+  { key: 'COPILOT_PROACTIVE_ENABLED', value: '0' },   // AI_SWITCHBOARD_v1 — AI off by default
   // LEADS_VIEW_V2_ROLLOUT_v1 — 'Modern' leads theme available on every new tenant.
   { key: 'LEADS_VIEW_V2_ENABLED', value: '1' },
   // WB_CHAT_V2_ALLTENANTS_v1 (2026-06-27) — the redesigned 3-column WhatsApp
