@@ -24783,7 +24783,8 @@ VIEWS.admin = async (view) => {
     { title: 'Sales & Quotation Setup', items: [
       { id: 'products',     label: '📦 Products / Services',    search: 'products services items product master service master' },
       { id: 'projstages',   label: '🚚 Sales Closure Stages',   search: 'closure final closure sale final closure won stages' },
-      { id: 'quotation',    label: '📄 Quotation Defaults',     search: 'quotation quote defaults proposal defaults t&c' }
+      { id: 'quotation',    label: '📄 Quotation Defaults',     search: 'quotation quote defaults proposal defaults t&c' },
+      { id: 'invoicecustomfields', label: '➕ Invoice Custom Fields', roles: ['admin','manager'], search: 'invoice custom fields invoice fields extra fields billing custom fields' }
     ]},
     { title: 'Lead Routing', items: [
       { id: 'rules',        label: '⚖️ Auto-Assign Rules',   search: 'auto assign assignment assign rules routing' },
@@ -24889,6 +24890,7 @@ async function showAdminTab(id) {
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
     if (id === 'aisettings')  body.replaceChildren(await adminAiSettings());
+    if (id === 'invoicecustomfields') body.replaceChildren(await adminCustomFields('invoice'));
     if (id === 'aifeatures')  body.replaceChildren(await adminAIFeatures());
     if (id === 'demoreminder') body.replaceChildren(await adminDemoReminder());
     if (id === 'company')     body.replaceChildren(await adminCompany());
@@ -32130,9 +32132,12 @@ async function adminProducts() {
   return card;
 }
 
-async function adminCustomFields() {
-  const fields = await api('api_customFields_list');
-  const card = h('div', { class: 'card' }, h('h4', {}, 'Custom lead fields'));
+async function adminCustomFields(entity) {
+  const ent = String(entity || 'lead').toLowerCase();   // INV_CUSTOM_FIELDS_v1
+  const isInv = ent === 'invoice';
+  const _tab = isInv ? 'invoicecustomfields' : 'customfields';
+  const fields = await api('api_customFields_list', ent);
+  const card = h('div', { class: 'card' }, h('h4', {}, isInv ? 'Custom invoice fields' : 'Custom lead fields'));
   card.appendChild(h('table', { class: 'mini-table' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Key'), h('th', {}, 'Label'), h('th', {}, 'Type'),
@@ -32150,11 +32155,11 @@ async function adminCustomFields() {
           h('td', {}, f.show_in_list ? '✓' : '—'),
           h('td', {}, f.is_required ? '✓' : '—'),
           h('td', { style: { whiteSpace: 'nowrap' } },
-            h('button', { class: 'btn sm', onclick: () => editCustomField(f) }, '✏️ Edit'),
+            h('button', { class: 'btn sm', onclick: () => editCustomField(f, ent) }, '✏️ Edit'),
             h('button', { class: 'btn sm danger', style: { marginLeft: '.3rem' },
               onclick: async () => {
                 if (!await confirmDialog(`Delete field "${f.label}"?`)) return;
-                try { await api('api_customFields_delete', f.id); toast('Deleted'); await warmCache(); showAdminTab('customfields'); }
+                try { await api('api_customFields_delete', f.id); toast('Deleted'); await warmCache(); showAdminTab(_tab); }
                 catch (e) { toast(e.message, 'err'); }
               }
             }, '🗑️')
@@ -32165,16 +32170,19 @@ async function adminCustomFields() {
   // ---- "Add new field" form ----
   card.appendChild(h('h5', { style: { marginTop: '1.25rem' } }, '+ Add new field'));
   card.appendChild(buildCustomFieldForm({}, async (payload) => {
+    payload.entity = ent;
     await api('api_customFields_save', payload);
     toast('Added');
     await warmCache();
-    showAdminTab('customfields');
+    showAdminTab(_tab);
   }, 'Add field'));
   return card;
 }
 
 /** Open a modal to edit an existing custom field. */
-function editCustomField(field) {
+function editCustomField(field, entity) {
+  const _ent = String(entity || field.entity || 'lead').toLowerCase();
+  const _tab = _ent === 'invoice' ? 'invoicecustomfields' : 'customfields';
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === modal) modal.remove(); } },
     h('div', { class: 'modal' },
       h('div', { class: 'modal-head' },
@@ -32186,11 +32194,12 @@ function editCustomField(field) {
       ),
       buildCustomFieldForm(field, async (payload) => {
         payload.id = field.id;
+        payload.entity = _ent;
         await api('api_customFields_save', payload);
         toast('Saved');
         modal.remove();
         await warmCache();
-        showAdminTab('customfields');
+        showAdminTab(_tab);
       }, 'Save changes', () => modal.remove())
     )
   );
@@ -54730,11 +54739,12 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
 
   // ---- invoice editor modal (new + edit) ----
   async function openInvoiceModal(id) {
-    const [companies, customers, items, settings] = await Promise.all([
+    const [companies, customers, items, settings, invCFields] = await Promise.all([
       api('api_invoicing_companies_list'),
       api('api_invoicing_customers_list'),
       api('api_invoicing_items_list'),
-      api('api_invoicing_settings_get')
+      api('api_invoicing_settings_get'),
+      api('api_customFields_list', 'invoice').catch(() => [])   // INV_CUSTOM_FIELDS_v1
     ]);
     if (!companies.length) { toast('Add at least one Company (seller) first.', 'warn'); return navigateTo('invCompanies'); }
     let invoice = null;
@@ -54921,6 +54931,39 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
         _field('Terms', terms),
         _field('Header Discount (₹)', discount)
       ));
+
+      // INV_CUSTOM_FIELDS_v1 — admin-defined extra invoice fields.
+      const cfInputs = {};
+      if (Array.isArray(invCFields) && invCFields.length) {
+        const cfVals = (invoice && invoice.custom_fields && typeof invoice.custom_fields === 'object') ? invoice.custom_fields : {};
+        const cfGrid = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.8rem', marginTop:'1rem' } });
+        invCFields.forEach(f => {
+          const cur = cfVals[f.key];
+          let el;
+          if (f.field_type === 'textarea') {
+            el = h('textarea', { rows:'2', style:{ width:'100%' } }, cur != null ? String(cur) : '');
+          } else if (f.field_type === 'select') {
+            el = h('select', { style:{ width:'100%' } },
+              h('option', { value:'' }, '—'),
+              ...(f.options||[]).map(o => h('option', { value:o, selected: String(cur)===String(o) ? 'selected' : null }, o)));
+          } else if (f.field_type === 'checkbox') {
+            el = h('input', { type:'checkbox', checked: (cur===1||cur==='1'||cur===true) ? 'checked' : null });
+          } else {
+            const t = (f.field_type === 'number') ? 'number' : (f.field_type === 'date' ? 'date' : 'text');
+            el = h('input', { type:t, style:{ width:'100%' } });
+            if (cur != null) el.value = String(cur);
+          }
+          cfInputs[f.key] = { el, type: f.field_type };
+          cfGrid.appendChild(h('div', {},
+            h('label', { style:{ display:'block', fontSize:'.78rem', fontWeight:600, color:'#475569', marginBottom:'.2rem' } },
+              f.label + (f.is_required ? ' *' : '')),
+            el));
+        });
+        body.appendChild(h('div', { style:{ marginTop:'1rem' } },
+          h('div', { style:{ fontWeight:700, fontSize:'.85rem', color:'#334155', marginBottom:'.4rem' } }, '➕ Custom fields'),
+          cfGrid));
+      }
+
       body.appendChild(totalsBox);
       recompute();
 
@@ -54951,6 +54994,14 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
             invoice_date: invDate.value, due_date: dueDate.value || null,
             discount: Number(discount.value)||0,
             notes: notes.value, terms: terms.value,
+            custom_fields: (function(){
+              const o = {};
+              try { Object.keys(cfInputs).forEach(k => {
+                const c = cfInputs[k]; if (!c || !c.el) return;
+                o[k] = (c.type === 'checkbox') ? (c.el.checked ? 1 : 0) : c.el.value;
+              }); } catch(_){}
+              return o;
+            })(),
             lines: lines.map(l => ({
               item_id: l.item_id || null,
               description: l.description, hsn_sac: l.hsn_sac, unit: l.unit || 'PCS',

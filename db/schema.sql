@@ -283,6 +283,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_salary NUMERIC(14,2) DEFAULT 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS joining_date DATE;
 ALTER TABLE remarks ADD COLUMN IF NOT EXISTS status_id INTEGER;
 ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS show_in_list INTEGER NOT NULL DEFAULT 0;
+-- INV_CUSTOM_FIELDS_v1 — custom fields can now target leads OR invoices.
+ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS entity TEXT NOT NULL DEFAULT 'lead';
+ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS custom_fields JSONB;
 
 -- ---- automations --------------------------------------------
 CREATE TABLE IF NOT EXISTS automations (

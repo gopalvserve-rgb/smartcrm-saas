@@ -106,6 +106,10 @@ async function _ensureTables() {
   }
   // PROFORMA_v1 — invoice document type ('tax' | 'proforma'). Idempotent.
   try { await db.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS doc_type TEXT NOT NULL DEFAULT 'tax'`); } catch (_) {}
+  // INV_CUSTOM_FIELDS_v1 — invoice custom fields (JSONB) + entity column on
+  // the shared custom_fields table. Idempotent self-heal for existing tenants.
+  try { await db.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS custom_fields JSONB`); } catch (_) {}
+  try { await db.query(`ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS entity TEXT NOT NULL DEFAULT 'lead'`); } catch (_) {}
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -528,10 +532,10 @@ async function api_invoicing_invoices_save(token, payload) {
           bill_to_address, ship_to_address, place_of_supply,
           company_name, company_gstin, company_state,
           subtotal, discount, cgst, sgst, igst, cess, round_off, total, amount_in_words,
-          status, paid_status, amount_paid, notes, terms, is_reverse_charge, created_by, doc_type
+          status, paid_status, amount_paid, notes, terms, is_reverse_charge, created_by, doc_type, custom_fields
         ) VALUES (
           $1,$2,$3,$4,$5, $6,$7,$8,$9, $10,$11,$12, $13,$14,$15,
-          $16,$17,$18,$19,$20,$21,$22,$23,$24, $25,$26,$27,$28,$29,$30,$31,$32
+          $16,$17,$18,$19,$20,$21,$22,$23,$24, $25,$26,$27,$28,$29,$30,$31,$32,$33
         ) RETURNING id
       `, [
         invoiceNo, payload.invoice_date || new Date().toISOString().slice(0,10), payload.due_date || null,
@@ -549,7 +553,8 @@ async function api_invoicing_invoices_save(token, payload) {
         s(payload.notes || company.default_notes || settings.default_notes || ''),
         s(payload.terms || company.default_terms || settings.default_terms || ''),
         payload.is_reverse_charge ? 1 : 0,
-        user.id, docType
+        user.id, docType,
+        (payload.custom_fields && typeof payload.custom_fields === 'object') ? JSON.stringify(payload.custom_fields) : null
       ]);
       id = ins.rows[0].id;
     }
@@ -564,8 +569,8 @@ async function api_invoicing_invoices_save(token, payload) {
           bill_to_address=$8, ship_to_address=$9, place_of_supply=$10,
           subtotal=$11, discount=$12, cgst=$13, sgst=$14, igst=$15, cess=$16,
           round_off=$17, total=$18, amount_in_words=$19,
-          notes=$20, terms=$21, is_reverse_charge=$22, updated_at=NOW()
-        WHERE id=$23
+          notes=$20, terms=$21, is_reverse_charge=$22, custom_fields=$23, updated_at=NOW()
+        WHERE id=$24
       `, [
         payload.invoice_date || new Date().toISOString().slice(0,10), payload.due_date || null,
         payload.customer_id ? Number(payload.customer_id) : null,
@@ -578,6 +583,7 @@ async function api_invoicing_invoices_save(token, payload) {
         subtotal, discount, cgst, sgst, igst, cess, roundOff, total, _amountInWords(total),
         s(payload.notes || ''), s(payload.terms || ''),
         payload.is_reverse_charge ? 1 : 0,
+        (payload.custom_fields && typeof payload.custom_fields === 'object') ? JSON.stringify(payload.custom_fields) : null,
         id
       ]);
     }
