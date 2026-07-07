@@ -16814,10 +16814,17 @@ VIEWS.whatsbot = async (view) => {
     { id: 'campaigns', label: '📣 Campaigns' },
     { id: 'chat',      label: '💭 Chat' },
     { id: 'assign',    label: '👥 Auto-assign' },
-    { id: 'activity',  label: '📑 Activity Log' }
+    { id: 'activity',  label: '📑 Activity Log' },
+    /* WA_CATALOGUE_v1 (2026-07-06) — Vserve-gated at render time */
+    { id: 'catalogue', label: '📚 Catalogue' }
   ];
+  /* WA_CATALOGUE_v1 — hide Catalogue tab unless the tenant flag is set */
+  const _catFlag = (window.CRM && window.CRM.brand && window.CRM.brand.WA_CATALOGUE_ENABLED)
+                || (window.CRM && window.CRM.cfg   && window.CRM.cfg.WA_CATALOGUE_ENABLED)
+                || (window.APP && window.APP.brand && window.APP.brand.WA_CATALOGUE_ENABLED);
+  const _visibleTabs = tabs.filter(t => t.id !== 'catalogue' || String(_catFlag || '') === '1');
   const nav = h('div', { class: 'subtabs' },
-    ...tabs.map(t => h('button', { class: 'subtab', 'data-wbtab': t.id, onclick: () => showWbTab(t.id) }, t.label))
+    ..._visibleTabs.map(t => h('button', { class: 'subtab', 'data-wbtab': t.id, onclick: () => showWbTab(t.id) }, t.label))
   );
   view.appendChild(nav);
   view.appendChild(h('div', { id: 'wb-body' }));
@@ -16847,6 +16854,15 @@ async function showWbTab(id) {
     if (id === 'chat')      body.replaceChildren(await wbChat());
     if (id === 'assign')    body.replaceChildren(await wbAssignSettings());
     if (id === 'activity')  body.replaceChildren(await wbActivity());
+    if (id === 'catalogue') {
+      /* WA_CATALOGUE_v1 — render catalogue library into wb-body */
+      body.innerHTML = '';
+      if (window.WA_CATALOGUE && typeof window.WA_CATALOGUE.render === 'function') {
+        window.WA_CATALOGUE.render(body);
+      } else {
+        body.appendChild(h('div', { class: 'muted', style: { padding: '20px' } }, 'Catalogue not available on this tenant.'));
+      }
+    }
     location.hash = '#/whatsbot/' + id;
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
 }
