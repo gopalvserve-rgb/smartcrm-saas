@@ -2412,6 +2412,9 @@ async function api_wb_campaigns_create(token, payload) {
     leads = ld.rows;
   } else {
     const all = await db.getAll('leads');
+    /* WA_CAMPAIGN_DATE_FILTER_v1 (2026-07-06) — Created from / to date range */
+    const _fromMs = filter.created_from ? new Date(filter.created_from + 'T00:00:00').getTime() : null;
+    const _toMs   = filter.created_to   ? new Date(filter.created_to   + 'T23:59:59').getTime() : null;
     leads = all.filter(l => {
       if (filter.status_id && Number(l.status_id) !== Number(filter.status_id)) return false;
       if (filter.source && l.source !== filter.source) return false;
@@ -2419,6 +2422,11 @@ async function api_wb_campaigns_create(token, payload) {
       if (filter.tag) {
         const tags = String(l.tags || '').toLowerCase().split(',').map(s => s.trim());
         if (!tags.includes(String(filter.tag).toLowerCase())) return false;
+      }
+      if (_fromMs || _toMs) {
+        const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
+        if (_fromMs && ts < _fromMs) return false;
+        if (_toMs   && ts > _toMs)   return false;
       }
       return !!l.phone;
     });
@@ -2432,9 +2440,20 @@ async function api_wb_campaigns_create(token, payload) {
     variables_json: JSON.stringify(p.variables || []),
     image_url: p.image_url || null,
     filter_json: JSON.stringify(filter),
-    scheduled_at: p.scheduled_at || null,
-    send_now: p.send_now ? 1 : 0,
-    status: p.send_now ? 'queued' : (p.scheduled_at ? 'queued' : 'draft'),
+    /* WA_CAMPAIGN_SCHED_FIX_v1 (2026-07-06) — scheduled_at is the source of
+     * truth. If it's set AND in the future, we honor the schedule (send_now=0).
+     * If it's empty OR already in the past, send immediately (send_now=1). */
+    scheduled_at: (function () {
+      if (!p.scheduled_at) return null;
+      const ts = new Date(p.scheduled_at).getTime();
+      return isNaN(ts) || ts <= Date.now() ? null : p.scheduled_at;
+    })(),
+    send_now: (function () {
+      if (!p.scheduled_at) return 1;
+      const ts = new Date(p.scheduled_at).getTime();
+      return isNaN(ts) || ts <= Date.now() ? 1 : 0;
+    })(),
+    status: 'queued',
     recipients_total: leads.length,
     recipients_sent: 0, recipients_failed: 0,
     recipients_delivered: 0, recipients_read: 0,
