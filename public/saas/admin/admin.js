@@ -5231,7 +5231,18 @@ VIEWS.transactions = async (view) => {
   backfillBtn.onclick = async () => {
     if (!confirm('Backfill transactions from this month\'s paid invoices (with GST)? Already-recorded invoices are skipped.')) return;
     backfillBtn.disabled = true; backfillBtn.textContent = 'Backfilling…';
-    try { const r = await api('api_saas_txn_backfill', {}); toast('Backfilled ' + r.inserted + ' of ' + r.scanned + ' invoice(s)', 'ok'); reload(); }
+    try {
+      const r = await api('api_saas_txn_backfill', {});
+      let msg = 'Inserted ' + r.inserted + ' transaction(s). ';
+      msg += r.tenants_in_range + ' tenant(s) this month';
+      if (r.already_had_txn) msg += ', ' + r.already_had_txn + ' already had one';
+      if (r.demo_skipped) msg += ', ' + r.demo_skipped + ' demo skipped';
+      if (r.deleted_skipped) msg += ', ' + r.deleted_skipped + ' deleted skipped';
+      if (r.failed) msg += '. FAILED ' + r.failed + ': ' + (r.errors || []).join(' | ');
+      toast(msg, r.failed ? 'err' : 'ok');
+      console.log('[txn backfill]', r);
+      reload();
+    }
     catch (e) { toast(e.message, 'err'); }
     backfillBtn.disabled = false; backfillBtn.textContent = '↺ Backfill this month';
   };

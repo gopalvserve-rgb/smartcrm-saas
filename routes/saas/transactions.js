@@ -32,7 +32,8 @@ async function recordTransaction(row) {
        row.transaction_mode || null, row.transaction_id || null, row.txn_date || null,
        row.notes || null, row.invoice_id || null, row.created_by || null]
     );
-  } catch (e) { console.warn('[txn] record failed:', e.message); }
+    return { ok: true };
+  } catch (e) { console.warn('[txn] record failed:', e.message); return { ok: false, error: e.message }; }
 }
 
 async function api_saas_txn_list(token, filters) {
@@ -100,41 +101,66 @@ async function api_saas_txn_backfill(token, opts) {
   const now = new Date();
   const from = o.from ? new Date(o.from) : new Date(now.getFullYear(), now.getMonth(), 1);
   const to   = o.to   ? new Date(o.to)   : new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  // One transaction per NON-DEMO tenant created in range that has billing and
-  // no existing transaction. Amount from the tenant billing, else its latest
-  // invoice. Works regardless of whether the invoice is marked paid.
+  // Every real (non-deleted) tenant whose signup OR payment falls in the range and
+  // that has no transaction yet. Amount from tenant billing, else its latest invoice.
   const ten = await control.query(
-    `SELECT t.id, t.total_amount_inr, t.sale_amount_inr, t.gst_amount_inr,
+    `SELECT t.id, t.slug, t.org_name, t.tenant_type, t.status,
+            t.total_amount_inr, t.sale_amount_inr, t.gst_amount_inr,
             t.transaction_mode, t.transaction_id, t.transaction_date, t.created_at,
             (SELECT i.total_inr    FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_total,
             (SELECT i.tax_inr      FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_tax,
             (SELECT i.subtotal_inr FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_sub,
             (SELECT i.id           FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_id
        FROM tenants t
-      WHERE COALESCE(t.tenant_type, 'live') <> 'demo'
-        AND t.created_at >= $1 AND t.created_at < $2
+      WHERE COALESCE(t.status,'') <> 'deleted'
+        AND COALESCE(t.tenant_type, 'live') <> 'demo'
+        AND ( (t.created_at >= $1 AND t.created_at < $2)
+           OR (t.transaction_date >= $1 AND t.transaction_date < $2) )
         AND t.id NOT IN (SELECT tenant_id FROM transactions WHERE tenant_id IS NOT NULL)
       ORDER BY t.created_at ASC`,
     [from.toISOString(), to.toISOString()]
   );
-  let inserted = 0, skipped = 0;
+  // Diagnostics: how many tenants exist in range regardless of dedup, and how many already have a txn.
+  const diag = await control.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM tenants t WHERE COALESCE(t.status,'')<>'deleted' AND COALESCE(t.tenant_type,'live')<>'demo'
+          AND ((t.created_at>=$1 AND t.created_at<$2) OR (t.transaction_date>=$1 AND t.transaction_date<$2))) AS tenants_in_range,
+       (SELECT COUNT(*)::int FROM tenants t WHERE ((t.created_at>=$1 AND t.created_at<$2) OR (t.transaction_date>=$1 AND t.transaction_date<$2))
+          AND COALESCE(t.tenant_type,'live')='demo') AS demo_in_range,
+       (SELECT COUNT(*)::int FROM tenants t WHERE COALESCE(t.status,'')='deleted'
+          AND ((t.created_at>=$1 AND t.created_at<$2) OR (t.transaction_date>=$1 AND t.transaction_date<$2))) AS deleted_in_range,
+       (SELECT COUNT(DISTINCT tx.tenant_id)::int FROM transactions tx JOIN tenants t ON t.id=tx.tenant_id
+          WHERE ((t.created_at>=$1 AND t.created_at<$2) OR (t.transaction_date>=$1 AND t.transaction_date<$2))) AS already_have_txn`,
+    [from.toISOString(), to.toISOString()]
+  );
+  let inserted = 0, failed = 0; const errors = []; const done = [];
   for (const r of ten.rows) {
     const total = (Number(r.total_amount_inr) > 0) ? Number(r.total_amount_inr) : (Number(r.inv_total) || 0);
-    // Include EVERY July tenant — even 0-amount ones (admin can edit the amount later).
     const gst = (Number(r.gst_amount_inr) > 0) ? Number(r.gst_amount_inr) : (Number(r.inv_tax) || 0);
     const sale = (Number(r.sale_amount_inr) > 0) ? Number(r.sale_amount_inr)
                : (Number(r.inv_sub) > 0 ? Number(r.inv_sub) : Math.max(0, total - gst));
-    await recordTransaction({
+    const res = await recordTransaction({
       tenant_id: r.id, type: 'auto', source: 'backfill',
       amount_inr: total, sale_amount_inr: sale, gst_amount_inr: gst,
       gst_mode: (gst > 0 ? 'gst' : 'no_gst'),
       transaction_mode: r.transaction_mode || null, transaction_id: r.transaction_id || null,
       txn_date: (r.transaction_date || r.created_at) ? String(r.transaction_date || r.created_at).slice(0, 10) : null,
-      invoice_id: r.inv_id || null, notes: 'Backfill · signup'
+      invoice_id: r.inv_id || null, notes: 'Backfill \u00b7 signup'
     });
-    inserted++;
+    if (res && res.ok) { inserted++; done.push({ slug: r.slug, org: r.org_name, amount: total }); }
+    else { failed++; if (errors.length < 3) errors.push((r.slug || r.id) + ': ' + (res && res.error || 'unknown')); }
   }
-  return { ok: true, inserted, scanned: ten.rows.length, skipped, from: from.toISOString(), to: to.toISOString() };
+  const d = diag.rows[0] || {};
+  return {
+    ok: true, inserted, failed, errors,
+    scanned: ten.rows.length,
+    tenants_in_range: d.tenants_in_range || 0,
+    demo_skipped: d.demo_in_range || 0,
+    deleted_skipped: d.deleted_in_range || 0,
+    already_had_txn: d.already_have_txn || 0,
+    from: from.toISOString(), to: to.toISOString(),
+    sample: done.slice(0, 20)
+  };
 }
 async function api_saas_txn_update(token, payload) {
   const me = await requireFullAdmin(token);
