@@ -13,8 +13,15 @@
   'use strict';
   if (window.WA_CATALOGUE) return; // idempotent
 
-  const api = window.api;
-  const toast = window.toast || (msg => alert(msg));
+  /* WA_CATALOGUE_v1 defensive access (2026-07-06) — capturing window.api /
+   * window.toast at IIFE eval time can pin to `undefined` if this bundle is
+   * appended before app.js finishes defining them. Use live getters. */
+  const api = function () { return window.api.apply(this, arguments); };
+  const toast = function (msg, kind) {
+    if (typeof window.toast === 'function') return window.toast(msg, kind);
+    if (typeof window.tost === 'function')  return window.tost(msg, kind);
+    return alert(msg);
+  };
   const h = window.h || function (tag, attrs, ...kids) {
     const el = document.createElement(tag);
     if (attrs) for (const k in attrs) {
