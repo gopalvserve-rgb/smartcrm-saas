@@ -128,4 +128,26 @@ async function api_saas_txn_backfill(token, opts) {
   return { ok: true, inserted, scanned: inv.rows.length, from: from.toISOString(), to: to.toISOString() };
 }
 
-module.exports = { recordTransaction, api_saas_txn_list, api_saas_txn_create, api_saas_txn_delete, api_saas_txn_backfill };
+async function api_saas_txn_update(token, payload) {
+  const me = await requireFullAdmin(token);
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  const ex = await control.query('SELECT * FROM transactions WHERE id = $1', [Number(p.id)]);
+  if (!ex.rows.length) throw new Error('Transaction not found');
+  const cur = ex.rows[0];
+  const amt = (p.amount_inr != null && p.amount_inr !== '') ? Number(p.amount_inr) : Number(cur.amount_inr);
+  const gstMode = p.gst_mode || cur.gst_mode || 'no_gst';
+  const sp = _split(gstMode, amt);
+  const data = {
+    amount_inr: sp.amount_inr, sale_amount_inr: sp.sale_amount_inr, gst_amount_inr: sp.gst_amount_inr, gst_mode: sp.gst_mode,
+    transaction_mode: p.transaction_mode !== undefined ? (p.transaction_mode || null) : cur.transaction_mode,
+    transaction_id:   p.transaction_id   !== undefined ? (p.transaction_id   || null) : cur.transaction_id,
+    txn_date:         p.txn_date          !== undefined ? (p.txn_date          || null) : cur.txn_date,
+    notes:            p.notes             !== undefined ? (p.notes             || null) : cur.notes
+  };
+  if (p.tenant_id) data.tenant_id = Number(p.tenant_id);
+  await control.update('transactions', Number(p.id), data);
+  return { ok: true, split: sp };
+}
+
+module.exports = { recordTransaction, api_saas_txn_list, api_saas_txn_create, api_saas_txn_delete, api_saas_txn_backfill, api_saas_txn_update };

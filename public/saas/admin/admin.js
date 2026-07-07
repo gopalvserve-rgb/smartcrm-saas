@@ -5259,7 +5259,7 @@ VIEWS.transactions = async (view) => {
     const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
     const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
     tblHost.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '820px' } },
-      h('thead', {}, h('tr', {}, th('Date'), th('Tenant'), th('Type'), th('Amount'), th('Sale'), th('GST'), th('Mode'), th('Txn ID'), th(''))),
+      h('thead', {}, h('tr', {}, th('Date'), th('Tenant'), th('Type'), th('Amount'), th('Sale'), th('GST'), th('Mode'), th('Txn ID'), th('Remarks'), th(''))),
       h('tbody', {}, ...rows.map(r => h('tr', {},
         td(fmtDate(r.txn_date || r.created_at), { whiteSpace: 'nowrap' }),
         td(r.org_name || ('#' + (r.tenant_id || '—'))),
@@ -5269,7 +5269,10 @@ VIEWS.transactions = async (view) => {
         td(_inr(r.gst_amount_inr), { color: '#0891b2' }),
         td(r.transaction_mode || '—'),
         td(r.transaction_id || '—'),
-        td(r.type === 'manual' ? h('span', { style: { cursor: 'pointer', color: '#dc2626' }, title: 'Delete', onclick: async () => { if (!confirm('Delete this manual transaction?')) return; await api('api_saas_txn_delete', r.id); reload(); } }, '🗑') : null)
+        td(r.notes || '—', { color: '#475569', maxWidth: '220px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+        td(h('div', { style: { display: 'flex', gap: '10px' } },
+          h('span', { style: { cursor: 'pointer', color: '#4f46e5' }, title: 'Edit / add remarks', onclick: () => _openTxnCreateModal(tenants, reload, r) }, '✏️'),
+          r.type === 'manual' ? h('span', { style: { cursor: 'pointer', color: '#dc2626' }, title: 'Delete', onclick: async () => { if (!confirm('Delete this manual transaction?')) return; await api('api_saas_txn_delete', r.id); reload(); } }, '🗑') : null))
       )))
     )));
     pager.innerHTML = '';
@@ -5282,7 +5285,8 @@ VIEWS.transactions = async (view) => {
   reload();
 };
 
-function _openTxnCreateModal(tenants, onDone) {
+function _openTxnCreateModal(tenants, onDone, existing) {
+  existing = existing || null;
   const m = h('div', { class: 'modal-bd' }); const card = h('div', { class: 'modal', style: { maxWidth: '480px' } }); m.appendChild(card); document.body.appendChild(m);
   const _inr = v => '₹' + Number(v || 0).toLocaleString('en-IN');
   const tenSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— choose tenant —'), ...(tenants || []).map(t => h('option', { value: String(t.id) }, (t.org_name || t.slug))));
@@ -5291,21 +5295,37 @@ function _openTxnCreateModal(tenants, onDone) {
   const modeSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— mode —'), ...['UPI', 'Bank transfer', 'Card', 'Cash', 'Cheque', 'Gateway', 'Other'].map(x => h('option', { value: x.toLowerCase().replace(' ', '_') }, x)));
   const idInp = h('input', { type: 'text', placeholder: 'Transaction ID / ref (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
   const dateInp = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10), style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const notesInp = h('textarea', { rows: '2', placeholder: 'Remarks / notes (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontFamily: 'inherit' } });
   const split = h('div', { style: { fontSize: '.82rem', color: '#334155', marginTop: '4px' } });
   const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
   function calc() { const t = Number(amtInp.value); if (!isFinite(t) || t <= 0) { split.textContent = ''; return; } if (gstSel.value === 'gst') { const s = Math.round((t / 1.18) * 100) / 100, g = Math.round((t - s) * 100) / 100; split.innerHTML = 'Sale: <b>' + _inr(s) + '</b> · GST 18%: <b style="color:#0891b2">' + _inr(g) + '</b>'; } else split.innerHTML = 'No GST — full ' + _inr(t) + ' is the sale amount.'; }
-  gstSel.onchange = calc; amtInp.oninput = calc; calc();
-  const save = h('button', { class: 'btn primary' }, 'Save transaction');
+  gstSel.onchange = calc; amtInp.oninput = calc;
+  if (existing) {
+    tenSel.value = String(existing.tenant_id || '');
+    gstSel.value = (existing.gst_mode === 'gst' || existing.gst_mode === 'with_gst') ? 'gst' : 'no_gst';
+    amtInp.value = existing.amount_inr != null ? existing.amount_inr : '';
+    modeSel.value = existing.transaction_mode || '';
+    idInp.value = existing.transaction_id || '';
+    if (existing.txn_date) { try { dateInp.value = String(existing.txn_date).slice(0, 10); } catch (_) {} }
+    notesInp.value = existing.notes || '';
+  }
+  calc();
+  const save = h('button', { class: 'btn primary' }, existing ? 'Update transaction' : 'Save transaction');
   save.onclick = async () => {
     if (!tenSel.value) { out.innerHTML = '<span style="color:#dc2626">Choose a tenant</span>'; return; }
     if (!(Number(amtInp.value) > 0)) { out.innerHTML = '<span style="color:#dc2626">Enter a valid amount</span>'; return; }
     save.disabled = true; save.textContent = 'Saving…';
-    try { await api('api_saas_txn_create', { tenant_id: Number(tenSel.value), gst_mode: gstSel.value, amount_inr: Number(amtInp.value), transaction_mode: modeSel.value || null, transaction_id: idInp.value.trim() || null, txn_date: dateInp.value || null }); m.remove(); if (onDone) onDone(); }
-    catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; save.disabled = false; save.textContent = 'Save transaction'; }
+    const body = { tenant_id: Number(tenSel.value), gst_mode: gstSel.value, amount_inr: Number(amtInp.value), transaction_mode: modeSel.value || null, transaction_id: idInp.value.trim() || null, txn_date: dateInp.value || null, notes: notesInp.value.trim() || null };
+    try {
+      if (existing) { body.id = existing.id; await api('api_saas_txn_update', body); }
+      else { await api('api_saas_txn_create', body); }
+      m.remove(); if (onDone) onDone();
+    }
+    catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; save.disabled = false; save.textContent = existing ? 'Update transaction' : 'Save transaction'; }
   };
   const fl = (lbl, el) => h('div', { style: { marginBottom: '8px' } }, h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600', display: 'block', marginBottom: '2px' } }, lbl), el);
-  card.appendChild(h('h3', { style: { marginTop: 0 } }, '+ Manual transaction'));
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, existing ? '✏️ Edit transaction' : '+ Manual transaction'));
   card.appendChild(fl('Tenant *', tenSel)); card.appendChild(fl('GST', gstSel)); card.appendChild(fl('Amount (₹) *', amtInp)); card.appendChild(split);
-  card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(out);
+  card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(fl('Remarks', notesInp)); card.appendChild(out);
   card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), save));
 }
