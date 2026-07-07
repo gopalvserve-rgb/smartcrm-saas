@@ -16818,14 +16818,31 @@ VIEWS.whatsbot = async (view) => {
     /* WA_CATALOGUE_v1 (2026-07-06) — Vserve-gated at render time */
     { id: 'catalogue', label: '📚 Catalogue' }
   ];
-  /* WA_CATALOGUE_v1 — hide Catalogue tab unless the tenant flag is set */
-  const _catFlag = (window.CRM && window.CRM.brand && window.CRM.brand.WA_CATALOGUE_ENABLED)
-                || (window.CRM && window.CRM.cfg   && window.CRM.cfg.WA_CATALOGUE_ENABLED)
-                || (window.APP && window.APP.brand && window.APP.brand.WA_CATALOGUE_ENABLED);
-  const _visibleTabs = tabs.filter(t => t.id !== 'catalogue' || String(_catFlag || '') === '1');
+  /* WA_CATALOGUE_v1 (2026-07-06) — CRM.brand doesn't carry WA_CATALOGUE_ENABLED,
+   * so the initial paint hides the tab. Show all tabs first, then flip the
+   * Catalogue tab visible/hidden after an explicit config fetch. Vserve
+   * has the flag=1 auto-set at server boot. */
   const nav = h('div', { class: 'subtabs' },
-    ..._visibleTabs.map(t => h('button', { class: 'subtab', 'data-wbtab': t.id, onclick: () => showWbTab(t.id) }, t.label))
+    ...tabs.map(t => h('button', {
+      class: 'subtab' + (t.id === 'catalogue' ? ' wacat-tab-hidden' : ''),
+      style: t.id === 'catalogue' ? { display: 'none' } : {},
+      'data-wbtab': t.id,
+      onclick: () => showWbTab(t.id)
+    }, t.label))
   );
+  /* Async config fetch — flip the Catalogue tab in when flag is on. */
+  (async () => {
+    try {
+      /* api_admin_getConfig(_, keyString) returns { key, value } when the key is
+       * in PUBLIC_READ_KEYS. Pass the KEY as a string, not an array. */
+      const cfg = await api('api_admin_getConfig', 'WA_CATALOGUE_ENABLED').catch(() => null);
+      const v = cfg && cfg.value;
+      if (v === '1' || v === 1 || v === true) {
+        const btn = nav.querySelector('.subtab.wacat-tab-hidden');
+        if (btn) { btn.style.display = ''; btn.classList.remove('wacat-tab-hidden'); }
+      }
+    } catch (_) {}
+  })();
   view.appendChild(nav);
   view.appendChild(h('div', { id: 'wb-body' }));
   const startTab = (location.hash.match(/whatsbot\/([a-z]+)/i) || [])[1] || 'connect';
