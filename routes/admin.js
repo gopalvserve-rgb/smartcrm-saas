@@ -428,7 +428,10 @@ async function api_admin_getConfig(token, maybeKey) {
     'QUOTATION_PRODUCT_IMAGE_SIZE',
     'COMPANY_NAME', 'COMPANY_LOGO_URL', 'COMPANY_GST',
     'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
-    'BRAND_PRIMARY_COLOR'
+    'BRAND_PRIMARY_COLOR',
+    /* WA_CATALOGUE_v1 — feature flag readable by any authenticated user
+     * so the WhatsApp page can show/hide the Catalogue sub-tab. */
+    'WA_CATALOGUE_ENABLED'
   ]);
   const keyArg = (typeof maybeKey === 'string' && maybeKey)
     ? maybeKey
