@@ -16830,16 +16830,25 @@ VIEWS.whatsbot = async (view) => {
       onclick: () => showWbTab(t.id)
     }, t.label))
   );
-  /* Async config fetch — flip the Catalogue tab in when flag is on. */
+  /* WA_CATALOGUE_v1 slug fallback (2026-07-06) — server-side auto-enable
+   * never flipped the flag on Vserve (getConfig returns value=''), so the
+   * flag-based gate always hid the tab. Add slug check: on tenant "vserve"
+   * the tab is always visible and we self-heal the config for next time. */
   (async () => {
     try {
-      /* api_admin_getConfig(_, keyString) returns { key, value } when the key is
-       * in PUBLIC_READ_KEYS. Pass the KEY as a string, not an array. */
-      const cfg = await api('api_admin_getConfig', 'WA_CATALOGUE_ENABLED').catch(() => null);
-      const v = cfg && cfg.value;
-      if (v === '1' || v === 1 || v === true) {
+      const slug = (location.pathname.match(/^\/t\/([^/]+)/) || [])[1] || '';
+      let show = slug === 'vserve';
+      if (!show) {
+        const cfg = await api('api_admin_getConfig', 'WA_CATALOGUE_ENABLED').catch(() => null);
+        const v = cfg && cfg.value;
+        show = (v === '1' || v === 1 || v === true);
+      }
+      if (show) {
         const btn = nav.querySelector('.subtab.wacat-tab-hidden');
         if (btn) { btn.style.display = ''; btn.classList.remove('wacat-tab-hidden'); }
+        if (slug === 'vserve') {
+          api('api_admin_setConfig', { WA_CATALOGUE_ENABLED: '1' }).catch(() => {});
+        }
       }
     } catch (_) {}
   })();
