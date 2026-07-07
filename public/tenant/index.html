@@ -209,7 +209,7 @@
           // (config flag / installed pack) at render time, so loading them here
           // simply restores their prior rollout behaviour. Keep all of these.
           var wcatJs = document.createElement('script');     // WA_CATALOGUE_v1 (2026-07-06) — WA Catalogue
-          wcatJs.src = 'waCatalogue.js?v=2026-07-06-tab-only-v2'; wcatJs.defer = true;
+          wcatJs.src = 'waCatalogue.js?v=2026-07-06-defensive-api'; wcatJs.defer = true;
           document.body.appendChild(wcatJs);
           var st = document.createElement('script');          // STU360 — Student 360 (Education pack)
           st.src = 'student360.js?v=2026-07-06-markpaid-fieldfix'; st.defer = true;
