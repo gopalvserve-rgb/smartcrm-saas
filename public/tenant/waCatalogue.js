@@ -574,8 +574,8 @@
   // ── Public API ────────────────────────────────────────────────────────────
   window.WA_CATALOGUE = { render: renderPage, openPicker: openPicker };
 
-  // Self-register with the SPA router so #/wacatalogue navigates here.
-  // Also add a sidebar entry lazily once the sidebar is ready.
+  /* WA_CATALOGUE_v1 — no sidebar entry. Access is via WhatsApp page sub-tab
+   * (#/whatsbot/catalogue). Keep VIEWS + hashchange for direct-URL fallback. */
   function _selfRegister() {
     try {
       if (window.VIEWS && !window.VIEWS.wacatalogue) {
@@ -585,9 +585,8 @@
         };
       }
     } catch (_) {}
-    _tryAddSidebar();
   }
-  function _tryAddSidebar() {
+  function _tryAddSidebar_DISABLED() {
     try {
       // Only render for tenants that have the flag on.
       const flag = (window.CRM && window.CRM.brand && window.CRM.brand.WA_CATALOGUE_ENABLED)
