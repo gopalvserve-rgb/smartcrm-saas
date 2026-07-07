@@ -41602,11 +41602,18 @@ function _initFloatingChat() {
   // ---- Drawer panel (initially hidden) ----
   const drawer = document.createElement('div');
   drawer.id = 'chat-drawer';
+  /* WA_INBOX_IOS_FIX_v1 (2026-07-06) — use 100dvh (dynamic viewport height)
+   * so the drawer respects iOS Safari/Chrome's dynamic address bar and the
+   * composer stays reachable at the bottom. Safe-area padding accounts for
+   * the iPhone home indicator on notched devices. */
   drawer.style.cssText = `
-    position: fixed; top: 0; right: -420px; width: min(420px, 100vw); height: 100vh;
+    position: fixed; top: 0; right: -420px; width: min(420px, 100vw);
+    height: 100vh; height: 100dvh;
+    padding-bottom: env(safe-area-inset-bottom);
     background: #fff; box-shadow: -2px 0 20px rgba(15,23,42,.18);
     z-index: 9990; transition: right .25s ease;
-    display: flex; flex-direction: column;
+    display: flex; flex-direction: column; overflow: hidden;
+    box-sizing: border-box;
   `;
   drawer.innerHTML = `
     <div style="padding: .85rem 1rem; background: linear-gradient(135deg, #25d366 0%, #128c7e 100%); color: #fff; display: flex; align-items: center; gap: .55rem;">
@@ -41729,7 +41736,7 @@ function _initFloatingChat() {
           <div id="chat-dock-assign-slot" style="display: flex; align-items: center; flex: 1 1 45%; min-width: 100px;"></div>
         </div>
       </div>
-      <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
+      <div id="chat-thread-msgs" style="flex: 1 1 auto; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 0;"></div>
       <div id="chat-thread-preview" style="padding: .35rem .55rem; display: none; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: .8rem;"></div>
       <div id="chat-thread-from-row" style="padding: .35rem .55rem; display: none; background: #fafbfc; border-top: 1px solid #e2e8f0; font-size: .78rem; align-items: center; gap: .4rem;">
         <span style="color: #64748b;">Send from:</span>
