@@ -100,34 +100,42 @@ async function api_saas_txn_backfill(token, opts) {
   const now = new Date();
   const from = o.from ? new Date(o.from) : new Date(now.getFullYear(), now.getMonth(), 1);
   const to   = o.to   ? new Date(o.to)   : new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const inv = await control.query(
-    `SELECT i.id, i.tenant_id, i.number, i.subtotal_inr, i.tax_inr, i.total_inr, i.paid_at, i.updated_at
-       FROM invoices i LEFT JOIN tenants t ON t.id = i.tenant_id
-      WHERE i.status = 'paid'
-        AND COALESCE(i.paid_at, i.updated_at) >= $1
-        AND COALESCE(i.paid_at, i.updated_at) <  $2
-        AND COALESCE(t.tenant_type, 'live') <> 'demo'
-        AND i.id NOT IN (SELECT invoice_id FROM transactions WHERE invoice_id IS NOT NULL)
-      ORDER BY COALESCE(i.paid_at, i.updated_at) ASC`,
+  // One transaction per NON-DEMO tenant created in range that has billing and
+  // no existing transaction. Amount from the tenant billing, else its latest
+  // invoice. Works regardless of whether the invoice is marked paid.
+  const ten = await control.query(
+    `SELECT t.id, t.total_amount_inr, t.sale_amount_inr, t.gst_amount_inr,
+            t.transaction_mode, t.transaction_id, t.transaction_date, t.created_at,
+            (SELECT i.total_inr    FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_total,
+            (SELECT i.tax_inr      FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_tax,
+            (SELECT i.subtotal_inr FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_sub,
+            (SELECT i.id           FROM invoices i WHERE i.tenant_id = t.id ORDER BY i.created_at DESC LIMIT 1) AS inv_id
+       FROM tenants t
+      WHERE COALESCE(t.tenant_type, 'live') <> 'demo'
+        AND t.created_at >= $1 AND t.created_at < $2
+        AND t.id NOT IN (SELECT tenant_id FROM transactions WHERE tenant_id IS NOT NULL)
+      ORDER BY t.created_at ASC`,
     [from.toISOString(), to.toISOString()]
   );
-  let inserted = 0;
-  for (const r of inv.rows) {
-    const total = Number(r.total_inr) || 0;
-    const tax = Number(r.tax_inr) || 0;
-    const sub = Number(r.subtotal_inr) != null && Number(r.subtotal_inr) > 0 ? Number(r.subtotal_inr) : Math.max(0, total - tax);
+  let inserted = 0, skipped = 0;
+  for (const r of ten.rows) {
+    const total = (Number(r.total_amount_inr) > 0) ? Number(r.total_amount_inr) : (Number(r.inv_total) || 0);
+    if (!(total > 0)) { skipped++; continue; }
+    const gst = (Number(r.gst_amount_inr) > 0) ? Number(r.gst_amount_inr) : (Number(r.inv_tax) || 0);
+    const sale = (Number(r.sale_amount_inr) > 0) ? Number(r.sale_amount_inr)
+               : (Number(r.inv_sub) > 0 ? Number(r.inv_sub) : Math.max(0, total - gst));
     await recordTransaction({
-      tenant_id: r.tenant_id, type: 'auto', source: 'backfill',
-      amount_inr: total, sale_amount_inr: sub, gst_amount_inr: tax,
-      gst_mode: (tax > 0 ? 'gst' : 'no_gst'),
-      txn_date: (r.paid_at || r.updated_at) ? String(r.paid_at || r.updated_at).slice(0, 10) : null,
-      invoice_id: r.id, notes: 'Backfill · invoice ' + (r.number || r.id)
+      tenant_id: r.id, type: 'auto', source: 'backfill',
+      amount_inr: total, sale_amount_inr: sale, gst_amount_inr: gst,
+      gst_mode: (gst > 0 ? 'gst' : 'no_gst'),
+      transaction_mode: r.transaction_mode || null, transaction_id: r.transaction_id || null,
+      txn_date: (r.transaction_date || r.created_at) ? String(r.transaction_date || r.created_at).slice(0, 10) : null,
+      invoice_id: r.inv_id || null, notes: 'Backfill · signup'
     });
     inserted++;
   }
-  return { ok: true, inserted, scanned: inv.rows.length, from: from.toISOString(), to: to.toISOString() };
+  return { ok: true, inserted, scanned: ten.rows.length, skipped, from: from.toISOString(), to: to.toISOString() };
 }
-
 async function api_saas_txn_update(token, payload) {
   const me = await requireFullAdmin(token);
   const p = payload || {};

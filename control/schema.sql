@@ -274,6 +274,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS idx_transactions_tenant  ON transactions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_type    ON transactions(type);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ; -- SAAS_TXN_EDIT_FIX_v1
 
 -- ============================================================
 -- Cashfree webhook logs — dedicated audit trail for /hook/cashfree
