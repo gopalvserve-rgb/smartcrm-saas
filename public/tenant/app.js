@@ -18766,6 +18766,9 @@ function openCampaignModal(templates) {
   form.appendChild(selectField('assigned_to', 'Filter — assignee', '',
     [{ value: '', label: 'Any' }, ...users.map(u => ({ value: u.id, label: u.name }))]));
   form.appendChild(field('tag', 'Filter — tag', ''));
+  /* WA_CAMPAIGN_DATE_FILTER_v1 (2026-07-06) — Created date range */
+  form.appendChild(field('created_from', 'Filter — Created from', '', { type: 'date' }));
+  form.appendChild(field('created_to',   'Filter — Created to',   '', { type: 'date' }));
 
   // WA_CAMPAIGN_EXCEL_v1 — Direct number upload
   let _campExcelRows = null;
@@ -18824,13 +18827,14 @@ function openCampaignModal(templates) {
   }
   form.querySelector('[name="template_combo"]')?.addEventListener('change', ev => renderVars(ev.target.value));
   // Schedule
-  form.appendChild(field('scheduled_at', 'Scheduled send time (optional)', '', { type: 'datetime-local' }));
-  form.appendChild(h('div', { class: 'f-row' },
-    h('label', {}, 'Send now'),
-    h('label', { class: 'qual-toggle' },
-      h('input', { type: 'checkbox', name: 'send_now', checked: 'checked' }),
-      ' Ignore schedule and send right away')
-  ));
+  /* WA_CAMPAIGN_SCHED_FIX_v1 (2026-07-06) — removed the "Send now" checkbox
+   * that defaulted to CHECKED and overrode any picked schedule. Now the
+   * rule is dead-simple: empty scheduled_at → send immediately, filled →
+   * schedule for that time. Past dates auto-fall-through to "send now" on
+   * the backend. */
+  form.appendChild(field('scheduled_at', '📅 Schedule send time — leave empty to send immediately', '', { type: 'datetime-local' }));
+  form.appendChild(h('div', { class: 'f-row full', style: { fontSize: '.78rem', color: '#64748b', padding: '.2rem .4rem', background: '#f8fafc', borderRadius: '4px', margin: '.2rem 0' } },
+    h('span', {}, '⏱ If you pick a future date/time, the campaign will be queued and sent by the background worker at that time. Otherwise it sends right away.')));
   body.appendChild(form);
   body.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
@@ -18844,7 +18848,9 @@ function openCampaignModal(templates) {
         status_id: form.status_id.value || undefined,
         source: form.source.value || undefined,
         assigned_to: form.assigned_to.value || undefined,
-        tag: form.tag.value || undefined
+        tag: form.tag.value || undefined,
+        created_from: form.created_from.value || undefined,
+        created_to: form.created_to.value || undefined
       };
       const uploaded_rows = (typeof form._getExcelRows === 'function') ? form._getExcelRows() : null;
       try {
@@ -18853,8 +18859,9 @@ function openCampaignModal(templates) {
           template_name: name, template_language: lang || 'en_US',
           variables, filter,
           uploaded_rows: uploaded_rows && uploaded_rows.length ? uploaded_rows : undefined,
-          scheduled_at: form.scheduled_at.value ? new Date(form.scheduled_at.value).toISOString() : null,
-          send_now: form.send_now.checked ? 1 : 0
+          /* WA_CAMPAIGN_SCHED_FIX_v1 — no more send_now checkbox. Backend
+           * derives send-now vs schedule from scheduled_at alone. */
+          scheduled_at: form.scheduled_at.value ? new Date(form.scheduled_at.value).toISOString() : null
         });
         toast(`Campaign created — ${r.recipients} recipients`);
         m.remove();
