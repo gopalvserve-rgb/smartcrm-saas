@@ -2374,6 +2374,68 @@ app.post('/api/wa/upload', _waUpload.single('file'), (req, res) => {
     });
 });
 
+// WA_CATALOGUE_v1 (2026-07-06) — persistent library upload + serve.
+// Files stored per-tenant in wa_catalogue_media BYTEA. Auth'd (only signed-in
+// tenant users can upload / view). Matches the /api/wa/upload pattern so it
+// gets hit BEFORE the catch-all /api/* 404 handler at the end of the file.
+const _waCatUpload = _multer({ storage: _multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+app.post('/api/wa-catalogue-upload', _waCatUpload.single('file'), (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const me = await authUser(token);
+        if (me.role !== 'admin' && me.role !== 'manager') return res.status(403).json({ error: 'Only admin / manager can upload to catalogue' });
+        if (!req.file) return res.status(400).json({ error: 'file required (multipart field "file")' });
+        await tenantDb.query(`CREATE TABLE IF NOT EXISTS wa_catalogue_media (
+          token TEXT PRIMARY KEY, mime TEXT, filename TEXT, size BIGINT, bytes BYTEA,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        const tok = require('crypto').randomBytes(18).toString('hex');
+        await tenantDb.query(
+          `INSERT INTO wa_catalogue_media (token, mime, filename, size, bytes) VALUES ($1,$2,$3,$4,$5)`,
+          [tok, req.file.mimetype || 'application/octet-stream', req.file.originalname || '',
+           req.file.size || 0, req.file.buffer]
+        );
+        const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+        const host  = req.get('host');
+        const url = proto + '://' + host + '/t/' + req.tenantSlug + '/api/wa-catalogue-file/' + tok;
+        return res.json({ ok: true, url, token: tok,
+                          mime_type: req.file.mimetype || 'application/octet-stream',
+                          filename: req.file.originalname || '', size: req.file.size || 0 });
+      } catch (e) {
+        console.error('[wa-catalogue-upload] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'upload failed' });
+      }
+    });
+});
+app.get('/api/wa-catalogue-file/:token', (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const hdrTok = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const authTok = hdrTok || req.query.tok || '';
+        try { await authUser(authTok); } catch (_) { return res.status(401).json({ error: 'auth required' }); }
+        const tok = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
+        if (!tok) return res.status(404).end();
+        const r = await tenantDb.query(`SELECT mime, bytes, filename FROM wa_catalogue_media WHERE token=$1`, [tok]);
+        if (!r.rows.length) return res.status(404).json({ error: 'file not found' });
+        const row = r.rows[0];
+        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        if (row.filename) res.setHeader('Content-Disposition', 'inline; filename="' + row.filename.replace(/["\\]/g, '') + '"');
+        return res.end(row.bytes);
+      } catch (e) {
+        console.error('[wa-catalogue-file] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'read failed' });
+      }
+    });
+});
 // WA_TPL_SAMPLE_STORE_v1 (2026-07-04) — /api/wa-sample was referenced by the
 // template builder (POST to host the header sample) and by whatsbot's
 // _uploadSampleToMeta (GET /api/wa-sample/<token> to read the bytes back), but
