@@ -18785,12 +18785,23 @@ function openCampaignModal(templates) {
   form.appendChild(selectField('template_combo', 'Template *', '',
     [{ value: '', label: '— pick a template —' }, ...tplOpts]));
   // Filter pickers
-  form.appendChild(selectField('status_id', 'Filter — status', '',
-    [{ value: '', label: 'Any status' }, ...statuses.map(s => ({ value: s.id, label: s.name }))]));
-  form.appendChild(selectField('source', 'Filter — source', '',
-    [{ value: '', label: 'Any source' }, ...sources.map(s => ({ value: s.name, label: s.name }))]));
-  form.appendChild(selectField('assigned_to', 'Filter — assignee', '',
-    [{ value: '', label: 'Any' }, ...users.map(u => ({ value: u.id, label: u.name }))]));
+  /* WA_CAMPAIGN_MULTI_v1 (2026-07-06) — status / source / assignee are
+   * multi-select. Native <select multiple> with size for a scrollable list.
+   * Hold Ctrl/Cmd to pick multiple; leave empty to match any. */
+  const _mkMulti = (name, label, opts) => {
+    const wrap = h('div', { class: 'f-row' },
+      h('label', {}, label + ' (multi — Ctrl/Cmd + click, empty = any)'),
+      h('select', { name, multiple: 'multiple', size: Math.min(6, Math.max(3, opts.length)),
+        style: { width: '100%', padding: '.4rem', minHeight: '90px' } },
+        ...opts.map(o => h('option', { value: o.value }, o.label))));
+    return wrap;
+  };
+  form.appendChild(_mkMulti('status_ids', 'Filter — status',
+    statuses.map(s => ({ value: s.id, label: s.name }))));
+  form.appendChild(_mkMulti('sources', 'Filter — source',
+    sources.map(s => ({ value: s.name, label: s.name }))));
+  form.appendChild(_mkMulti('assigned_to_ids', 'Filter — assignee',
+    users.map(u => ({ value: u.id, label: u.name }))));
   form.appendChild(field('tag', 'Filter — tag', ''));
   /* WA_CAMPAIGN_DATE_FILTER_v1 (2026-07-06) — Created date range */
   form.appendChild(field('created_from', 'Filter — Created from', '', { type: 'date' }));
@@ -18870,10 +18881,15 @@ function openCampaignModal(templates) {
       if (!name) { toast('Pick a template', 'err'); return; }
       const variables = [];
       [...form.querySelectorAll('input[name^="cv_"]')].forEach((i, idx) => variables.push({ name: 'V' + (idx + 1), value: i.value }));
+      /* WA_CAMPAIGN_MULTI_v1 — collect selected values from the 3 <select multiple>. */
+      const _mv = (el) => Array.from((el && el.selectedOptions) || []).map(o => o.value).filter(Boolean);
+      const _statusIds = _mv(form.status_ids);
+      const _sources   = _mv(form.sources);
+      const _assignees = _mv(form.assigned_to_ids);
       const filter = {
-        status_id: form.status_id.value || undefined,
-        source: form.source.value || undefined,
-        assigned_to: form.assigned_to.value || undefined,
+        status_ids: _statusIds.length ? _statusIds : undefined,
+        sources:    _sources.length   ? _sources   : undefined,
+        assigned_to_ids: _assignees.length ? _assignees : undefined,
         tag: form.tag.value || undefined,
         created_from: form.created_from.value || undefined,
         created_to: form.created_to.value || undefined
