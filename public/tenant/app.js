@@ -15885,6 +15885,9 @@ async function _aibotSettingsView(currentPhId) {
   const LANG_OPTIONS = [
     { code: 'en', label: 'English' },
     { code: 'hi', label: 'हिन्दी (Hindi)' },
+    /* AIBOT_HINGLISH_v1 (2026-07-06) — Hindi + English casual mix, popular
+     * across India for chat. Backend stores as 'hinglish' in language field. */
+    { code: 'hinglish', label: 'Hinglish (Hindi + English casual mix)' },
     { code: 'mr', label: 'मराठी (Marathi)' },
     { code: 'gu', label: 'ગુજરાતી (Gujarati)' },
     { code: 'ta', label: 'தமிழ் (Tamil)' },
@@ -18806,22 +18809,32 @@ function openCampaignModal(templates) {
   form.appendChild(selectField('template_combo', 'Template *', '',
     [{ value: '', label: '— pick a template —' }, ...tplOpts]));
   // Filter pickers
-  /* WA_CAMPAIGN_MULTI_v1 (2026-07-06) — status / source / assignee are
-   * multi-select. Native <select multiple> with size for a scrollable list.
-   * Hold Ctrl/Cmd to pick multiple; leave empty to match any. */
-  const _mkMulti = (name, label, opts) => {
-    const wrap = h('div', { class: 'f-row' },
-      h('label', {}, label + ' (multi — Ctrl/Cmd + click, empty = any)'),
-      h('select', { name, multiple: 'multiple', size: Math.min(6, Math.max(3, opts.length)),
-        style: { width: '100%', padding: '.4rem', minHeight: '90px' } },
-        ...opts.map(o => h('option', { value: o.value }, o.label))));
+  /* WA_CAMPAIGN_MULTI_v2 (2026-07-06) — checkbox grid multi-select.
+   * Much clearer than native <select multiple> which requires Ctrl/Cmd
+   * and doesn't work well on mobile. Each field gets a scrollable box
+   * of checkboxes; nothing checked = any value matches. */
+  const _mkCheckMulti = (name, label, opts) => {
+    const wrap = h('div', { class: 'f-row full' },
+      h('label', { style: { fontWeight: 600, marginBottom: '.35rem', display: 'block' } },
+        label + ' — tick to include (none ticked = all)'),
+      h('div', {
+        'data-checkmulti': name,
+        style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.4rem',
+                 maxHeight: '140px', overflowY: 'auto', background: '#f8fafc',
+                 display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '.25rem' } },
+        ...opts.map(o => h('label', {
+          style: { display: 'flex', alignItems: 'center', gap: '.35rem', padding: '.25rem .4rem',
+                   background: '#fff', borderRadius: '4px', border: '1px solid #e2e8f0',
+                   cursor: 'pointer', fontSize: '.82rem' } },
+          h('input', { type: 'checkbox', 'data-multi-val': String(o.value) }),
+          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, o.label)))));
     return wrap;
   };
-  form.appendChild(_mkMulti('status_ids', 'Filter — status',
+  form.appendChild(_mkCheckMulti('status_ids', 'Filter — status',
     statuses.map(s => ({ value: s.id, label: s.name }))));
-  form.appendChild(_mkMulti('sources', 'Filter — source',
+  form.appendChild(_mkCheckMulti('sources', 'Filter — source',
     sources.map(s => ({ value: s.name, label: s.name }))));
-  form.appendChild(_mkMulti('assigned_to_ids', 'Filter — assignee',
+  form.appendChild(_mkCheckMulti('assigned_to_ids', 'Filter — assignee',
     users.map(u => ({ value: u.id, label: u.name }))));
   form.appendChild(field('tag', 'Filter — tag', ''));
   /* WA_CAMPAIGN_DATE_FILTER_v1 (2026-07-06) — Created date range */
@@ -18902,11 +18915,17 @@ function openCampaignModal(templates) {
       if (!name) { toast('Pick a template', 'err'); return; }
       const variables = [];
       [...form.querySelectorAll('input[name^="cv_"]')].forEach((i, idx) => variables.push({ name: 'V' + (idx + 1), value: i.value }));
-      /* WA_CAMPAIGN_MULTI_v1 — collect selected values from the 3 <select multiple>. */
-      const _mv = (el) => Array.from((el && el.selectedOptions) || []).map(o => o.value).filter(Boolean);
-      const _statusIds = _mv(form.status_ids);
-      const _sources   = _mv(form.sources);
-      const _assignees = _mv(form.assigned_to_ids);
+      /* WA_CAMPAIGN_MULTI_v2 — collect checked values from checkbox grids. */
+      const _cmv = (name) => {
+        const box = form.querySelector('[data-checkmulti="' + name + '"]');
+        if (!box) return [];
+        return Array.from(box.querySelectorAll('input[type="checkbox"]:checked'))
+          .map(i => i.getAttribute('data-multi-val'))
+          .filter(Boolean);
+      };
+      const _statusIds = _cmv('status_ids');
+      const _sources   = _cmv('sources');
+      const _assignees = _cmv('assigned_to_ids');
       const filter = {
         status_ids: _statusIds.length ? _statusIds : undefined,
         sources:    _sources.length   ? _sources   : undefined,
