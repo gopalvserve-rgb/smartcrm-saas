@@ -1028,12 +1028,18 @@ function _isAfterHours(bh) {
 
 async function _buildPrompt(settings, phone, leadId, inboundText) {
   // Build language hint from the multi-lang setting (e.g. 'en+hi+mr')
-  const LANG_NAMES = { en: 'English', hi: 'Hindi', mr: 'Marathi', gu: 'Gujarati', ta: 'Tamil', te: 'Telugu', bn: 'Bengali', kn: 'Kannada', ml: 'Malayalam', pa: 'Punjabi', ur: 'Urdu', ar: 'Arabic' };
+  // AIBOT_HINGLISH_v2 (2026-07-08) — Hinglish = Hindi in Roman (English) letters.
+  // The code fell back to the raw string 'hinglish' before, and Gemini interpreted
+  // that as Hindi → Devanagari. Now explicit label + hard rule against Devanagari.
+  const LANG_NAMES = { en: 'English', hi: 'Hindi', hinglish: 'Hinglish (Hindi written in Roman/English letters)', mr: 'Marathi', gu: 'Gujarati', ta: 'Tamil', te: 'Telugu', bn: 'Bengali', kn: 'Kannada', ml: 'Malayalam', pa: 'Punjabi', ur: 'Urdu', ar: 'Arabic' };
   const langCodes = String(settings.language || 'en+hi').split(/[+,\s]/).map(x => x.trim()).filter(Boolean);
   const langNames = langCodes.map(c => LANG_NAMES[c] || c);
-  const langInstr = langNames.length === 1
+  const includesHinglish = langCodes.includes('hinglish');
+  const HINGLISH_RULE = `\n\nHINGLISH RULE (STRICT): When you reply in Hinglish, write Hindi words using ENGLISH (Roman/Latin) letters ONLY. Do NOT use Devanagari script (कोई देवनागरी नहीं). Example — CORRECT: "Jaan sakta hu aapko kaunsa product chahiye?" | WRONG: "जान सकता हूँ आपको कौनसा प्रोडक्ट चाहिए?" Keep the tone casual, friendly, mix English words where they naturally fit (e.g. "Aap ka budget kya hai?", "Main aapko demo book kar deta hu").`;
+  let langInstr = langNames.length === 1
     ? `Always reply in ${langNames[0]}.`
     : `Detect the customer's language and reply in the SAME language. Acceptable languages: ${langNames.join(', ')}. If the customer writes in a language outside this list, default to ${langNames[0]}.`;
+  if (includesHinglish) langInstr += HINGLISH_RULE;
 
   const persona = String(settings.system_prompt || '').trim()
     || (`You are ${settings.bot_name || 'an assistant'} for ${settings.business_name || 'this business'}. ` +
