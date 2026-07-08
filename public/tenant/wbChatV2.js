@@ -1070,7 +1070,8 @@
           h('button', { class: 'wbv2-attach-opt',
             style: { display: 'flex', alignItems: 'center', gap: '10px', width: '100%', padding: '10px 12px', background: 'none', border: '0', cursor: 'pointer', fontSize: '13px', textAlign: 'left' },
             onclick: () => {
-              menuBg.remove();
+              // WA_CAT_PICKER_FIX_v1 — variable is `bg`, not `menuBg`; the old ref threw ReferenceError which killed the click handler so the picker never opened.
+              bg.remove();
               if (window.WA_CATALOGUE && typeof window.WA_CATALOGUE.openPicker === 'function') {
                 window.WA_CATALOGUE.openPicker({
                   phone: t.phone,
