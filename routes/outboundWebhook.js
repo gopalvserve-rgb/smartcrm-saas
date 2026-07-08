@@ -429,6 +429,100 @@ async function api_outboundWebhook_retry(token, logId) {
   return { ok: true, success, httpStatus, errorMessage, responseBody };
 }
 
+/* OUTBOUND_WH_BULK_RETRY_v1 (2026-07-08) — resend every FAILED delivery for a
+ * webhook within a date range. Dedupes by (lead_id, url) so we only re-fire
+ * once per unique lead — otherwise a lead that failed 5x would get 5 retries.
+ * Adds a small delay between calls to avoid hammering the receiver. */
+async function api_outboundWebhook_bulkRetry(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  await _ensureSchema();
+  const p = payload || {};
+  const webhookId = Number(p.webhook_id);
+  if (!webhookId) throw new Error('webhook_id required');
+  const webhook = await db.findOneBy('outbound_webhooks', 'id', webhookId);
+  if (!webhook) throw new Error('Webhook not found');
+
+  // Optional date range — defaults to last 7 days if not provided
+  const now = new Date();
+  const defaultFrom = new Date(now.getTime() - 7 * 24 * 3600_000);
+  const from = p.from_date ? new Date(p.from_date) : defaultFrom;
+  const to   = p.to_date   ? new Date(p.to_date)   : new Date(now.getTime() + 24 * 3600_000);
+  if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new Error('Invalid date range');
+
+  // Pull failed rows in range. Keep only the MOST RECENT failure per lead_id
+  // so we retry against the freshest snapshot (headers/body may have changed
+  // between attempts).
+  const q = await db.query(
+    `SELECT DISTINCT ON (COALESCE(lead_id, 0), url) *
+       FROM outbound_webhook_log
+      WHERE webhook_id = $1
+        AND (success = false OR success IS NULL)
+        AND attempted_at >= $2
+        AND attempted_at <= $3
+      ORDER BY COALESCE(lead_id, 0), url, attempted_at DESC
+      LIMIT 2000`,
+    [webhookId, from.toISOString(), to.toISOString()]
+  );
+  const logs = q.rows || [];
+
+  let tried = 0, succeeded = 0, failedAgain = 0, errored = 0;
+  const errors = [];
+  for (const log of logs) {
+    tried++;
+    let httpStatus = 0, responseBody = '', success = false, errorMessage = '';
+    try {
+      let headers = {};
+      try { headers = JSON.parse(log.request_headers || '{}'); } catch (_) {}
+      const method = String(log.method || webhook.method || 'POST').toUpperCase();
+      const isBodyMethod = (method === 'POST' || method === 'PUT' || method === 'PATCH');
+      const ctl = new AbortController();
+      const tmo = setTimeout(() => ctl.abort(), 15000);
+      const r = await fetch(log.url, {
+        method, headers,
+        body: isBodyMethod ? (log.request_body || '') : undefined,
+        signal: ctl.signal
+      });
+      clearTimeout(tmo);
+      httpStatus = r.status;
+      try { responseBody = (await r.text() || '').slice(0, 2000); } catch (_) {}
+      success = r.ok;
+      if (!success) errorMessage = 'HTTP ' + r.status;
+    } catch (e) {
+      errorMessage = (e && e.message) ? e.message : String(e);
+      errored++;
+    }
+    if (success) succeeded++; else if (errorMessage) failedAgain++;
+    if (!success && errors.length < 5) errors.push({ log_id: log.id, lead_id: log.lead_id, err: errorMessage || ('HTTP ' + httpStatus) });
+
+    await db.insert('outbound_webhook_log', {
+      webhook_id: webhook.id,
+      lead_id: log.lead_id || null,
+      url: log.url, method: String(log.method || webhook.method || 'POST').toUpperCase(),
+      request_headers: log.request_headers || '{}',
+      request_body: log.request_body || '',
+      http_status: httpStatus || null,
+      response_body: responseBody,
+      error_message: errorMessage,
+      success,
+      attempted_at: db.nowIso(),
+      retry_count: Number(log.retry_count || 0) + 1
+    });
+
+    // Politeness delay so we don't hammer the receiver — 120ms ≈ ~8 rps
+    await new Promise(r => setTimeout(r, 120));
+  }
+
+  return {
+    ok: true,
+    webhook: webhook.name,
+    from: from.toISOString(),
+    to:   to.toISOString(),
+    tried, succeeded, failedAgain, errored,
+    sample_errors: errors
+  };
+}
+
 
 // OUTBOUND_WH_v2 — return dropdown options so the SPA can render friendly
 // pickers instead of CSV / JSON textareas. Lists sources, statuses, and
@@ -494,5 +588,6 @@ module.exports = {
   api_outboundWebhook_test,
   api_outboundWebhook_logs,
   api_outboundWebhook_filterOptions,
-  api_outboundWebhook_retry
+  api_outboundWebhook_retry,
+  api_outboundWebhook_bulkRetry
 };
