@@ -18883,6 +18883,68 @@ function openCampaignModal(templates) {
   form.appendChild(excelBox);
   form._getExcelRows = () => _campExcelRows;
 
+  /* WA_CAMPAIGN_PASTE_v1 (2026-07-08) — paste-numbers alternative to Excel.
+   * Users can paste up to 1000 phone numbers (newline/comma/space/tab
+   * separated). We normalize each entry, dedup, cap at 1000, and merge
+   * with any Excel rows on submit. */
+  let _campPastedRows = null;
+  const pasteInfo = h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'No numbers pasted. Optional.');
+  const pasteArea = h('textarea', {
+    rows: 6, placeholder: '9876543210\n9123456789, 9988776655\n… paste up to 1000 numbers, one per line or comma-separated',
+    style: { width: '100%', fontFamily: 'monospace', fontSize: '.85rem', padding: '.5rem',
+             border: '1px solid #cbd5e1', borderRadius: '6px', resize: 'vertical', boxSizing: 'border-box' }
+  });
+  function _parsePastedPhones(text) {
+    if (!text) return { rows: [], overflow: 0, invalid: 0 };
+    // Split on any run of separators (newline, comma, semicolon, space, tab, pipe)
+    const tokens = String(text).split(/[\s,;|]+/).map(t => t.trim()).filter(Boolean);
+    const seen = new Set();
+    const rows = [];
+    let invalid = 0;
+    for (const raw of tokens) {
+      // Keep leading + then digits only
+      let digits = String(raw).replace(/[^0-9+]/g, '');
+      if (digits.startsWith('+')) digits = '+' + digits.slice(1).replace(/\D/g,'');
+      else digits = digits.replace(/\D/g,'');
+      // Minimum 8, max 15 to be a plausible phone
+      const check = digits.replace(/^\+/, '');
+      if (check.length < 8 || check.length > 15) { invalid++; continue; }
+      if (seen.has(digits)) continue;
+      seen.add(digits);
+      rows.push({ phone: digits, name: '', var1: '', var2: '', var3: '' });
+    }
+    let overflow = 0;
+    if (rows.length > 1000) { overflow = rows.length - 1000; rows.length = 1000; }
+    return { rows, overflow, invalid };
+  }
+  function _updatePasteInfo() {
+    const { rows, overflow, invalid } = _parsePastedPhones(pasteArea.value);
+    _campPastedRows = rows.length ? rows : null;
+    if (!pasteArea.value.trim()) {
+      pasteInfo.textContent = 'No numbers pasted. Optional.';
+      pasteInfo.style.color = ''; return;
+    }
+    const parts = ['✓ ' + rows.length + ' unique number' + (rows.length !== 1 ? 's' : '')];
+    if (overflow) parts.push(overflow + ' extra dropped (1000 max)');
+    if (invalid)  parts.push(invalid + ' invalid ignored');
+    pasteInfo.textContent = parts.join(' · ');
+    pasteInfo.style.color = rows.length ? '#16a34a' : '#dc2626';
+  }
+  pasteArea.addEventListener('input', _updatePasteInfo);
+  const pasteBox = h('div', { class: 'f-row full', style: {
+    background: '#f0fdf4', border: '1px dashed #86efac', borderRadius: '8px',
+    padding: '.6rem', margin: '.4rem 0'
+  } },
+    h('label', { style: { fontWeight: 600, marginBottom: '.3rem', display: 'block' } },
+      '✏️ Or paste phone numbers (max 1000)'),
+    pasteArea,
+    pasteInfo,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } },
+      'One per line or comma-separated. Include country code where relevant (e.g. 919876543210). We’ll de-duplicate and skip anything under 8 digits. New numbers get added to Leads under source “WA Campaign Upload”.')
+  );
+  form.appendChild(pasteBox);
+  form._getPastedRows = () => _campPastedRows;
+
   // Variables block
   const varsBox = h('div', { class: 'f-row full', id: 'cm-vars' });
   form.appendChild(varsBox);
@@ -18934,7 +18996,23 @@ function openCampaignModal(templates) {
         created_from: form.created_from.value || undefined,
         created_to: form.created_to.value || undefined
       };
-      const uploaded_rows = (typeof form._getExcelRows === 'function') ? form._getExcelRows() : null;
+      /* WA_CAMPAIGN_PASTE_v1 — merge Excel rows + pasted rows, dedup by phone, cap 1000. */
+      const _xlsx = (typeof form._getExcelRows === 'function') ? (form._getExcelRows() || []) : [];
+      const _pasted = (typeof form._getPastedRows === 'function') ? (form._getPastedRows() || []) : [];
+      let uploaded_rows = null;
+      if (_xlsx.length || _pasted.length) {
+        const seen = new Set();
+        const merged = [];
+        for (const r of [..._xlsx, ..._pasted]) {
+          const key = String(r.phone || '').replace(/\D/g,'');
+          if (!key) continue;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push(r);
+          if (merged.length >= 1000) break;
+        }
+        uploaded_rows = merged.length ? merged : null;
+      }
       try {
         const r = await api('api_wb_campaigns_create', {
           name: form.name.value,
