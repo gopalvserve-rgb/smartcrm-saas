@@ -40933,12 +40933,79 @@ async function _outWhTest(webhookId) {
   } catch (e) { toast(e.message, 'err'); }
 }
 
+/* OUTBOUND_WH_BULK_RETRY_v1 (2026-07-08) — helper to yyyy-mm-dd for date inputs. */
+function _outWhYmd(d) {
+  const yr = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,'0'), dy = String(d.getDate()).padStart(2,'0');
+  return yr + '-' + mo + '-' + dy;
+}
+
 async function _outWhShowLogs(webhookId, webhookName) {
   const body = h('div', { style: { maxHeight: '70vh', overflowY: 'auto' } }, h('div', { class: 'loading' }, 'Loading deliveries…'));
   _openModal('📜 Deliveries — ' + webhookName, body, [{ label:'Close', cls:'btn', onclick: _closeModal }]);
   try {
     const rows = await api('api_outboundWebhook_logs', { webhook_id: webhookId, limit: 100 });
     body.innerHTML = '';
+
+    /* --- OUTBOUND_WH_BULK_RETRY_v1 toolbar: date range + 🔁 Resend all failed --- */
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 3600_000);
+    const fromInp = h('input', { type: 'date', value: _outWhYmd(weekAgo), style: { padding: '4px 6px' } });
+    const toInp   = h('input', { type: 'date', value: _outWhYmd(now),    style: { padding: '4px 6px' } });
+    const countBadge = h('span', { style: { fontSize: '.78rem', color: '#64748b', fontWeight: 600 } }, '');
+    const bulkBtn = h('button', { class: 'btn small primary',
+      style: { background: '#dc2626', color: '#fff', border: '0' } }, '🔁 Resend all failed in range');
+    const _updateCount = () => {
+      const from = new Date(fromInp.value + 'T00:00:00');
+      const to   = new Date(toInp.value   + 'T23:59:59');
+      const inRange = (rows || []).filter(r => {
+        const ts = new Date(r.attempted_at).getTime();
+        const success = (r.success === true || r.success === 't' || r.success === 1);
+        return ts >= from.getTime() && ts <= to.getTime() && !success;
+      });
+      // Dedupe by lead_id in the visible window (backend does the same)
+      const uniq = new Set(inRange.map(r => (r.lead_id || 0) + '|' + (r.url || '')));
+      countBadge.textContent = uniq.size + ' failed lead' + (uniq.size !== 1 ? 's' : '') + ' will be re-fired';
+    };
+    fromInp.addEventListener('change', _updateCount);
+    toInp.addEventListener('change', _updateCount);
+    _updateCount();
+    bulkBtn.onclick = async () => {
+      const from = new Date(fromInp.value + 'T00:00:00');
+      const to   = new Date(toInp.value   + 'T23:59:59');
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) { toast('Pick a valid date range', 'err'); return; }
+      if (!confirm('Re-fire every failed delivery for "' + webhookName + '" between ' + _outWhYmd(from) + ' and ' + _outWhYmd(to) + '?\n\nEach unique lead is retried once (not every failed row).')) return;
+      bulkBtn.disabled = true; bulkBtn.textContent = '⏳ Resending…';
+      try {
+        const out = await api('api_outboundWebhook_bulkRetry', {
+          webhook_id: webhookId,
+          from_date:  from.toISOString(),
+          to_date:    to.toISOString()
+        });
+        toast('Tried ' + out.tried + ' · ✅ ' + out.succeeded + ' succeeded · ❌ ' + (out.failedAgain + out.errored) + ' still failing',
+              out.succeeded ? '' : 'err');
+        // Refresh the modal so the new attempts appear
+        _outWhShowLogs(webhookId, webhookName);
+      } catch (e) {
+        toast('Bulk retry failed: ' + e.message, 'err');
+        bulkBtn.disabled = false; bulkBtn.textContent = '🔁 Resend all failed in range';
+      }
+    };
+    const toolbar = h('div', {
+      style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+               padding: '8px 10px', background: '#fef2f2', border: '1px solid #fecaca',
+               borderRadius: '8px', margin: '0 0 10px 0', fontSize: '.85rem' }
+    },
+      h('span', { style: { fontWeight: 700, color: '#991b1b' } }, '🔁 Bulk resend'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'From'),
+      fromInp,
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),
+      toInp,
+      countBadge,
+      h('div', { style: { flex: '1' } }),
+      bulkBtn
+    );
+    body.appendChild(toolbar);
+
     if (!rows || rows.length === 0) { body.appendChild(h('div', { style:{ padding:'20px', color:'#64748b' } }, 'No deliveries yet for this webhook.')); return; }
     const tbl = h('table', { style:{ width:'100%', borderCollapse:'collapse', fontSize:'.82rem' } });
     tbl.appendChild(h('thead', {}, h('tr', { style:{ background:'#f1f5f9' } },
