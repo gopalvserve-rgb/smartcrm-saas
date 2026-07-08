@@ -229,7 +229,8 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     city:     mappedOverrides.city || '',
     state:    mappedOverrides.state || '',
     address:  mappedOverrides.address || '',
-    notes:    mappedOverrides.notes || ('Imported from Meta Lead Ad' + (ctx.page_name ? ' — page: ' + ctx.page_name : '')),
+    /* FB_META_NOTES_v2 (2026-07-06) — drop noisy default. Only Q&A appears in notes. */
+    notes:    mappedOverrides.notes || '',
     tags:     mappedOverrides.tags || '',
     value:    mappedOverrides.value != null ? Number(mappedOverrides.value) || null : null,
     utm_source:   mappedOverrides.utm_source || '',
