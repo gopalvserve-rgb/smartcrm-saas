@@ -1059,6 +1059,11 @@
   /* v1.3 — Attach menu: image, video, document */
   function openAttachMenu() {
     if (!S.activeThread) return;
+    /* WA_CAT_PICKER_FIX_v2 (2026-07-08) — expose the active thread as `t` so
+     * the Catalogue click handler below (which uses t.phone / t.phone_number_id
+     * / loadMessages(t)) doesn't throw ReferenceError. Was inherited from an
+     * earlier version where this fn was a method on a thread object. */
+    const t = S.activeThread;
     const bg = h('div', { class: 'wbv2-modal-bg', onclick: (e) => { if (e.target === bg) bg.remove(); } },
       h('div', { class: 'wbv2-modal', style: { minWidth: '320px' } },
         h('h3', null, '📎 Attach a file'),
