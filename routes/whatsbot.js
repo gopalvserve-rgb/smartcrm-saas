@@ -2658,7 +2658,10 @@ async function _campaignTick() {
     const variables = typeof camp.variables_json === 'string' ? safeJson(camp.variables_json) : (camp.variables_json || []);
     // Pull pending targets in batches of 25 to stay under Meta rate limits
     const { rows: targets } = await db.query(
-      `SELECT * FROM wa_campaign_targets WHERE campaign_id = $1 AND status = 'queued' ORDER BY id ASC LIMIT 25`,
+      /* WB_CAMPAIGN_BATCH_v2 (2026-07-06) — 25 → 500 per tick. 100ms
+       * inter-send delay = 10 msg/sec (well under Meta's ~80/sec cap).
+       * Previously campaigns >25 recipients only ever sent 25 and stopped. */
+      `SELECT * FROM wa_campaign_targets WHERE campaign_id = $1 AND status = 'queued' ORDER BY id ASC LIMIT 500`,
       [camp.id]
     );
     if (!targets.length) {
