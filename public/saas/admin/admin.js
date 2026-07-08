@@ -711,6 +711,7 @@ function _tenantListTable(rows, sizeMap) {
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
       td(fmtDate(t.created_at) || '—', { whiteSpace:'nowrap', color:'#475569' }),
       td(t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', { whiteSpace:'nowrap', color: t.last_login_at ? '#0f172a' : '#94a3b8', fontWeight: t.last_login_at ? '600' : '400' }),
+      td(_welcomeBadge(t), { whiteSpace:'nowrap' }),
       // TENANT_LIST_ACTIONS_v1 (2026-06-26) — match the full action set the
       // Cards view exposes so super-admins don't have to toggle just to
       // reset a password / install a pack / open Users / manage Modules.
@@ -718,6 +719,7 @@ function _tenantListTable(rows, sizeMap) {
           h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t), title:'Edit billing, plan, dates, remarks' }, '✏️ Edit'),
           isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t), title:'Open this tenant as a super-admin' }, '🔓 Login') : null,
           isLive ? h('button', { class:'btn xs', style:{ background:'#fef3c7', borderColor:'#f59e0b', color:'#92400e' }, onclick:()=>resetTenantAdminPassword(t), title:'Reset the tenant admin password' }, '🔑 Pwd') : null,
+          isLive ? _welcomeBtn(t) : null,
           h('button', { class:'btn ghost xs', onclick:()=>openModulesModal(t), title:'Toggle modules ON/OFF' }, '🧩 Modules'),
           h('button', { class:'btn ghost xs', onclick:()=>openInstallPackModal(t), title:'Install / change industry pack' }, '🏗️ Pack'),
           h('button', { class:'btn ghost xs', onclick:()=>openTenantUsersModal(t), title:'Manage tenant users' }, '👤 Users'),
@@ -729,7 +731,7 @@ function _tenantListTable(rows, sizeMap) {
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
-    h('thead', {}, h('tr', {}, th('#'), th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Storage'), th('Balance'), th('Period ends'), th('Registered'), th('Last login'), th('Actions'))),
+    h('thead', {}, h('tr', {}, th('#'), th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Storage'), th('Balance'), th('Period ends'), th('Registered'), th('Last login'), th('Welcome'), th('Actions'))),
     h('tbody', {}, ...body));
 }
 
@@ -766,6 +768,7 @@ function renderTenantCard(t, sizeMap) {
     h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t) }, '✏️ Details / Edit'),
     isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t) }, '🔓 Login ↗') : null,
     isLive ? h('button', { class:'btn xs', style:{ background:'#fef3c7', borderColor:'#f59e0b', color:'#92400e' }, onclick:()=>resetTenantAdminPassword(t) }, '🔑 Password') : null,
+    isLive ? _welcomeBtn(t) : null,
     h('button', { class:'btn ghost xs', onclick:()=>openModulesModal(t) }, '🧩 Modules'),
     h('button', { class:'btn ghost xs', onclick:()=>openInstallPackModal(t) }, '🏗️ Pack'),
     h('button', { class:'btn ghost xs', onclick:()=>openTenantUsersModal(t) }, '👤 Users'),
@@ -789,6 +792,7 @@ function renderTenantCard(t, sizeMap) {
     _row('Period ends', fmtDate(t.current_period_end) || '—'),
     _row('Registered', fmtDate(t.created_at) || '—'),
     _row('Last login', t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', t.last_login_at ? '#0f172a' : '#94a3b8'),
+    h('div', { style:{ display:'flex', justifyContent:'space-between', gap:'8px', fontSize:'.8rem', padding:'2px 0' } }, h('span', { style:{ color:'#64748b' } }, 'Welcome email'), _welcomeBadge(t)),
     sz ? _row('DB size', (Number(sz.percent_of_volume) >= 80 ? '⚠ ' : '') + sz.pretty + ' · ' + sz.percent_of_volume + '%', Number(sz.percent_of_volume) >= 80 ? '#dc2626' : undefined) : null,  /* STORAGE_ALERT_v1 */
     (String(t.admin_remarks||'').trim()) ? h('div', { style:{ marginTop:'8px', padding:'6px 8px', background:'#fffbeb', border:'1px solid #fde68a', borderRadius:'8px', fontSize:'.76rem', color:'#78350f', whiteSpace:'pre-wrap', wordBreak:'break-word' } }, '📝 ' + String(t.admin_remarks).trim()) : null,
     actions);
@@ -5203,6 +5207,24 @@ function _openTenantEmailModal(inv) {
 /* ==========================================================================
  * SAAS_TXN_v1 — Transactions module + tenant hard-delete button
  * ========================================================================== */
+function _welcomeBadge(t) {
+  const st = String(t.welcome_email_status || '');
+  if (st === 'sent') return h('span', { style:{ color:'#059669', fontWeight:'700', fontSize:'.72rem', whiteSpace:'nowrap' }, title:'Sent ' + (t.welcome_email_sent_at ? fmtDateTime(t.welcome_email_sent_at) : '') }, '✅ Sent');
+  if (st === 'failed') return h('span', { style:{ color:'#dc2626', fontWeight:'700', fontSize:'.72rem', whiteSpace:'nowrap' }, title:'Failed: ' + (t.welcome_email_error || '') }, '⚠ Failed');
+  return h('span', { style:{ color:'#94a3b8', fontSize:'.72rem', whiteSpace:'nowrap' } }, '✉ Not sent');
+}
+async function _sendWelcomeEmail(t) {
+  const resend = String(t.welcome_email_status || '') === 'sent';
+  if (!confirm((resend ? 'Resend' : 'Send') + ' welcome email to ' + (t.contact_email || 'the tenant admin') + '?\n\nThis RESETS the tenant admin password to a new temporary one and emails the new login details.')) return;
+  try { const r = await api('api_saas_tenant_sendWelcome', { tenantId: t.id }); toast('Welcome email sent to ' + r.sent_to, 'ok'); navigate('tenants'); }
+  catch (e) { toast(e.message, 'err'); }
+}
+function _welcomeBtn(t) {
+  const st = String(t.welcome_email_status || '');
+  const label = st === 'sent' ? '✉ Resend' : (st === 'failed' ? '✉ Retry' : '✉ Welcome');
+  const style = st === 'failed' ? { background:'#fee2e2', borderColor:'#ef4444', color:'#b91c1c' } : {};
+  return h('button', { class:'btn ghost xs', style, onclick:()=>_sendWelcomeEmail(t), title:'Send / resend welcome email (resets admin password)' }, label);
+}
 function _tenantDeleteBtn(t) {
   if (!t || t.status === 'deleted') return null;
   return h('button', { class: 'btn ghost xs', style: { color: '#b91c1c', borderColor: '#fca5a5' }, title: 'Permanently delete + drop database',

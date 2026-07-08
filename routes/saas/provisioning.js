@@ -316,20 +316,15 @@ async function provisionFromSignup(signupId) {
   // 8. Email credentials (best-effort)
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
   const loginUrl = baseUrl + '/t/' + slug;
-  try {
-    await mailer.sendMail({
-      to: signup.email,
-      subject: '🎉 Your SmartCRM is ready — login details inside',
-      html: _welcomeEmailHtml({
-        name: signup.name, orgName: signup.org_name || signup.name,
-        loginUrl,
-        // SIGNUP_FIX_v1 — show the SAME normalised email that we stored
-        email: String(signup.email || '').toLowerCase().trim(),
-        password: oneTimePassword,
-        packageName: pkg ? pkg.name : 'Custom plan'
-      })
-    });
-  } catch (e) { console.warn('[provisioning] welcome email failed:', e.message); }
+  // WELCOME_EMAIL_v2 — branded template + per-tenant status tracking. Any
+  // failure is logged with the [EMAIL_ISSUE] category and stamped on the tenant.
+  await sendWelcomeEmail({
+    tenantId,
+    name: signup.name, orgName: signup.org_name || signup.name,
+    packageName: pkg ? pkg.name : 'Custom plan', slug,
+    email: String(signup.email || '').toLowerCase().trim(),
+    password: oneTimePassword
+  });
 
   // TENANT_BILLING_NOTIFY_v1 (2026-06-20) — also send the same creds via
   // WhatsApp using Vserve's WABA. APK link included in both channels.
@@ -372,27 +367,67 @@ function _computePeriodEnd(start, pkg) {
   return d;
 }
 
-function _welcomeEmailHtml({ name, orgName, loginUrl, email, password, packageName }) {
-  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com';
-  return `
-  <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:560px;margin:0 auto;padding:1.5rem;color:#0f172a">
-    <h2 style="margin:0 0 1rem 0">Welcome to SmartCRM, ${escape(name)} 🎉</h2>
-    <p>Your <b>${escape(packageName)}</b> account for <b>${escape(orgName)}</b> is live and ready.</p>
-    <div style="background:#f1f5f9;padding:1rem;border-radius:8px;margin:1.25rem 0">
-      <div style="font-size:.85rem;color:#475569;margin-bottom:.4rem">Login URL</div>
-      <a href="${loginUrl}" style="color:#4338ca;font-weight:600">${loginUrl}</a>
-      <div style="font-size:.85rem;color:#475569;margin-top:1rem;margin-bottom:.4rem">Email</div>
-      <code style="background:#fff;padding:.3rem .6rem;border-radius:4px">${escape(email)}</code>
-      <div style="font-size:.85rem;color:#475569;margin-top:1rem;margin-bottom:.4rem">Temporary password</div>
-      <code style="background:#fff;padding:.3rem .6rem;border-radius:4px">${escape(password)}</code>
-    </div>
-    <p style="font-size:.9rem;color:#475569">For your security, please change this password the first time you log in (Settings → Security).</p>
-    <div style="background:#eef2ff;padding:.85rem 1rem;border-radius:8px;margin:1rem 0">
-      <div style="font-size:.85rem;color:#475569;margin-bottom:.4rem">📱 Mobile app (Android APK)</div>
-      <a href="${(typeof PUBLIC_BASE_URL === 'string' ? PUBLIC_BASE_URL : '') + '/LeadCRM.apk'}" style="color:#4338ca;font-weight:600">Download LeadCRM.apk</a>
-    </div>
-    <p style="font-size:.85rem;color:#94a3b8;margin-top:2rem">— The SmartCRM team</p>
-  </div>`;
+let _welcomeTplCache = null;
+function renderWelcomeEmailHtml({ name, orgName, packageName, loginUrl, apkUrl, email, password }) {
+  if (_welcomeTplCache == null) {
+    try {
+      _welcomeTplCache = require('fs').readFileSync(
+        require('path').join(__dirname, '..', '..', 'templates', 'welcome_email.html'), 'utf8');
+    } catch (e) { _welcomeTplCache = ''; }
+  }
+  let html = _welcomeTplCache || '';
+  const map = {
+    '__NAME__':      escape(name || 'there'),
+    '__COMPANY__':   escape(orgName || ''),
+    '__PLAN__':      escape(packageName || 'SmartCRM'),
+    '__EMAIL__':     escape(email || ''),
+    '__PASSWORD__':  escape(password || ''),
+    '__LOGIN_URL__': String(loginUrl || ''),
+    '__APK_URL__':   String(apkUrl || '')
+  };
+  Object.keys(map).forEach(k => { html = html.split(k).join(map[k]); });
+  return html;
+}
+
+// WELCOME_EMAIL_v2 — render + send the branded welcome email and record the
+// outcome on the tenant row. NEVER throws; returns { ok, error }. On failure it
+// logs with the [EMAIL_ISSUE] tag so it stands out in the Railway logs.
+async function sendWelcomeEmail({ tenantId, name, orgName, packageName, slug, email, password }) {
+  const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const loginUrl = baseUrl + '/t/' + slug;
+  const apkUrl   = baseUrl + '/LeadCRM.apk';
+  const plan = packageName || 'SmartCRM';
+  const to = String(email || '').toLowerCase().trim();
+  const subject = 'Welcome to SmartCRM 🎉 — Your ' + plan + ' account' + (orgName ? ' for ' + orgName : '') + ' is live';
+  if (!to) {
+    console.error('[EMAIL_ISSUE] welcome email skipped for tenant ' + (slug || tenantId) + ': no recipient email');
+    try { await control.update('tenants', tenantId, { welcome_email_status: 'failed', welcome_email_error: 'No recipient email' }); } catch (_) {}
+    return { ok: false, error: 'No recipient email' };
+  }
+  const html = renderWelcomeEmailHtml({ name, orgName, packageName: plan, loginUrl, apkUrl, email: to, password });
+  try {
+    await mailer.sendMail({ to, subject, html });
+    try {
+      await control.update('tenants', tenantId, {
+        welcome_email_sent_at: new Date().toISOString(),
+        welcome_email_status: 'sent', welcome_email_error: null
+      });
+    } catch (_) {}
+    return { ok: true };
+  } catch (e) {
+    const msg = String(e && e.message || e).slice(0, 500);
+    console.error('[EMAIL_ISSUE] welcome email FAILED for tenant ' + (slug || tenantId) + ' <' + to + '>: ' + msg);
+    try {
+      await control.update('tenants', tenantId, { welcome_email_status: 'failed', welcome_email_error: msg });
+    } catch (_) {}
+    try {
+      await control.insert('audit_log', {
+        actor_type: 'system', tenant_id: tenantId, event: 'email.issue',
+        detail: JSON.stringify({ category: 'email issue', kind: 'welcome_email', slug, to, error: msg })
+      });
+    } catch (_) {}
+    return { ok: false, error: msg };
+  }
 }
 
 function escape(s) {
@@ -401,4 +436,4 @@ function escape(s) {
   }[c]));
 }
 
-module.exports = { provisionFromSignup };
+module.exports = { provisionFromSignup, sendWelcomeEmail, renderWelcomeEmailHtml };

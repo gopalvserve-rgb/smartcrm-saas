@@ -1303,6 +1303,61 @@ async function api_saas_tenants_auditLog(token, payload) {
   return { entries: r.rows || [] };
 }
 
+
+// WELCOME_EMAIL_v2 — (re)send the branded welcome email to a tenant admin.
+// Because the original one-time password is not recoverable (only its bcrypt
+// hash is stored), this resets the tenant admin's password to a fresh one and
+// emails the new credentials. Use it when the auto-send at creation failed or
+// the client lost the mail. Records status on the tenant + [EMAIL_ISSUE] on error.
+async function api_saas_tenant_sendWelcome(token, payload) {
+  const me = await requireSuperAdmin(token);
+  const p = payload || {};
+  const tenantId = Number(p.tenantId || p.tenant_id || p.id);
+  const t = await control.findById('tenants', tenantId);
+  if (!t) throw new Error('Tenant not found');
+  if (t.status === 'deleted')   throw new Error('Tenant is deleted');
+  if (t.status === 'suspended') throw new Error('Tenant is suspended — restore first');
+  if (!_bcrypt) throw new Error('bcrypt library not installed on the server');
+
+  // Fresh temporary password (scrm-xxxxxxxx, phone-friendly).
+  const newPassword = 'scrm-' + _crypto.randomBytes(4).toString('hex');
+  const hash = _bcrypt.hashSync(newPassword, 10);
+
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+  const targetEmail = String(p.email || t.contact_email || '').trim().toLowerCase();
+  let r = targetEmail
+    ? await pool.query(`SELECT id, name, email FROM users WHERE LOWER(email) = $1 LIMIT 1`, [targetEmail])
+    : { rows: [] };
+  let user = r.rows[0];
+  if (!user) {
+    r = await pool.query(`SELECT id, name, email FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`);
+    user = r.rows[0];
+  }
+  if (!user) throw new Error('No admin user found in tenant DB');
+  try { await pool.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [hash, user.id]); }
+  catch (e) { if (/updated_at/.test(String(e.message))) await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, user.id]); else throw e; }
+
+  // Package name (best-effort) for the plan wording.
+  let pkgName = 'SmartCRM';
+  try { if (t.package_id) { const pk = await control.findById('packages', t.package_id); if (pk && pk.name) pkgName = pk.name; } } catch (_) {}
+
+  const provisioning = require('./provisioning');
+  const res = await provisioning.sendWelcomeEmail({
+    tenantId: t.id, name: user.name || t.org_name || t.slug, orgName: t.org_name || t.slug,
+    packageName: pkgName, slug: t.slug, email: user.email, password: newPassword
+  });
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: res.ok ? 'tenant.welcome_email_sent' : 'email.issue',
+    detail: JSON.stringify({ category: res.ok ? 'welcome' : 'email issue', slug: t.slug, to: user.email, ok: res.ok, error: res.error || null })
+  });
+
+  if (!res.ok) throw new Error('Email failed: ' + (res.error || 'unknown') + ' (password was reset; check SMTP settings)');
+  return { ok: true, sent_to: user.email, status: 'sent' };
+}
+
 module.exports = {
   api_saas_tenants_auditLog,
   api_saas_tenants_update,
@@ -1319,6 +1374,7 @@ module.exports = {
   api_saas_tenants_loginAs,
   api_saas_tenants_reseedKb,
   api_saas_tenants_resetUserPassword,
+  api_saas_tenant_sendWelcome,
   api_saas_tenants_runBootstrap,
   api_saas_tenants_installPack,
   api_saas_fb_backfillRegistry,

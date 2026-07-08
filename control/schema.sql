@@ -579,6 +579,10 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_type TEXT NOT NULL DEFAULT 'live';
 -- SIGNUP_TXN_v1 — transaction + GST details captured at signup, stored on tenant
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_mode TEXT;
+-- WELCOME_EMAIL_v2 — per-tenant welcome-email delivery tracking.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_status  TEXT;   -- sent | failed
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_error   TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_id   TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_date TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS gst_amount_inr   NUMERIC(12,2);
