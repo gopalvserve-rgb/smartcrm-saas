@@ -130,10 +130,62 @@ async function api_saas_settings_testEmail(token, payload) {
   return { ok: true, sent_to: to };
 }
 
+
+// WELCOME_EMAIL_v4 — editable welcome-email template (super-admin).
+const _SAMPLE = {
+  name: 'Aditya Mendhe', orgName: 'FortuneGlobal', packageName: 'Growth',
+  loginUrl: 'https://crm.smartcrmsolution.com/t/fortune',
+  apkUrl: 'https://crm.smartcrmsolution.com/LeadCRM.apk',
+  email: 'adityamendhe58@gmail.com', password: 'scrm-788446d6'
+};
+// Returns the raw template source (override if set, else the shipped default),
+// plus a rendered preview using sample data.
+async function api_saas_welcome_template_get(token) {
+  await requireFullAdmin(token);
+  const prov = require('./provisioning');
+  const override = await control.getSetting('WELCOME_EMAIL_TEMPLATE', '');
+  const isCustom = !!(override && String(override).trim());
+  const source = isCustom ? String(override) : prov.defaultWelcomeTemplate();
+  return {
+    source, is_custom: isCustom,
+    default_source: prov.defaultWelcomeTemplate(),
+    tokens: ['__NAME__', '__COMPANY__', '__PLAN__', '__LOGIN_URL__', '__EMAIL__', '__PASSWORD__', '__APK_URL__'],
+    preview_html: prov.renderWelcomeEmailHtml(_SAMPLE, source)
+  };
+}
+// Render a preview from arbitrary (unsaved) HTML the editor is holding.
+async function api_saas_welcome_template_preview(token, payload) {
+  await requireFullAdmin(token);
+  const prov = require('./provisioning');
+  const html = (payload && typeof payload.html === 'string' && payload.html.trim())
+    ? payload.html : (await control.getSetting('WELCOME_EMAIL_TEMPLATE', '')) || prov.defaultWelcomeTemplate();
+  return { preview_html: prov.renderWelcomeEmailHtml(_SAMPLE, html) };
+}
+async function api_saas_welcome_template_save(token, payload) {
+  const me = await requireFullAdmin(token);
+  const html = String((payload && payload.html) || '').trim();
+  if (!html) throw new Error('Template cannot be empty');
+  if (html.length > 200000) throw new Error('Template too large');
+  await control.setSetting('WELCOME_EMAIL_TEMPLATE', html);
+  try { await control.insert('audit_log', { actor_type: 'super_admin', actor_id: me.id, actor_email: me.email, event: 'welcome_template.save', detail: JSON.stringify({ length: html.length }) }); } catch (_) {}
+  return { ok: true };
+}
+async function api_saas_welcome_template_reset(token) {
+  const me = await requireFullAdmin(token);
+  await control.setSetting('WELCOME_EMAIL_TEMPLATE', '');
+  try { await control.insert('audit_log', { actor_type: 'super_admin', actor_id: me.id, actor_email: me.email, event: 'welcome_template.reset', detail: '{}' }); } catch (_) {}
+  const prov = require('./provisioning');
+  return { ok: true, source: prov.defaultWelcomeTemplate() };
+}
+
 const saasWA = require('./saasWhatsApp');
 module.exports = {
   api_saas_settings_testWhatsApp: saasWA.api_saas_settings_testWhatsApp,
   api_saas_settings_get,
   api_saas_settings_save,
-  api_saas_settings_testEmail
+  api_saas_settings_testEmail,
+  api_saas_welcome_template_get,
+  api_saas_welcome_template_preview,
+  api_saas_welcome_template_save,
+  api_saas_welcome_template_reset
 };

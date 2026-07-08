@@ -171,7 +171,8 @@ const NAV = [
   { id: 'tickets',       label: '🎫 Support Tickets',    requiresPerm: 'tickets.view' },     // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Roles & Permissions', requiresPerm: 'admins.view' },
   { id: 'device_health', label: '📱 Device Health',      requiresPerm: 'device_health.view' },
-  { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' }
+  { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' },
+  { id: 'email_template', label: '✉️ Welcome Email',      requiresPerm: 'settings.edit' }   /* WELCOME_EMAIL_v4 */
 ];
 
 
@@ -2588,6 +2589,49 @@ function editAdmin(a) {
   m.appendChild(card);
   document.body.appendChild(m);
 }
+
+VIEWS.email_template = async (view) => {
+  view.appendChild(h('h1', {}, '✉️ Welcome Email Template'));
+  let data;
+  try { data = await api('api_saas_welcome_template_get'); }
+  catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+
+  view.appendChild(h('p', { class: 'muted', style: { marginTop: '.2rem' } },
+    'This is the email new tenants receive on account creation (manual create or accepted signup). Edit the HTML on the left, preview on the right, then Save. These tokens are auto-filled per tenant: '));
+  view.appendChild(h('div', { style: { margin: '.2rem 0 .8rem' } },
+    ...data.tokens.map(t => h('code', { style: { marginRight: '8px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '.78rem' } }, t))));
+
+  const ta = h('textarea', { spellcheck: 'false', style: { width: '100%', height: '560px', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '10px', boxSizing: 'border-box' } }, data.source);
+  const iframe = h('iframe', { style: { width: '100%', height: '560px', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#fff' } });
+  iframe.srcdoc = data.preview_html;
+
+  async function doPreview() {
+    try { const r = await api('api_saas_welcome_template_preview', { html: ta.value }); iframe.srcdoc = r.preview_html; }
+    catch (e) { toast(e.message, 'err'); }
+  }
+  const badge = h('span', {}, data.is_custom
+    ? h('span', { style: { color: '#059669', fontWeight: 700 } }, '● Custom template active')
+    : h('span', { style: { color: '#94a3b8' } }, '○ Using default template'));
+
+  const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
+    try { await api('api_saas_welcome_template_save', { html: ta.value }); toast('Saved — new tenants will receive this template', 'ok'); navigate('email_template'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '💾 Save template');
+  const previewBtn = h('button', { class: 'btn', onclick: doPreview }, '🔄 Update preview');
+  const resetBtn = h('button', { class: 'btn ghost', onclick: async () => {
+    if (!confirm('Reset to the built-in default template? Your custom edits will be removed.')) return;
+    try { const r = await api('api_saas_welcome_template_reset'); ta.value = r.source; await doPreview(); toast('Reset to default', 'ok'); navigate('email_template'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '↩ Reset to default');
+
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '10px 0' } },
+    saveBtn, previewBtn, resetBtn, h('span', { style: { flex: 1 } }), badge));
+
+  view.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' } },
+    h('div', {}, h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '4px' } }, 'HTML source (with tokens)'), ta),
+    h('div', {}, h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '4px' } }, 'Live preview — sample data'), iframe)
+  ));
+};
 
 VIEWS.settings = async (view) => {
   view.appendChild(h('h1', {}, 'Settings'));

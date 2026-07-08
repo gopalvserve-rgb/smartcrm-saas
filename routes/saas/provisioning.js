@@ -368,14 +368,27 @@ function _computePeriodEnd(start, pkg) {
 }
 
 let _welcomeTplCache = null;
-function renderWelcomeEmailHtml({ name, orgName, packageName, loginUrl, apkUrl, email, password }) {
+// WELCOME_EMAIL_v4 — the built-in template shipped in the repo (the default).
+function defaultWelcomeTemplate() {
   if (_welcomeTplCache == null) {
     try {
       _welcomeTplCache = require('fs').readFileSync(
         require('path').join(__dirname, '..', '..', 'templates', 'welcome_email.html'), 'utf8');
     } catch (e) { _welcomeTplCache = ''; }
   }
-  let html = _welcomeTplCache || '';
+  return _welcomeTplCache || '';
+}
+// The live template = super-admin override (control setting) if present, else the file.
+async function loadWelcomeTemplate() {
+  try {
+    const ov = await control.getSetting('WELCOME_EMAIL_TEMPLATE', '');
+    if (ov && String(ov).trim()) return String(ov);
+  } catch (_) {}
+  return defaultWelcomeTemplate();
+}
+function renderWelcomeEmailHtml(vars, tpl) {
+  const { name, orgName, packageName, loginUrl, apkUrl, email, password } = vars || {};
+  let html = (typeof tpl === 'string' && tpl.trim()) ? tpl : defaultWelcomeTemplate();
   const map = {
     '__NAME__':      escape(name || 'there'),
     '__COMPANY__':   escape(orgName || ''),
@@ -404,7 +417,8 @@ async function sendWelcomeEmail({ tenantId, name, orgName, packageName, slug, em
     try { await control.update('tenants', tenantId, { welcome_email_status: 'failed', welcome_email_error: 'No recipient email' }); } catch (_) {}
     return { ok: false, error: 'No recipient email' };
   }
-  const html = renderWelcomeEmailHtml({ name, orgName, packageName: plan, loginUrl, apkUrl, email: to, password });
+  const tpl = await loadWelcomeTemplate();
+  const html = renderWelcomeEmailHtml({ name, orgName, packageName: plan, loginUrl, apkUrl, email: to, password }, tpl);
   try {
     await mailer.sendMail({ to, subject, html });
     try {
@@ -437,4 +451,4 @@ function escape(s) {
   }[c]));
 }
 
-module.exports = { provisionFromSignup, sendWelcomeEmail, renderWelcomeEmailHtml };
+module.exports = { provisionFromSignup, sendWelcomeEmail, renderWelcomeEmailHtml, loadWelcomeTemplate, defaultWelcomeTemplate };
