@@ -18948,15 +18948,130 @@ function openCampaignModal(templates) {
   // Variables block
   const varsBox = h('div', { class: 'f-row full', id: 'cm-vars' });
   form.appendChild(varsBox);
+
+  /* WA_CAMPAIGN_TPL_PREVIEW_v1 (2026-07-08) — live WhatsApp-style preview of
+   * the picked template. Reads header/body/footer/buttons from
+   * template.components, substitutes {{n}} with variable inputs live. */
+  const previewBox = h('div', { class: 'f-row full', id: 'cm-preview' });
+  form.appendChild(previewBox);
+  function _campTplRenderPreview(t) {
+    previewBox.innerHTML = '';
+    if (!t) return;
+    const comps = Array.isArray(t.components) ? t.components : [];
+    const header = comps.find(c => (c.type||'').toUpperCase() === 'HEADER');
+    const body   = comps.find(c => (c.type||'').toUpperCase() === 'BODY');
+    const footer = comps.find(c => (c.type||'').toUpperCase() === 'FOOTER');
+    const btnsC  = comps.find(c => (c.type||'').toUpperCase() === 'BUTTONS');
+
+    // Substitute {{1}} {{2}} … with the variable inputs (or a placeholder pill)
+    const vals = [...form.querySelectorAll('input[name^="cv_"]')].map(i => (i.value || '').trim());
+    let bodyTxt = String(body?.text || t.body_text || '');
+    bodyTxt = bodyTxt.replace(/\{\{(\d+)\}\}/g, (m, n) => {
+      const v = vals[Number(n) - 1];
+      return v ? v : '{{' + n + '}}';
+    });
+
+    // Wrap the whole thing to look like a WhatsApp incoming bubble
+    const label = h('label', { style: { fontWeight: 600, marginBottom: '.35rem', display: 'block' } }, '👁 Preview');
+    const bubble = h('div', {
+      style: { background: '#dcf8c6', border: '1px solid #b7e2a0', borderRadius: '10px',
+               padding: '10px 12px', maxWidth: '420px', fontSize: '.88rem',
+               boxShadow: '0 1px 2px rgba(0,0,0,.08)', lineHeight: '1.4', color: '#111' }
+    });
+
+    // Header
+    if (header) {
+      const fmt = String(header.format || '').toUpperCase();
+      if (fmt === 'IMAGE' && (header.example?.header_handle?.[0] || header.example?.header_url)) {
+        bubble.appendChild(h('img', {
+          src: header.example.header_url || header.example.header_handle[0],
+          style: { maxWidth: '100%', borderRadius: '6px', marginBottom: '6px', display: 'block' }
+        }));
+      } else if (fmt === 'IMAGE') {
+        bubble.appendChild(h('div', {
+          style: { background: '#e2e8f0', height: '90px', borderRadius: '6px',
+                   display: 'flex', alignItems: 'center', justifyContent: 'center',
+                   color: '#64748b', marginBottom: '6px', fontSize: '.82rem' }
+        }, '🖼 Image header (uploaded at send time)'));
+      } else if (fmt === 'VIDEO') {
+        bubble.appendChild(h('div', {
+          style: { background: '#e2e8f0', height: '90px', borderRadius: '6px',
+                   display: 'flex', alignItems: 'center', justifyContent: 'center',
+                   color: '#64748b', marginBottom: '6px', fontSize: '.82rem' }
+        }, '🎬 Video header'));
+      } else if (fmt === 'DOCUMENT') {
+        bubble.appendChild(h('div', {
+          style: { background: '#e2e8f0', padding: '10px', borderRadius: '6px', marginBottom: '6px', fontSize: '.82rem', color: '#334155' }
+        }, '📄 ' + (header.text || 'Document header')));
+      } else if (header.text) {
+        bubble.appendChild(h('div', {
+          style: { fontWeight: 700, marginBottom: '6px', fontSize: '.95rem', color: '#0f172a' }
+        }, String(header.text)));
+      }
+    }
+
+    // Body — keep newlines
+    if (bodyTxt) {
+      const bodyEl = h('div', { style: { whiteSpace: 'pre-wrap' } });
+      bodyEl.textContent = bodyTxt;
+      bubble.appendChild(bodyEl);
+    }
+
+    // Footer
+    if (footer && footer.text) {
+      bubble.appendChild(h('div', {
+        style: { marginTop: '8px', fontSize: '.76rem', color: '#64748b' }
+      }, String(footer.text)));
+    }
+
+    // Timestamp + ticks strip (WhatsApp-ish)
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2,'0');
+    const mm = String(now.getMinutes()).padStart(2,'0');
+    bubble.appendChild(h('div', {
+      style: { textAlign: 'right', fontSize: '.72rem', color: '#64748b', marginTop: '4px' }
+    }, hh + ':' + mm + '  ✓✓'));
+
+    // Buttons chips (below the bubble, WA-style)
+    const btnBar = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px', maxWidth: '420px' } });
+    const btns = (btnsC && Array.isArray(btnsC.buttons)) ? btnsC.buttons : [];
+    btns.forEach(b => {
+      const icon = String(b.type||'').toUpperCase() === 'URL' ? '🔗 ' :
+                   String(b.type||'').toUpperCase() === 'PHONE_NUMBER' ? '📞 ' : '';
+      btnBar.appendChild(h('div', {
+        style: { flex: '1 1 auto', minWidth: '100px', textAlign: 'center',
+                 background: '#fff', border: '1px solid #cbd5e1', borderRadius: '18px',
+                 padding: '6px 10px', fontSize: '.82rem', color: '#0369a1', fontWeight: 600 }
+      }, icon + (b.text || '(button)')));
+    });
+
+    const meta = h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '4px' } },
+      'Category: ' + (t.category || '—') + ' · Language: ' + (t.language || 'en') +
+      (t.body_params ? ' · ' + t.body_params + ' variable' + (t.body_params !== 1 ? 's' : '') : ''));
+
+    const wrap = h('div', { style: {
+      background: '#e5ddd5', border: '1px solid #cbd5e1', borderRadius: '10px',
+      padding: '12px', margin: '.4rem 0'
+    } });
+    wrap.appendChild(label);
+    wrap.appendChild(bubble);
+    if (btns.length) wrap.appendChild(btnBar);
+    wrap.appendChild(meta);
+    previewBox.appendChild(wrap);
+  }
+
   function renderVars(combo) {
     const [name, lang] = String(combo || '').split('||');
     const t = approved.find(x => x.name === name && x.language === lang);
     varsBox.innerHTML = '';
-    if (!t) return;
+    if (!t) { previewBox.innerHTML = ''; return; }
     varsBox.appendChild(h('label', {}, 'Variables — use @{name}, @{firstname}, @{phone}, @{email}, @{source} for merge fields'));
     for (let i = 0; i < t.body_params; i++) {
-      varsBox.appendChild(h('input', { name: 'cv_' + i, placeholder: 'Variable ' + (i + 1) }));
+      const inp = h('input', { name: 'cv_' + i, placeholder: 'Variable ' + (i + 1) });
+      inp.addEventListener('input', () => _campTplRenderPreview(t));
+      varsBox.appendChild(inp);
     }
+    _campTplRenderPreview(t);
   }
   form.querySelector('[name="template_combo"]')?.addEventListener('change', ev => renderVars(ev.target.value));
   // Schedule
