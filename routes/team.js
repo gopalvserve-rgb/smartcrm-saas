@@ -207,12 +207,15 @@ async function api_team_liveStatus(token, _payload) {
     }
     // 2. On-call detection
     else if (lastCall && /^(outgoing_call|incoming_ringing|call_answered|dial_requested|answered|dialing|ringing)$/.test(String(lastCall.event))) {
-      // No newer end?
       const newerEnd = calls.find(e =>
         new Date(e.created_at).getTime() > new Date(lastCall.created_at).getTime()
         && /^(call_ended|ended|missed|hangup|completed|disconnected)$/.test(String(e.event))
       );
-      if (!newerEnd) {
+      /* TEAM_ON_CALL_MAX_AGE_v1 (2026-07-06) — cap "on_call" at 20 min so
+       * rep isn't stuck on the dashboard when the mobile app fails to emit
+       * call_ended (kill, no network, etc). */
+      const _ageMin = (now - new Date(lastCall.created_at).getTime()) / 60000;
+      if (!newerEnd && _ageMin < 20) {
         state = 'on_call';
         since = new Date(lastCall.created_at).getTime();
         sub = lastCall.phone || '';
