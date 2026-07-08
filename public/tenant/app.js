@@ -18436,6 +18436,105 @@ function safeJson_(s) { try { return JSON.parse(s); } catch (_) { return []; } }
 
 // ---------- Campaigns ----------
 /* WA_CAMPAIGN_STATS_FIX_v1 — modal showing why a campaign's messages failed. */
+// WA_ERR_EXPLAIN_v1 — turn a raw Meta WhatsApp send error into a clear,
+// human-readable explanation + a suggested fix. Used by the campaign View,
+// the failed-reasons modal and single-send toasts.
+function _waErrExplain(raw) {
+  const s = String(raw == null ? '' : raw);
+  if (!s.trim()) return { code: '', title: 'Unknown error', fix: 'No detail captured by Meta. Check the Activity tab for the raw response.' };
+  const MAP = {
+    '200': { title: 'No permission to send on this WhatsApp Business Account', fix: 'Reconnect WhatsApp in Settings → WhatsApp and make sure the messaging permission is granted to this number/WABA. This is a Meta-side permission on the account — messages cannot go out until it is fixed.' },
+    '10':  { title: 'No permission to send messages', fix: 'Reconnect WhatsApp in Settings → WhatsApp (messaging permission missing).' },
+    '132001': { title: 'Template language mismatch', fix: 'The template’s language does not match what Meta approved. Set the campaign template language to en_US (or the exact language Meta approved for that template).' },
+    '132000': { title: 'Template variable count mismatch', fix: 'The number of variables you filled does not match the template. Add or remove variables so the count exactly matches the approved template.' },
+    '132005': { title: 'Template content mismatch', fix: 'The template was edited/paused at Meta. Re-sync templates and pick the current approved version.' },
+    '132012': { title: 'Template parameter format is invalid', fix: 'A variable value has a format Meta rejects (e.g. newline/tab, or too long). Clean the variable values.' },
+    '131026': { title: 'Recipient is not on WhatsApp', fix: 'This number does not have a WhatsApp account — nothing to deliver.' },
+    '131047': { title: 'Re-engagement needed (24h window closed)', fix: 'More than 24h since the user last messaged you — only approved template messages can be sent.' },
+    '131049': { title: 'Meta limited this marketing message', fix: 'Meta throttled marketing delivery to this user. Try later or use a different template type.' },
+    '133010': { title: 'Number not registered on WhatsApp Cloud API', fix: 'The sending number is not registered on the Cloud API. Re-check the WhatsApp connection.' },
+    '100': { title: 'Access token expired or invalid', fix: 'Reconnect WhatsApp in Settings → WhatsApp to refresh the access token.' },
+    '190': { title: 'Access token expired', fix: 'Reconnect WhatsApp in Settings → WhatsApp to refresh the access token.' },
+    '368': { title: 'Temporarily blocked for policy violations', fix: 'The account is restricted by Meta for policy reasons. Review WhatsApp policy and wait for the block to lift.' },
+    '80007': { title: 'Rate limit reached', fix: 'Too many messages too fast — the campaign will retry; slow the send rate.' },
+    '131031': { title: 'Account locked / restricted', fix: 'The WhatsApp Business Account is restricted by Meta. Check Business Manager for the restriction.' }
+  };
+  // Prefer an explicit (#NNN) code, else any known code appearing in the text.
+  let code = '';
+  const hash = s.match(/\(#(\d+)\)/);
+  if (hash && MAP[hash[1]]) code = hash[1];
+  if (!code) { for (const k of Object.keys(MAP)) { if (new RegExp('(^|[^0-9])' + k + '([^0-9]|$)').test(s)) { code = k; break; } } }
+  if (code && MAP[code]) return Object.assign({ code }, MAP[code]);
+  return { code: (hash ? hash[1] : ''), title: s.slice(0, 160), fix: 'See the Activity tab for the full Meta response.' };
+}
+
+function _waToastErr(e) {
+  const x = _waErrExplain((e && e.message) || e);
+  toast((x.code ? '#' + x.code + ' — ' : '') + x.title + (x.fix ? '  ·  ' + x.fix : ''), 'err');
+}
+
+function _viewCampaign(c) {
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal', style: { maxWidth: '760px', width: '96%', maxHeight: '88vh', overflow: 'auto' } },
+      h('div', { class: 'modal-head' },
+        h('h3', {}, '👁 Campaign — ' + (c.name || '')),
+        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+      ),
+      h('div', { id: 'camp-view-body', style: { padding: '.4rem 0' } },
+        h('div', { class: 'muted', style: { padding: '.6rem' } }, 'Loading message & recipients…'))
+    )
+  );
+  document.body.appendChild(modal);
+  const body = modal.querySelector('#camp-view-body');
+  api('api_wb_campaigns_targets', c.id).then(targets => {
+    targets = targets || [];
+    const sample = targets.find(t => t.rendered_message) || targets[0] || {};
+    const stChip = (st) => {
+      const col = st === 'read' ? '#0ea5e9' : st === 'delivered' ? '#10b981' : st === 'sent' ? '#6366f1' : st === 'failed' ? '#ef4444' : '#64748b';
+      return h('span', { style: { background: col, color: '#fff', borderRadius: '6px', padding: '1px 7px', fontSize: '.7rem', fontWeight: 700 } }, st || 'queued');
+    };
+    body.innerHTML = '';
+    // Message block
+    body.appendChild(h('div', { style: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.7rem .8rem', marginBottom: '.8rem' } },
+      h('div', { style: { fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
+        'Template: ', h('code', {}, c.template_name), '  ·  Language: ', h('code', {}, c.template_language || 'en_US')),
+      c.image_url ? h('div', { style: { fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } }, '🖼 Image: ', h('a', { href: c.image_url, target: '_blank' }, 'view')) : null,
+      h('div', { style: { fontSize: '.72rem', color: '#94a3b8', marginBottom: '.2rem' } }, 'Message sent (sample):'),
+      h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '.86rem', color: '#0f172a', background: '#fff', border: '1px solid #eef0f5', borderRadius: '6px', padding: '.5rem .65rem' } },
+        sample.rendered_message || '(template message — no rendered text stored)')
+    ));
+    // Recipients table
+    body.appendChild(h('div', { style: { fontSize: '.8rem', fontWeight: 700, margin: '.2rem 0 .4rem' } },
+      '📇 Recipients (' + targets.length + ')'));
+    const rows = targets.map((t, i) => {
+      const exp = t.status === 'failed' && t.error ? _waErrExplain(t.error) : null;
+      return h('tr', {},
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, String(i + 1)),
+        h('td', { style: { fontWeight: 600, fontSize: '.82rem' } }, t.name || '—'),
+        h('td', { style: { fontFamily: 'monospace', fontSize: '.82rem' } }, t.phone || '—'),
+        h('td', {}, stChip(t.status)),
+        h('td', { style: { fontSize: '.78rem', color: exp ? '#b91c1c' : '#94a3b8', maxWidth: '260px' } },
+          exp ? (exp.code ? ('#' + exp.code + ' — ') : '') + exp.title : (t.status === 'failed' ? 'Failed' : '—'))
+      );
+    });
+    body.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'Name'), h('th', {}, 'Number'), h('th', {}, 'Status'), h('th', {}, 'Reason (if failed)'))),
+      h('tbody', {}, ...rows)
+    )));
+    // If any failed, show the distinct fixes once.
+    const failedExp = {};
+    targets.forEach(t => { if (t.status === 'failed' && t.error) { const e = _waErrExplain(t.error); failedExp[e.code + e.title] = e; } });
+    const fixes = Object.values(failedExp);
+    if (fixes.length) {
+      body.appendChild(h('div', { style: { marginTop: '.8rem', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '.6rem .8rem' } },
+        h('div', { style: { fontWeight: 700, fontSize: '.82rem', color: '#9a3412', marginBottom: '.3rem' } }, '🛠 How to fix'),
+        ...fixes.map(e => h('div', { style: { fontSize: '.8rem', marginBottom: '.35rem' } },
+          h('b', {}, (e.code ? '#' + e.code + ' — ' : '') + e.title), h('div', { style: { color: '#7c2d12' } }, e.fix)))
+      ));
+    }
+  }).catch(e => { body.innerHTML = ''; body.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + e.message)); });
+}
+
 function _showCampaignErrors(c) {
   const samples = c.error_samples || [];
   const modal = h('div', { class: 'modal-backdrop' },
@@ -18451,10 +18550,11 @@ function _showCampaignErrors(c) {
           ? h('div', { class: 'muted', style: { padding: '.6rem', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '6px' } },
               'No detailed error captured. This usually means the WhatsApp template/language pair is invalid, the access token is expired, or the recipient phone was not provisioned on WhatsApp. Check the Activity tab for the raw Meta response.')
           : h('ul', { style: { paddingLeft: '1.1rem', margin: '.6rem 0' } },
-              ...samples.map(s => h('li', { style: { marginBottom: '.4rem' } },
+              ...samples.map(s => { const e = _waErrExplain(s.error); return h('li', { style: { marginBottom: '.5rem' } },
                 h('b', {}, s.count + ' ×'), ' ',
-                h('span', { style: { color: '#b91c1c' } }, s.error)
-              ))),
+                h('span', { style: { color: '#b91c1c', fontWeight: 600 } }, (e.code ? '#' + e.code + ' — ' : '') + e.title),
+                h('div', { class: 'muted', style: { fontSize: '.78rem' } }, e.fix)
+              ); })),
         h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.6rem' } },
           'Fixes: 132001 → template language mismatch (set it to en_US or the language Meta approved). 131026 → recipient not on WhatsApp. 132000 → template variable count mismatch. 100 / 190 → access token expired — reconnect WhatsApp in Settings.')
       ),
@@ -18504,13 +18604,14 @@ async function wbCampaigns() {
       h('td', {}, h('span', { class: 'tag', style: { background: c.status === 'completed' ? '#10b981' : c.status === 'sending' ? '#6366f1' : c.status === 'failed' ? '#ef4444' : '#64748b', color: '#fff' } }, c.status)),
       h('td', { class: 'muted' }, fmtDate(c.created_at, 'relative')),
       h('td', {},
-        c.status === 'draft' || c.status === 'paused'
-          ? h('button', { class: 'btn sm primary', onclick: async () => {
+        h('button', { class: 'btn sm ghost', title: 'View the message and the numbers this campaign sent to', onclick: () => _viewCampaign(c) }, '👁 View'),
+        (c.status === 'draft' || c.status === 'paused')
+          ? h('button', { class: 'btn sm primary', style: { marginLeft: '.3rem' }, onclick: async () => {
               try { await api('api_wb_campaigns_send_now', c.id); toast('Sending…'); showWbTab('campaigns'); }
               catch (e) { toast(e.message, 'err'); }
             } }, '▶ Send')
           : c.status === 'sending'
-          ? h('button', { class: 'btn sm ghost', onclick: async () => {
+          ? h('button', { class: 'btn sm ghost', style: { marginLeft: '.3rem' }, onclick: async () => {
               try { await api('api_wb_campaigns_pause', c.id); toast('Paused'); showWbTab('campaigns'); }
               catch (e) { toast(e.message, 'err'); }
             } }, '⏸ Pause')
@@ -18767,7 +18868,7 @@ async function openInitiateChatModal(lead) {
       toast('Sent — view delivery status in WhatsBot → Chat');
       m.remove();
     } catch (e) {
-      toast(e.message, 'err');
+      _waToastErr(e);
       sendBtn.disabled = null;
       sendBtn.textContent = 'Send';
     }
@@ -19626,7 +19727,7 @@ async function openWaTemplatePicker(phone, onSent) {
             toast('✓ Template sent');
             m.remove();
             if (typeof onSent === 'function') onSent();
-          } catch (e) { toast(e.message, 'err'); }
+          } catch (e) { _waToastErr(e); }
           return;
         }
         /* Build the per-template Send form inline */
@@ -19702,7 +19803,7 @@ async function openWaTemplatePicker(phone, onSent) {
             m.remove();
             if (typeof onSent === 'function') onSent();
           } catch (e) {
-            toast(e.message, 'err');
+            _waToastErr(e);
             sendBtn.disabled = false; sendBtn.textContent = '📤 Send template';
           }
         };
