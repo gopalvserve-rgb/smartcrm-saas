@@ -121,8 +121,17 @@
     if (k === 'video') return '🎬';
     return '📄';
   };
+  // WA_CAT_TOKEN_FIX_v1 — read the correct localStorage key. The SPA stores
+  // JWTs as 'crm_token_<slug>' (fallback 'crm_token'); the old 'token' key was
+  // stale/empty and caused "Invalid or expired token" on catalogue upload.
+  var _SLUG = (function(){ try { var m = location.pathname.match(/\/t\/([^\/]+)/); return m ? m[1] : ''; } catch(_) { return ''; } })();
   function _tok() {
-    try { return localStorage.getItem('token') || ''; } catch (_) { return ''; }
+    try {
+      return localStorage.getItem('crm_token_' + _SLUG)
+          || localStorage.getItem('crm_token')
+          || localStorage.getItem('token')
+          || '';
+    } catch (_) { return ''; }
   }
   function _thumbSrc(item) {
     if (!item.file_url) return null;
