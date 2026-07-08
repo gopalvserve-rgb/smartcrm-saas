@@ -138,6 +138,16 @@ async function api_leads_setFollowup(token, payload) {
   if (p.followup_at) patch.next_followup_at = new Date(p.followup_at).toISOString();
   else               patch.next_followup_at = null;
   patch.reminder_flow_id = p.reminder_flow_id ? Number(p.reminder_flow_id) : null;
+  /* REMINDER_DEFAULT_FLOW_v1 (2026-07-08) — when no flow_id is explicitly
+   * passed, auto-pick the tenant's default flow (`is_default=1`). Before
+   * this, every lead had reminder_flow_id=null and NO reminders ever fired
+   * because the scheduler required an explicit flow. */
+  if (!patch.reminder_flow_id) {
+    try {
+      const df = (await db.query(`SELECT id FROM reminder_flows WHERE is_active=1 AND is_default=1 LIMIT 1`)).rows[0];
+      if (df) patch.reminder_flow_id = Number(df.id);
+    } catch (_) {}
+  }
   await db.query(
     `UPDATE leads SET next_followup_at=$1, reminder_flow_id=$2 WHERE id=$3`,
     [patch.next_followup_at, patch.reminder_flow_id, leadId]
@@ -325,8 +335,72 @@ async function _cancelForLead(leadId, reason) {
   } catch (_) {}
 }
 
+/* REMINDER_DEFAULT_FLOW_v1 — public scheduler used by routes/leads.js so the
+ * classic lead-save path also queues reminders when a follow-up is set. */
+async function scheduleForLeadWithDefaultFlow(leadId, followupAtIso, meId) {
+  try {
+    await _ensureSchema();
+    if (!followupAtIso) return { scheduled: 0 };
+    const df = (await db.query(`SELECT id FROM reminder_flows WHERE is_active=1 AND is_default=1 LIMIT 1`)).rows[0];
+    if (!df) return { scheduled: 0, no_default: true };
+    // Cancel any prior scheduled rows for this lead first
+    await db.query(
+      `UPDATE followup_reminders SET status='cancelled', error='Reminder cancelled — follow-up changed'
+        WHERE lead_id=$1 AND status='scheduled'`,
+      [Number(leadId)]
+    );
+    await db.query(`UPDATE leads SET reminder_flow_id=$1 WHERE id=$2`, [Number(df.id), Number(leadId)]).catch(()=>{});
+    return await _scheduleFromFlow(Number(leadId), followupAtIso, Number(df.id), Number(meId || 0));
+  } catch (e) {
+    console.warn('[scheduleForLeadWithDefaultFlow] failed for lead', leadId, e.message);
+    return { scheduled: 0, error: e.message };
+  }
+}
+
+/* REMINDER_BACKFILL_v1 — one-shot: for every lead with a future
+ * next_followup_at and no scheduled reminders yet, queue reminders using the
+ * default flow. Idempotent — safe to run more than once. */
+async function api_followupReminders_backfillDefault(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureSchema();
+  const df = (await db.query(`SELECT id, name FROM reminder_flows WHERE is_active=1 AND is_default=1 LIMIT 1`)).rows[0];
+  if (!df) return { ok: false, error: 'No default flow set. Mark one flow as default first.' };
+  const leads = (await db.query(
+    `SELECT l.id, l.next_followup_at
+       FROM leads l
+      WHERE l.next_followup_at IS NOT NULL
+        AND l.next_followup_at > NOW()
+        AND NOT EXISTS (
+          SELECT 1 FROM followup_reminders r
+           WHERE r.lead_id = l.id AND r.status = 'scheduled'
+        )
+      ORDER BY l.next_followup_at ASC
+      LIMIT 500`
+  )).rows;
+  let totalScheduled = 0, leadsProcessed = 0, leadsSkipped = 0;
+  for (const l of leads) {
+    try {
+      const out = await _scheduleFromFlow(Number(l.id), new Date(l.next_followup_at).toISOString(), Number(df.id), me.id);
+      totalScheduled += Number(out.scheduled || 0);
+      if (out.scheduled > 0) {
+        await db.query(`UPDATE leads SET reminder_flow_id=$1 WHERE id=$2`, [Number(df.id), Number(l.id)]).catch(()=>{});
+        leadsProcessed++;
+      } else {
+        leadsSkipped++;
+      }
+    } catch (e) {
+      console.warn('[backfillDefault] lead', l.id, e.message);
+      leadsSkipped++;
+    }
+  }
+  return { ok: true, flow: df.name, candidates: leads.length, leadsProcessed, leadsSkipped, totalScheduled };
+}
+
 module.exports = {
   api_leads_setFollowup,
+  api_followupReminders_backfillDefault,
+  scheduleForLeadWithDefaultFlow,
   api_followupReminders_forLead,
   api_followupReminders_upcoming,
   api_followupReminders_cancel,
