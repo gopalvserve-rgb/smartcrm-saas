@@ -583,6 +583,9 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_mode TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_status  TEXT;   -- sent | failed
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_error   TEXT;
+-- WELCOME_EMAIL_v3 — store the one-time onboarding password so the welcome
+-- email can be RESENT without resetting it. Cleared is fine; onboarding creds.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_temp_password TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_id   TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_date TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS gst_amount_inr   NUMERIC(12,2);

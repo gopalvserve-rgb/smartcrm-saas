@@ -5254,9 +5254,12 @@ function _welcomeBadge(t) {
 }
 async function _sendWelcomeEmail(t) {
   const resend = String(t.welcome_email_status || '') === 'sent';
-  if (!confirm((resend ? 'Resend' : 'Send') + ' welcome email to ' + (t.contact_email || 'the tenant admin') + '?\n\nThis RESETS the tenant admin password to a new temporary one and emails the new login details.')) return;
-  try { const r = await api('api_saas_tenant_sendWelcome', { tenantId: t.id }); toast('Welcome email sent to ' + r.sent_to, 'ok'); navigate('tenants'); }
-  catch (e) { toast(e.message, 'err'); }
+  if (!confirm((resend ? 'Resend' : 'Send') + ' welcome email to ' + (t.contact_email || 'the tenant admin') + '?')) return;
+  try {
+    const r = await api('api_saas_tenant_sendWelcome', { tenantId: t.id });
+    toast('Welcome email sent to ' + r.sent_to + (r.password_reset ? ' (a new password was generated — no password was on file)' : ''), 'ok');
+    navigate('tenants');
+  } catch (e) { toast(e.message, 'err'); }
 }
 function _welcomeBtn(t) {
   const st = String(t.welcome_email_status || '');

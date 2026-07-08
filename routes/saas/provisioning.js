@@ -410,7 +410,8 @@ async function sendWelcomeEmail({ tenantId, name, orgName, packageName, slug, em
     try {
       await control.update('tenants', tenantId, {
         welcome_email_sent_at: new Date().toISOString(),
-        welcome_email_status: 'sent', welcome_email_error: null
+        welcome_email_status: 'sent', welcome_email_error: null,
+        welcome_temp_password: password || null   // WELCOME_EMAIL_v3 — enable resend w/o reset
       });
     } catch (_) {}
     return { ok: true };
@@ -418,7 +419,7 @@ async function sendWelcomeEmail({ tenantId, name, orgName, packageName, slug, em
     const msg = String(e && e.message || e).slice(0, 500);
     console.error('[EMAIL_ISSUE] welcome email FAILED for tenant ' + (slug || tenantId) + ' <' + to + '>: ' + msg);
     try {
-      await control.update('tenants', tenantId, { welcome_email_status: 'failed', welcome_email_error: msg });
+      await control.update('tenants', tenantId, { welcome_email_status: 'failed', welcome_email_error: msg, welcome_temp_password: password || null });
     } catch (_) {}
     try {
       await control.insert('audit_log', {

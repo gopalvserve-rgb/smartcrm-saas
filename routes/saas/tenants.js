@@ -1317,12 +1317,6 @@ async function api_saas_tenant_sendWelcome(token, payload) {
   if (!t) throw new Error('Tenant not found');
   if (t.status === 'deleted')   throw new Error('Tenant is deleted');
   if (t.status === 'suspended') throw new Error('Tenant is suspended — restore first');
-  if (!_bcrypt) throw new Error('bcrypt library not installed on the server');
-
-  // Fresh temporary password (scrm-xxxxxxxx, phone-friendly).
-  const newPassword = 'scrm-' + _crypto.randomBytes(4).toString('hex');
-  const hash = _bcrypt.hashSync(newPassword, 10);
-
   const pool = tenantPool.poolFor(t);
   if (!pool) throw new Error('Could not connect to tenant DB');
   const targetEmail = String(p.email || t.contact_email || '').trim().toLowerCase();
@@ -1335,8 +1329,21 @@ async function api_saas_tenant_sendWelcome(token, payload) {
     user = r.rows[0];
   }
   if (!user) throw new Error('No admin user found in tenant DB');
-  try { await pool.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [hash, user.id]); }
-  catch (e) { if (/updated_at/.test(String(e.message))) await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, user.id]); else throw e; }
+
+  // WELCOME_EMAIL_v3 — SEND ONLY. Reuse the stored onboarding password so we
+  // never touch the tenant's password on a resend. Only when no password was
+  // ever stored (tenant created before v3) do we reset once, as a fallback.
+  let sendPassword = String(t.welcome_temp_password || '').trim();
+  let passwordReset = false;
+  if (!sendPassword) {
+    if (!_bcrypt) throw new Error('bcrypt not installed and no stored password to resend');
+    sendPassword = 'scrm-' + _crypto.randomBytes(4).toString('hex');
+    const hash = _bcrypt.hashSync(sendPassword, 10);
+    try { await pool.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [hash, user.id]); }
+    catch (e) { if (/updated_at/.test(String(e.message))) await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, user.id]); else throw e; }
+    passwordReset = true;
+  }
+  const newPassword = sendPassword;
 
   // Package name (best-effort) for the plan wording.
   let pkgName = 'SmartCRM';
@@ -1354,8 +1361,8 @@ async function api_saas_tenant_sendWelcome(token, payload) {
     detail: JSON.stringify({ category: res.ok ? 'welcome' : 'email issue', slug: t.slug, to: user.email, ok: res.ok, error: res.error || null })
   });
 
-  if (!res.ok) throw new Error('Email failed: ' + (res.error || 'unknown') + ' (password was reset; check SMTP settings)');
-  return { ok: true, sent_to: user.email, status: 'sent' };
+  if (!res.ok) throw new Error('Email failed: ' + (res.error || 'unknown') + ' — check SMTP settings');
+  return { ok: true, sent_to: user.email, status: 'sent', password_reset: passwordReset };
 }
 
 module.exports = {
