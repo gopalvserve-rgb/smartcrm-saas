@@ -1095,6 +1095,17 @@ async function api_leads_create(token, payload) {
 
   const id = await db.insert('leads', base);
 
+  /* REMINDER_DEFAULT_FLOW_v1 (2026-07-08) — also queue reminders on lead
+   * CREATE when the payload includes a future next_followup_at. */
+  try {
+    if (base.next_followup_at) {
+      const fr = require('./followupReminders');
+      if (fr && typeof fr.scheduleForLeadWithDefaultFlow === 'function') {
+        await fr.scheduleForLeadWithDefaultFlow(id, new Date(base.next_followup_at).toISOString(), me.id);
+      }
+    }
+  } catch (_) {}
+
   // SHARE_LEAD_v1: auto-share rules from campaign + source. Best-effort.
   try { await _applyAutoShare(id, Object.assign({ id }, base), me && me.id); } catch (_) {}
 
@@ -1720,6 +1731,24 @@ async function api_leads_update(token, id, patch) {
 
   if ('next_followup_at' in patch && patch.next_followup_at !== lead.next_followup_at) {
     try { require('./tat').logAction(id, 'followup_set', me.id, { due_at: patch.next_followup_at }); } catch (_) {}
+    /* REMINDER_DEFAULT_FLOW_v1 (2026-07-08) — auto-queue reminders using the
+     * default flow whenever a rep changes the follow-up from the classic lead
+     * modal. Before this, reminders only fired if the rep also picked a flow
+     * explicitly, which almost never happened — so nothing ever sent. */
+    try {
+      if (patch.next_followup_at) {
+        const fr = require('./followupReminders');
+        if (fr && typeof fr.scheduleForLeadWithDefaultFlow === 'function') {
+          await fr.scheduleForLeadWithDefaultFlow(id, new Date(patch.next_followup_at).toISOString(), me.id);
+        }
+      } else {
+        // Follow-up cleared → cancel any pending reminders on this lead
+        await db.query(
+          `UPDATE followup_reminders SET status='cancelled', error='Follow-up cleared' WHERE lead_id=$1 AND status='scheduled'`,
+          [id]
+        ).catch(()=>{});
+      }
+    } catch (_) {}
     /* COMPLIANCE_v1 — real-time check: follow-up requires a recent call */
     try {
       const v = await require('./compliance').evaluateRealtime({ event: 'followup_set', leadId: id, userId: me.id });
