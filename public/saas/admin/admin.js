@@ -3435,6 +3435,10 @@ VIEWS.tickets = async (view) => {
 
   const statsRow = h('div', { id: 'tk-stats', style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } });
   view.appendChild(statsRow);
+  // TKT_ASSIGNEE_SUMMARY_v1 — assigned-wise counts; click a card to filter.
+  let _tkAssigneeFilter = null;
+  const assigneeRow = h('div', { id: 'tk-assignee-summary', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '1rem' } });
+  view.appendChild(assigneeRow);
   const tableWrap = h('div', { id: 'tk-table' });
   view.appendChild(tableWrap);
 
@@ -3447,7 +3451,8 @@ VIEWS.tickets = async (view) => {
         priority: prioSel.value || null,
         category: catSel.value || null,
         q: searchIn.value.trim() || null,
-        unassigned: document.getElementById('tk-unassigned').checked ? 1 : null
+        unassigned: document.getElementById('tk-unassigned').checked ? 1 : null,
+        assignee_id: _tkAssigneeFilter || null
       });
     } catch (e) {
       tableWrap.innerHTML = '';
@@ -3471,6 +3476,40 @@ VIEWS.tickets = async (view) => {
     statsRow.appendChild(statCard('Reopened', s.reopened, '#ef4444'));
     statsRow.appendChild(statCard('Urgent open', s.urgent_open, '#dc2626'));
     statsRow.appendChild(statCard('Resolved', s.resolved, '#10b981'));
+
+    // TKT_ASSIGNEE_SUMMARY_v1 — assigned-wise summary cards (click to filter).
+    assigneeRow.innerHTML = '';
+    const byA = (res && res.byAssignee) || [];
+    if (byA.length) {
+      assigneeRow.appendChild(h('div', { style: { fontSize: '.72rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '.04em', width: '100%', marginBottom: '-.2rem' } }, 'Assigned-wise summary'));
+      byA.forEach(a => {
+        const active = (String(_tkAssigneeFilter || '') === String(a.assignee_id || ''));
+        const isUnassigned = !a.assignee_id;
+        const card = h('div', {
+          style: {
+            background: active ? '#eef2ff' : '#fff',
+            border: '1px solid ' + (active ? '#6366f1' : (a.urgent_open ? '#fca5a5' : '#e5e7eb')),
+            borderRadius: '8px', padding: '.5rem .8rem', minWidth: '120px', cursor: isUnassigned ? 'default' : 'pointer'
+          },
+          title: isUnassigned ? 'Tickets not yet assigned' : 'Click to filter to ' + a.assignee_name + "'s tickets",
+          onclick: () => {
+            if (isUnassigned) return;
+            _tkAssigneeFilter = active ? null : a.assignee_id;
+            load();
+          }
+        },
+          h('div', { style: { fontSize: '.8rem', fontWeight: 700, color: isUnassigned ? '#94a3b8' : '#0f172a', whiteSpace: 'nowrap' } }, (isUnassigned ? '👤 ' : '🧑‍💼 ') + a.assignee_name),
+          h('div', { style: { fontSize: '.74rem', color: '#475569', marginTop: '.15rem' } },
+            h('b', { style: { color: '#0f172a' } }, String(a.total)), ' total · ',
+            h('b', { style: { color: a.open_count ? '#3b82f6' : '#94a3b8' } }, String(a.open_count)), ' open',
+            a.urgent_open ? h('span', { style: { color: '#dc2626', fontWeight: 700 } }, ' · ' + a.urgent_open + ' urgent') : null)
+        );
+        assigneeRow.appendChild(card);
+      });
+      if (_tkAssigneeFilter) {
+        assigneeRow.appendChild(h('button', { class: 'btn ghost small', style: { alignSelf: 'center' }, onclick: () => { _tkAssigneeFilter = null; load(); } }, '✕ Clear assignee filter'));
+      }
+    }
 
     // Table
     tableWrap.innerHTML = '';
@@ -3505,7 +3544,7 @@ VIEWS.tickets = async (view) => {
         h('td', {}, (catObj ? catObj.icon + ' ' + catObj.label : t.category)),
         h('td', {}, _tkStatusPill(t.status, cat)),
         h('td', {}, _tkPrioPill(t.priority, cat)),
-        h('td', { class: 'muted', style: { fontSize: '.85rem' } }, t.assignee_name || '—'),
+        h('td', { style: { fontSize: '.85rem', fontWeight: t.assignee_name ? 600 : 400, color: t.assignee_name ? '#0f172a' : '#94a3b8', whiteSpace: 'nowrap' } }, t.assignee_name ? ('🧑‍💼 ' + t.assignee_name) : 'Unassigned'),
         h('td', { class: 'muted', style: { fontSize: '.82rem' } }, _tkFmt(t.last_reply_at || t.created_at)),
         h('td', { style: { textAlign: 'center' } }, String(t.reply_count || 0)),
         h('td', {}, h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); openAdminTicketModal(t.id); } }, 'Open →'))

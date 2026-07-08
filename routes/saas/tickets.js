@@ -547,7 +547,19 @@ async function api_saas_tk_admin_listAll(token, filters) {
       SUM(CASE WHEN status='reopened' THEN 1 ELSE 0 END)::int  AS reopened,
       SUM(CASE WHEN priority='urgent' AND status NOT IN ('closed','resolved') THEN 1 ELSE 0 END)::int AS urgent_open
     FROM support_tickets`)).rows[0];
-  return { tickets: r.rows, stats };
+  // TKT_ASSIGNEE_SUMMARY_v1 — counts grouped by assignee (respects the same
+  // status/category/priority/tenant/search filters as the list above).
+  const byAssignee = (await control.query(`
+    SELECT t.assignee_id, COALESCE(sa.name, 'Unassigned') AS assignee_name,
+           COUNT(*)::int AS total,
+           SUM(CASE WHEN t.status NOT IN ('closed','resolved') THEN 1 ELSE 0 END)::int AS open_count,
+           SUM(CASE WHEN t.priority='urgent' AND t.status NOT IN ('closed','resolved') THEN 1 ELSE 0 END)::int AS urgent_open
+      FROM support_tickets t
+      LEFT JOIN super_admins sa ON sa.id = t.assignee_id
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     GROUP BY t.assignee_id, sa.name
+     ORDER BY total DESC`, params)).rows;
+  return { tickets: r.rows, stats, byAssignee };
 }
 
 /** Admin: get one ticket with replies + internal notes. */
