@@ -3351,6 +3351,34 @@ async function openSignupRequestModal(id, onClose) {
       }
     };
   }
+
+  // SR_MOVE_TO_TENANT_v1 — a request that is already paid/approved but whose
+  // provisioning failed or was never completed (no login button appears) can be
+  // moved to a tenant here. Provisioning is idempotent: it creates the tenant if
+  // missing (or returns the existing one), shares the id+password and sends the
+  // welcome email.
+  if (row.status && row.status !== 'pending' && row.status !== 'rejected') {
+    const hasTenant = !!(row.provisioned_tenant_slug || row.provisioned_slug);
+    const prov = h('div', { class: 'modal-foot', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '1.25rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem' } });
+    prov.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginRight: 'auto' } },
+      hasTenant ? 'Tenant already exists — re-run to resend the login details + welcome email.'
+                : 'Payment recorded. Create the tenant workspace, share the login id + password and send the welcome email.'));
+    const btn = h('button', { class: 'btn sm', style: { background: '#16a34a', color: '#fff' } },
+      hasTenant ? '🔁 Re-provision & Resend Welcome' : '🚀 Move to Tenant & Send Welcome');
+    prov.appendChild(btn);
+    body.appendChild(prov);
+    btn.onclick = async () => {
+      if (!confirm('Create / verify the tenant workspace for this request and send the welcome email?')) return;
+      btn.disabled = true; const _t = btn.textContent; btn.textContent = 'Provisioning…';
+      try {
+        const r = await api('api_saas_sr_provision', row.id);
+        const res = (r && r.result) ? r.result : r;
+        toast('Tenant ready — credentials generated & welcome email sent', 'ok');
+        showCredentialsModal(res);
+        close();
+      } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = _t; }
+    };
+  }
 }
 
 function showCredentialsModal(r) {
