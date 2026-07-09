@@ -138,16 +138,9 @@ async function api_leads_setFollowup(token, payload) {
   if (p.followup_at) patch.next_followup_at = new Date(p.followup_at).toISOString();
   else               patch.next_followup_at = null;
   patch.reminder_flow_id = p.reminder_flow_id ? Number(p.reminder_flow_id) : null;
-  /* REMINDER_DEFAULT_FLOW_v1 (2026-07-08) — when no flow_id is explicitly
-   * passed, auto-pick the tenant's default flow (`is_default=1`). Before
-   * this, every lead had reminder_flow_id=null and NO reminders ever fired
-   * because the scheduler required an explicit flow. */
-  if (!patch.reminder_flow_id) {
-    try {
-      const df = (await db.query(`SELECT id FROM reminder_flows WHERE is_active=1 AND is_default=1 LIMIT 1`)).rows[0];
-      if (df) patch.reminder_flow_id = Number(df.id);
-    } catch (_) {}
-  }
+  /* REMINDER_OPT_IN_v1 (2026-07-08) — NO auto-default. If the rep didn't
+   * explicitly pick a flow, we leave reminder_flow_id NULL and don't queue
+   * anything. Reverts REMINDER_DEFAULT_FLOW_v1 default-attach behavior. */
   await db.query(
     `UPDATE leads SET next_followup_at=$1, reminder_flow_id=$2 WHERE id=$3`,
     [patch.next_followup_at, patch.reminder_flow_id, leadId]
@@ -335,27 +328,28 @@ async function _cancelForLead(leadId, reason) {
   } catch (_) {}
 }
 
-/* REMINDER_DEFAULT_FLOW_v1 — public scheduler used by routes/leads.js so the
- * classic lead-save path also queues reminders when a follow-up is set. */
-async function scheduleForLeadWithDefaultFlow(leadId, followupAtIso, meId) {
+/* REMINDER_OPT_IN_v1 — public scheduler used by routes/leads.js. Requires
+ * an explicit flowId — never defaults to the "default" flow. Callers that
+ * want to attach a flow must pick one first. */
+async function scheduleForLeadWithFlow(leadId, followupAtIso, flowId, meId) {
   try {
     await _ensureSchema();
-    if (!followupAtIso) return { scheduled: 0 };
-    const df = (await db.query(`SELECT id FROM reminder_flows WHERE is_active=1 AND is_default=1 LIMIT 1`)).rows[0];
-    if (!df) return { scheduled: 0, no_default: true };
-    // Cancel any prior scheduled rows for this lead first
+    if (!followupAtIso || !flowId) return { scheduled: 0 };
+    // Cancel any prior scheduled rows for this lead first (re-schedule cleanly)
     await db.query(
       `UPDATE followup_reminders SET status='cancelled', error='Reminder cancelled — follow-up changed'
         WHERE lead_id=$1 AND status='scheduled'`,
       [Number(leadId)]
     );
-    await db.query(`UPDATE leads SET reminder_flow_id=$1 WHERE id=$2`, [Number(df.id), Number(leadId)]).catch(()=>{});
-    return await _scheduleFromFlow(Number(leadId), followupAtIso, Number(df.id), Number(meId || 0));
+    return await _scheduleFromFlow(Number(leadId), followupAtIso, Number(flowId), Number(meId || 0));
   } catch (e) {
-    console.warn('[scheduleForLeadWithDefaultFlow] failed for lead', leadId, e.message);
+    console.warn('[scheduleForLeadWithFlow] failed for lead', leadId, e.message);
     return { scheduled: 0, error: e.message };
   }
 }
+
+/* Backwards-compat alias — some callers still import the old name. */
+async function scheduleForLeadWithDefaultFlow() { return { scheduled: 0, deprecated: true }; }
 
 /* REMINDER_BACKFILL_v1 — one-shot: for every lead with a future
  * next_followup_at and no scheduled reminders yet, queue reminders using the
@@ -397,9 +391,91 @@ async function api_followupReminders_backfillDefault(token) {
   return { ok: true, flow: df.name, candidates: leads.length, leadsProcessed, leadsSkipped, totalScheduled };
 }
 
+
+/* REMINDER_PURGE_v1 (2026-07-08) — cancel every scheduled reminder that was
+ * auto-attached by the earlier REMINDER_DEFAULT_FLOW_v1 build. Detects the
+ * auto-attach case by: flow was default flow AND the lead's reminder_flow_id
+ * was set to that same default (both fingerprints of the auto-flow path).
+ * Admin only. Idempotent — safe to run twice. */
+async function api_followupReminders_purgeAutoAttached(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureSchema();
+  const p = payload || {};
+  const daysBack = Math.min(Math.max(Number(p.days_back || 3), 1), 30);
+  const since = new Date(Date.now() - daysBack * 24 * 3600_000);
+
+  const df = (await db.query(`SELECT id FROM reminder_flows WHERE is_default=1 LIMIT 1`)).rows[0];
+  if (!df) return { ok: false, error: 'No default flow — nothing to purge' };
+
+  // Cancel every SCHEDULED reminder created in the window that used the default flow.
+  const cx = await db.query(
+    `UPDATE followup_reminders
+        SET status='cancelled', error='Auto-attached reminder purged (REMINDER_OPT_IN_v1)'
+      WHERE status='scheduled'
+        AND flow_id = $1
+        AND created_at >= $2
+      RETURNING id`,
+    [Number(df.id), since.toISOString()]
+  );
+  // Reset leads.reminder_flow_id → NULL for leads that were auto-attached
+  // (i.e. their reminder_flow_id equals the default). Preserves the flow for
+  // leads that were manually attached to a NON-default flow.
+  const lr = await db.query(
+    `UPDATE leads SET reminder_flow_id = NULL
+      WHERE reminder_flow_id = $1
+      RETURNING id`,
+    [Number(df.id)]
+  );
+
+  return {
+    ok: true,
+    reminders_cancelled: cx.rows.length,
+    leads_detached: lr.rows.length,
+    default_flow_id: df.id,
+    days_back: daysBack
+  };
+}
+
+/* REMINDER_DIAG_v1 (2026-07-08) — return a sample of scheduled reminders w/
+ * followup_at + fire_at both in IST + the computed offset, so we can eyeball
+ * whether the sign convention or the timezone matches user expectations. */
+async function api_followupReminders_diagnose(token) {
+  await authUser(token);
+  await _ensureSchema();
+  const r = await db.query(
+    `SELECT r.id, r.lead_id, r.channel, r.followup_at, r.fire_at,
+            r.rung_offset_minutes, r.recipient_phone, l.name AS lead_name,
+            r.status, f.name AS flow_name
+       FROM followup_reminders r
+       LEFT JOIN leads l ON l.id = r.lead_id
+       LEFT JOIN reminder_flows f ON f.id = r.flow_id
+      WHERE r.status = 'scheduled'
+      ORDER BY r.fire_at ASC
+      LIMIT 25`
+  );
+  return {
+    now_utc: new Date().toISOString(),
+    now_ist: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }),
+    items: r.rows.map(x => ({
+      id: x.id, lead: x.lead_name, phone: x.recipient_phone, channel: x.channel,
+      flow: x.flow_name,
+      followup_utc: x.followup_at,
+      followup_ist: new Date(x.followup_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }),
+      fire_utc: x.fire_at,
+      fire_ist: new Date(x.fire_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }),
+      offset_stored_min: x.rung_offset_minutes,
+      actual_diff_min: Math.round((new Date(x.fire_at).getTime() - new Date(x.followup_at).getTime()) / 60000)
+    }))
+  };
+}
+
 module.exports = {
   api_leads_setFollowup,
   api_followupReminders_backfillDefault,
+  api_followupReminders_purgeAutoAttached,
+  api_followupReminders_diagnose,
+  scheduleForLeadWithFlow,
   scheduleForLeadWithDefaultFlow,
   api_followupReminders_forLead,
   api_followupReminders_upcoming,
