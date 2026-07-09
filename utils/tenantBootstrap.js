@@ -623,6 +623,10 @@ const CONFIG_DEFAULTS = [
   // chat is ON for every new tenant (and rolled out to existing tenants at
   // boot via routes/saas/wbChatV2Rollout autoRolloutAtBoot).
   { key: 'WB_CHAT_V2_ENABLED', value: '1' },
+  // WA_CATALOGUE_ALLTENANTS_v1 (2026-07-08) — WA Catalogue library + picker
+  // ON for every new tenant. Existing tenants get flipped by
+  // utils/waCatalogueAllTenantsRollout at boot.
+  { key: 'WA_CATALOGUE_ENABLED', value: '1' },
   // REC_RETENTION_v1 — auto-delete call recordings after 30 days by default.
   // A daily all-tenant cron purges lead_recordings older than this. '0' disables.
   { key: 'RECORDING_RETENTION_DAYS', value: '30' },
