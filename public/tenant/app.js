@@ -18530,6 +18530,23 @@ function _viewCampaign(c) {
       h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '.86rem', color: '#0f172a', background: '#fff', border: '1px solid #eef0f5', borderRadius: '6px', padding: '.5rem .65rem' } },
         sample.rendered_message || '(template message — no rendered text stored)')
     ));
+    // WA_CAMPAIGN_EVENTS_v1 — engagement summary: status counts + button clicks.
+    const _cnt = { sent: 0, delivered: 0, read: 0, failed: 0, clicked: 0 };
+    const _btnTally = {};
+    targets.forEach(t => {
+      if (_cnt[t.status] != null) _cnt[t.status]++;
+      if (t.clicked_button) { _cnt.clicked++; _btnTally[t.clicked_button] = (_btnTally[t.clicked_button] || 0) + 1; }
+    });
+    const chip = (label, n, col) => h('span', { style: { display: 'inline-block', background: col, color: '#fff', borderRadius: '20px', padding: '3px 10px', fontSize: '.74rem', fontWeight: 700, marginRight: '6px', marginBottom: '6px' } }, label + ': ' + n);
+    body.appendChild(h('div', { style: { margin: '.2rem 0 .6rem' } },
+      chip('Sent', _cnt.sent, '#6366f1'), chip('Delivered', _cnt.delivered, '#10b981'),
+      chip('Read', _cnt.read, '#0ea5e9'), chip('Clicked', _cnt.clicked, '#f59e0b'),
+      chip('Failed', _cnt.failed, '#ef4444')));
+    if (Object.keys(_btnTally).length) {
+      body.appendChild(h('div', { style: { background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '.5rem .7rem', marginBottom: '.6rem', fontSize: '.82rem' } },
+        h('b', {}, '👆 Button clicks: '),
+        Object.keys(_btnTally).map(k => k + ' — ' + _btnTally[k]).join('   ·   ')));
+    }
     // Recipients table
     body.appendChild(h('div', { style: { fontSize: '.8rem', fontWeight: 700, margin: '.2rem 0 .4rem' } },
       '📇 Recipients (' + targets.length + ')'));
@@ -18550,7 +18567,12 @@ function _viewCampaign(c) {
           h('td', { style: { fontWeight: 600, fontSize: '.82rem' } }, t.name || '—'),
           h('td', { style: { fontFamily: 'monospace', fontSize: '.82rem' } }, t.phone || '—'),
           h('td', {}, stChip(t.status)),
-          h('td', { style: { fontSize: '.78rem', color: exp ? '#b91c1c' : '#94a3b8', maxWidth: '260px' } },
+          h('td', { style: { fontSize: '.78rem' } },
+            t.clicked_button
+              ? h('span', { style: { background: '#f59e0b', color: '#fff', borderRadius: '6px', padding: '1px 7px', fontWeight: 700 }, title: t.clicked_at ? ('Clicked ' + fmtDate(t.clicked_at, 'relative')) : '' },
+                  '👆 ' + t.clicked_button + (Number(t.click_count) > 1 ? (' ×' + t.click_count) : ''))
+              : h('span', { class: 'muted' }, '—')),
+          h('td', { style: { fontSize: '.78rem', color: exp ? '#b91c1c' : '#94a3b8', maxWidth: '240px' } },
             exp ? (exp.code ? ('#' + exp.code + ' — ') : '') + exp.title : (t.status === 'failed' ? 'Failed' : '—'))
         ));
       });
@@ -18562,7 +18584,7 @@ function _viewCampaign(c) {
     }
     _renderCampPage();
     body.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
-      h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'Name'), h('th', {}, 'Number'), h('th', {}, 'Status'), h('th', {}, 'Reason (if failed)'))),
+      h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'Name'), h('th', {}, 'Number'), h('th', {}, 'Status'), h('th', {}, 'Button clicked'), h('th', {}, 'Reason (if failed)'))),
       _tb
     )));
     body.appendChild(_ph);

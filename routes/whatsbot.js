@@ -2507,11 +2507,39 @@ async function api_wb_campaigns_pause(token, id) {
 
 async function api_wb_campaigns_targets(token, id) {
   await authUser(token);
-  const { rows } = await db.query(
-    `SELECT * FROM wa_campaign_targets WHERE campaign_id = $1 ORDER BY id ASC LIMIT 1000`,
-    [Number(id)]
-  );
-  return rows;
+  const cid = Number(id);
+  // WA_CAMPAIGN_EVENTS_v1 — enrich each recipient with the button they clicked
+  // (matched on the last-10 digits of the phone within THIS campaign). Falls
+  // back to a plain list if the wa_button_clicks table isn't present.
+  try {
+    const { rows } = await db.query(
+      `SELECT t.*,
+              bc.button_title  AS clicked_button,
+              bc.clicked_at    AS clicked_at,
+              bc.click_count   AS click_count
+         FROM wa_campaign_targets t
+         LEFT JOIN LATERAL (
+           SELECT b.button_title,
+                  MAX(b.clicked_at) AS clicked_at,
+                  COUNT(*)::int     AS click_count
+             FROM wa_button_clicks b
+            WHERE b.campaign_id = t.campaign_id
+              AND RIGHT(regexp_replace(b.phone, '\D', '', 'g'), 10)
+                = RIGHT(regexp_replace(t.phone, '\D', '', 'g'), 10)
+            GROUP BY b.button_title
+            ORDER BY MAX(b.clicked_at) DESC
+            LIMIT 1
+         ) bc ON TRUE
+        WHERE t.campaign_id = $1
+        ORDER BY t.id ASC LIMIT 2000`,
+      [cid]
+    );
+    return rows;
+  } catch (e) {
+    const { rows } = await db.query(
+      `SELECT * FROM wa_campaign_targets WHERE campaign_id = $1 ORDER BY id ASC LIMIT 2000`, [cid]);
+    return rows;
+  }
 }
 
 // ---------- Activity Log ------------------------------------------
