@@ -71,6 +71,18 @@ async function _ensureSchema() {
     notes TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await db.query(`CREATE INDEX IF NOT EXISTS fin_doc_lead_idx ON fin_doc_checklist(lead_id)`);
+  /* FIN_DOC_UPLOAD_v1 (2026-07-08) — file attachment cols + BYTEA store. */
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS file_url TEXT`).catch(()=>{});
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS file_mime TEXT`).catch(()=>{});
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS file_size BIGINT`).catch(()=>{});
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS file_name TEXT`).catch(()=>{});
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS file_token TEXT`).catch(()=>{});
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ`).catch(()=>{});
+  await db.query(`ALTER TABLE fin_doc_checklist ADD COLUMN IF NOT EXISTS uploaded_by INTEGER`).catch(()=>{});
+  await db.query(`CREATE TABLE IF NOT EXISTS fin_doc_media (
+    token TEXT PRIMARY KEY, mime TEXT, filename TEXT, size BIGINT, bytes BYTEA,
+    doc_id INTEGER, lead_id INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   // FIN_RENEWAL_v1 — premium renewal tracker + auto WA/email reminders + collection report.
   await db.query(`CREATE TABLE IF NOT EXISTS fin_renewal_reminders (
     id SERIAL PRIMARY KEY, policy_id INTEGER NOT NULL, lead_id INTEGER NOT NULL,
@@ -451,7 +463,28 @@ async function api_fin_doc_add(token, payload) {
   return { ok: true, id: r.rows[0].id };
 }
 async function api_fin_doc_delete(token, payload) {
-  await authUser(token); await db.query(`DELETE FROM fin_doc_checklist WHERE id=$1`, [(payload&&payload.id)||0]);
+  await authUser(token);
+  const id = (payload&&payload.id)||0;
+  // Also drop the file from BYTEA store if it had one
+  await db.query(`DELETE FROM fin_doc_media WHERE doc_id=$1`, [id]).catch(()=>{});
+  await db.query(`DELETE FROM fin_doc_checklist WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+/* FIN_DOC_UPLOAD_v1 — remove the uploaded file from a checklist row (keeps
+ * the row, so status can go back to 'pending' + a fresh file re-uploaded). */
+async function api_fin_doc_removeFile(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const id = Number((payload&&payload.id)||0);
+  if (!id) throw new Error('doc id required');
+  await db.query(`DELETE FROM fin_doc_media WHERE doc_id=$1`, [id]).catch(()=>{});
+  await db.query(
+    `UPDATE fin_doc_checklist SET
+       file_url=NULL, file_mime=NULL, file_size=NULL,
+       file_name=NULL, file_token=NULL,
+       uploaded_at=NULL, uploaded_by=NULL,
+       status='pending', updated_at=NOW()
+     WHERE id=$1`, [id]);
   return { ok: true };
 }
 
@@ -506,5 +539,6 @@ module.exports = {
   api_fin_lender_add, api_fin_lender_byLead, api_fin_lender_update, api_fin_lender_delete,
   api_fin_commission_add, api_fin_commission_byLead, api_fin_commission_update, api_fin_commission_delete,
   api_fin_doc_byLead, api_fin_doc_setStatus, api_fin_doc_add, api_fin_doc_delete,
+  api_fin_doc_removeFile,
   api_fin_summary
 };
