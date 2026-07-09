@@ -285,7 +285,9 @@ ALTER TABLE remarks ADD COLUMN IF NOT EXISTS status_id INTEGER;
 ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS show_in_list INTEGER NOT NULL DEFAULT 0;
 -- INV_CUSTOM_FIELDS_v1 — custom fields can now target leads OR invoices.
 ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS entity TEXT NOT NULL DEFAULT 'lead';
-ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS custom_fields JSONB;
+-- NOTE: invoices_inv.custom_fields ALTER lives AFTER the invoices_inv table is
+-- created (see below) — putting it here ran before the table existed and broke
+-- provisioning with 'relation invoices_inv does not exist' (INV_CF_ORDER_FIX_v1).
 
 -- ---- automations --------------------------------------------
 CREATE TABLE IF NOT EXISTS automations (
@@ -1558,6 +1560,8 @@ CREATE INDEX IF NOT EXISTS idx_invoices_inv_company  ON invoices_inv(company_id)
 CREATE INDEX IF NOT EXISTS idx_invoices_inv_customer ON invoices_inv(customer_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_inv_status   ON invoices_inv(status);
 CREATE INDEX IF NOT EXISTS idx_invoices_inv_paid     ON invoices_inv(paid_status);
+-- INV_CUSTOM_FIELDS_v1 — invoice custom-field values (placed AFTER the table).
+ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS custom_fields JSONB;
 
 -- ---- invoice_lines (line items) ----------------------------------
 CREATE TABLE IF NOT EXISTS invoice_lines_inv (
