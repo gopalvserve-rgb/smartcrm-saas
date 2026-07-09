@@ -199,7 +199,7 @@
       if (!s) return '<span style="color:#94a3b8">—</span>';
       try {
         var dt = new Date(s);
-        return dt.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+        return dt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true }) + ' IST';
       } catch (_) { return esc(s); }
     }
     function statusPill(st) {
