@@ -836,6 +836,14 @@ async function openTenantDetailsModal(t) {
     return { wrap: h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, label), inp), inp };
   };
   const fOrg = fld('Organisation name', t.org_name);
+  // TENANT_SLUG_EDIT_v1 — slug (login URL path). Editable; flagged if missing.
+  const _slugBlank = !String(t.slug || '').trim();
+  const fSlug = fld('🔗 URL slug (login path /t/…)' + (_slugBlank ? '  ⚠ MISSING — set one' : ''), t.slug);
+  fSlug.inp.placeholder = 'e.g. acme-corp';
+  if (_slugBlank) { fSlug.inp.style.border = '1px solid #ef4444'; fSlug.inp.style.background = '#fef2f2'; }
+  const _slugHint = h('div', { style: { fontSize: '.72rem', color: '#94a3b8', marginTop: '-4px', marginBottom: '8px' } },
+    'Lowercase letters, numbers, hyphens; starts with a letter. Login URL: ', h('code', {}, location.origin + '/t/'), h('b', { class: 'slug-live' }, String(t.slug || '…')));
+  fSlug.inp.addEventListener('input', () => { const el = _slugHint.querySelector('.slug-live'); if (el) el.textContent = fSlug.inp.value || '…'; });
   const fName = fld('Contact name', t.contact_name);
   const fEmail = fld('Contact email', t.contact_email);
   const fMobile = fld('Contact mobile', t.contact_mobile);
@@ -847,7 +855,7 @@ async function openTenantDetailsModal(t) {
   const _typeWrap = h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, 'Tenant type'), _typeSel);
   card.appendChild(h('div', { style:{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, 'Edit'),
-    fOrg.wrap, _typeWrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
+    fOrg.wrap, fSlug.wrap, _slugHint, _typeWrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
 
   // TENANT_EDIT_BILLING_v1 — Billing + Plan section in the edit modal.
   const numFld = (label, val) => {
@@ -929,6 +937,7 @@ async function openTenantDetailsModal(t) {
         org_name: fOrg.inp.value, contact_name: fName.inp.value,
         contact_email: fEmail.inp.value, contact_mobile: fMobile.inp.value,
         admin_remarks: fRemarks.inp.value,
+        slug: fSlug.inp.value.trim().toLowerCase(),
         tenant_type: _typeSel.value,
         total_amount_inr: fTotal.inp.value === '' ? '' : Number(fTotal.inp.value),
         amount_paid_inr:  fPaid.inp.value  === '' ? '' : Number(fPaid.inp.value),

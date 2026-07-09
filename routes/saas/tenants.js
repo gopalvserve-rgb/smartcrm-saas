@@ -1255,9 +1255,27 @@ async function api_saas_tenants_update(token, payload) {
     const _tt = String(p.tenant_type).toLowerCase() === 'demo' ? 'demo' : 'live';
     sets.push(`tenant_type = $${i++}`); vals.push(_tt);
   }
+  // TENANT_SLUG_EDIT_v1 — set/fix the tenant slug (the /t/<slug> login path).
+  // Safe: tenant DB access uses the stored db_name, not the slug, so changing
+  // the slug only changes the login URL/identity. Validated + unique.
+  let _oldSlug = null;
+  if (p.slug !== undefined && String(p.slug).trim() !== '') {
+    const newSlug = String(p.slug).trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]{2,40}$/.test(newSlug)) {
+      throw new Error('Invalid slug — 3–41 chars, lowercase letters/numbers/hyphens, must start with a letter.');
+    }
+    if (newSlug !== String(t.slug || '').toLowerCase()) {
+      const clash = await control.query(`SELECT id FROM tenants WHERE LOWER(slug) = $1 AND id <> $2 LIMIT 1`, [newSlug, id]);
+      if (clash.rows.length) throw new Error('That slug is already used by another tenant.');
+      sets.push(`slug = $${i++}`); vals.push(newSlug);
+      _oldSlug = t.slug || null;
+    }
+  }
   if (!sets.length) return { ok: true, nochange: true };
   vals.push(id);
   await control.query(`UPDATE tenants SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
+  // TENANT_SLUG_EDIT_v1 — drop cached pools/routes for old + new slug.
+  try { if (_oldSlug) tenantPool.invalidateSlug(_oldSlug); if (p.slug) tenantPool.invalidateSlug(String(p.slug).trim().toLowerCase()); } catch (_) {}
   // MANUAL_COLLECTION_v1 — when amount_paid increases, record a dated PAID
   // invoice for the delta so the collected amount appears in Finance for the
   // current month. (Demo tenants are still excluded from revenue downstream.)
