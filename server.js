@@ -2437,6 +2437,89 @@ app.get('/api/wa-catalogue-file/:token', (req, res) => {
       }
     });
 });
+
+/* FIN_DOC_UPLOAD_v1 (2026-07-08) — Finance pack doc-checklist file upload.
+ * POST /api/fin-doc-upload  (multipart, field 'file' + form field 'doc_id')
+ *   → stores bytes in fin_doc_media (BYTEA), sets file_url/file_name/status
+ *     on the fin_doc_checklist row, returns { ok, url }.
+ * GET  /api/fin-doc-file/:token  → authenticated download / inline view.
+ * Wired to attachTenant so /api/* resolves the caller's tenant. */
+const _finDocUpload = _multer({ storage: _multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+app.post('/api/fin-doc-upload', _finDocUpload.single('file'), (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const me = await authUser(token);
+        if (!req.file) return res.status(400).json({ error: 'file required (multipart field "file")' });
+        const docId = Number(req.body && req.body.doc_id || 0);
+        if (!docId) return res.status(400).json({ error: 'doc_id required' });
+        // Confirm the doc exists (and get lead_id for the media row)
+        const dx = await tenantDb.query(`SELECT id, lead_id FROM fin_doc_checklist WHERE id=$1`, [docId]);
+        if (!dx.rows.length) return res.status(404).json({ error: 'doc not found' });
+        // Idempotent schema — same ALTERs as routes/packs/finance.js
+        await tenantDb.query(`CREATE TABLE IF NOT EXISTS fin_doc_media (
+          token TEXT PRIMARY KEY, mime TEXT, filename TEXT, size BIGINT, bytes BYTEA,
+          doc_id INTEGER, lead_id INTEGER,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        // Drop any previously attached file on this checklist row (single latest wins)
+        await tenantDb.query(`DELETE FROM fin_doc_media WHERE doc_id=$1`, [docId]).catch(()=>{});
+        const tok = require('crypto').randomBytes(18).toString('hex');
+        await tenantDb.query(
+          `INSERT INTO fin_doc_media (token, mime, filename, size, bytes, doc_id, lead_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [tok, req.file.mimetype || 'application/octet-stream', req.file.originalname || '',
+           req.file.size || 0, req.file.buffer, docId, dx.rows[0].lead_id || null]
+        );
+        const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+        const host  = req.get('host');
+        const url = proto + '://' + host + '/t/' + req.tenantSlug + '/api/fin-doc-file/' + tok;
+        // Stamp the checklist row + auto-mark status='received'
+        await tenantDb.query(
+          `UPDATE fin_doc_checklist SET
+             file_url=$1, file_mime=$2, file_size=$3, file_name=$4, file_token=$5,
+             uploaded_at=NOW(), uploaded_by=$6,
+             status = CASE WHEN status='pending' THEN 'received' ELSE status END,
+             updated_at=NOW()
+           WHERE id=$7`,
+          [url, req.file.mimetype || 'application/octet-stream', req.file.size || 0,
+           req.file.originalname || '', tok, me.id, docId]);
+        return res.json({ ok: true, url, token: tok, doc_id: docId,
+                          mime_type: req.file.mimetype || 'application/octet-stream',
+                          filename: req.file.originalname || '', size: req.file.size || 0 });
+      } catch (e) {
+        console.error('[fin-doc-upload] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'upload failed' });
+      }
+    });
+});
+app.get('/api/fin-doc-file/:token', (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const hdrTok = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const authTok = hdrTok || req.query.tok || '';
+        try { await authUser(authTok); } catch (_) { return res.status(401).json({ error: 'auth required' }); }
+        const tok = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
+        if (!tok) return res.status(404).end();
+        const r = await tenantDb.query(`SELECT mime, bytes, filename FROM fin_doc_media WHERE token=$1`, [tok]);
+        if (!r.rows.length) return res.status(404).json({ error: 'file not found' });
+        const row = r.rows[0];
+        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        if (row.filename) res.setHeader('Content-Disposition', 'inline; filename="' + row.filename.replace(/["\\]/g, '') + '"');
+        return res.end(row.bytes);
+      } catch (e) {
+        console.error('[fin-doc-file] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'read failed' });
+      }
+    });
+});
 // WA_TPL_SAMPLE_STORE_v1 (2026-07-04) — /api/wa-sample was referenced by the
 // template builder (POST to host the header sample) and by whatsbot's
 // _uploadSampleToMeta (GET /api/wa-sample/<token> to read the bytes back), but
