@@ -2951,7 +2951,132 @@ async function api_aibot_diagnose_thread(token, payload) {
   };
 }
 
+
+/* AIBOT_DIAG_v1 (2026-07-09) — admin/manager cross-tenant diagnostic. Given a
+ * phone, returns everything needed to explain why the AI bot did (or didn't)
+ * reply: current bot settings, last 10 ai_chat_log rows (status + suppressed_reason),
+ * last 10 whatsapp_messages (direction + user_id + template_name), and a snapshot
+ * of the runtime gates (welcome-sent-recent flag, human-active-recent flag, cap-count).
+ * Call with { phone: '918285039708' } from Chrome console or a tenant admin page.
+ */
+async function api_aiBot_diagnose(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  const p = payload || {};
+  const rawPhone = String(p.phone || '').replace(/\D/g, '');
+  if (!rawPhone) throw new Error('phone required');
+  const tail10 = rawPhone.slice(-10);
+
+  const out = { phone: rawPhone, tail10, checked_at_ist: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }) };
+
+  /* 1. Bot settings — pull default row + any per-phone rows */
+  try {
+    const s = await db.query(`SELECT * FROM ai_bot_settings ORDER BY (phone_number_id IS NULL), id`);
+    out.bot_rows = s.rows.map(r => ({
+      id: r.id, phone_number_id: r.phone_number_id, is_enabled: r.is_enabled,
+      bot_name: r.bot_name, welcome: String(r.welcome_message || '').slice(0, 80),
+      reply_modes: r.reply_modes,
+      pause_after_human_handoff: r.pause_after_human_handoff,
+      resume_after_idle_seconds: r.resume_after_idle_seconds,
+      resume_after_idle_minutes: r.resume_after_idle_minutes,
+      max_replies_per_thread: r.max_replies_per_thread,
+      language: r.language, model_override: r.model_override
+    }));
+  } catch (e) { out.bot_rows_err = e.message; }
+
+  /* 2. Last 10 whatsapp_messages for this phone */
+  try {
+    const w = await db.query(
+      `SELECT id, direction, user_id, template_name, message_type,
+              LEFT(COALESCE(body,''), 200) AS body,
+              wa_message_id, status,
+              LEFT(COALESCE(error_text,''), 200) AS error_text,
+              from_number, to_number, created_at
+         FROM whatsapp_messages
+        WHERE RIGHT(regexp_replace(COALESCE(to_number,''),   '[^0-9]', '', 'g'), 10) = $1
+           OR RIGHT(regexp_replace(COALESCE(from_number,''), '[^0-9]', '', 'g'), 10) = $1
+        ORDER BY id DESC
+        LIMIT 10`,
+      [tail10]
+    );
+    out.recent_messages = w.rows.map(x => Object.assign({}, x, {
+      ist: new Date(x.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
+    }));
+  } catch (e) { out.recent_messages_err = e.message; }
+
+  /* 3. Last 10 ai_chat_log rows (this is the primary bot audit trail) */
+  try {
+    const c = await db.query(
+      `SELECT id, status, mode_used, model,
+              LEFT(COALESCE(suppressed_reason,''), 300) AS suppressed_reason,
+              LEFT(COALESCE(error_text,''), 300) AS error_text,
+              LEFT(COALESCE(reply_text,''), 200) AS reply_text,
+              phone_number_id, created_at
+         FROM ai_chat_log
+        WHERE phone = $1
+        ORDER BY id DESC
+        LIMIT 10`,
+      [rawPhone]
+    );
+    out.ai_chat_log = c.rows.map(x => Object.assign({}, x, {
+      ist: new Date(x.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
+    }));
+  } catch (e) { out.ai_chat_log_err = e.message; }
+
+  /* 4. Manual pause status */
+  try {
+    const pz = await db.query(
+      `SELECT EXTRACT(EPOCH FROM (paused_until - NOW()))::bigint AS secs, paused_until
+         FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
+      [tail10]);
+    out.manual_pause = pz.rows[0] || null;
+  } catch (e) { out.manual_pause_err = e.message; }
+
+  /* 5. Runtime gate snapshot — replicate what _shouldSuppress would compute NOW */
+  try {
+    const humanRecent = await db.query(
+      `SELECT id, user_id, created_at FROM whatsapp_messages
+        WHERE direction='out' AND user_id IS NOT NULL
+          AND (RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
+            OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1)
+          AND created_at > NOW() - INTERVAL '30 minutes'
+        ORDER BY id DESC LIMIT 3`, [tail10]);
+    out.gate_human_last_30min = humanRecent.rows;
+    const anyHuman = await db.query(
+      `SELECT id, user_id, created_at FROM whatsapp_messages
+        WHERE direction='out' AND user_id IS NOT NULL
+          AND (RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
+            OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1)
+        ORDER BY id DESC LIMIT 3`, [tail10]);
+    out.gate_any_human_ever = anyHuman.rows;
+    const cap = await db.query(
+      `SELECT COUNT(*)::int AS c FROM ai_chat_log
+        WHERE phone = $1 AND status IN ('sent', 'draft')
+          AND (mode_used IS NULL OR mode_used != 'welcome')
+          AND created_at > NOW() - INTERVAL '24 hours'`, [rawPhone]);
+    out.gate_cap_count_24h = Number(cap.rows[0]?.c || 0);
+  } catch (e) { out.gate_snapshot_err = e.message; }
+
+  /* 6. Config flags that affect the bot */
+  const cfgKeys = ['AIBOT_ENFORCE_CAP','AIBOT_IGNORE_CAP','AIBOT_COMMITMENTS_ENABLED','AI_BOT_ENABLED'];
+  out.config = {};
+  for (const k of cfgKeys) {
+    try { out.config[k] = await db.getConfig(k, ''); } catch (_) { out.config[k] = '(unavail)'; }
+  }
+
+  /* 7. Gemini key present? */
+  try {
+    const control = require('../control/db');
+    const g = await control.query(`SELECT gemini_api_key_enc IS NOT NULL AS has_control_key FROM ai_settings LIMIT 1`);
+    out.gemini_has_control_key = g.rows[0]?.has_control_key || false;
+    out.gemini_has_env_key = !!process.env.GEMINI_API_KEY;
+  } catch (e) { out.gemini_key_err = e.message; }
+
+  return out;
+}
+
 module.exports = {
+  api_aiBot_diagnose,
   api_aibot_diagnose_thread,
   api_aiBot_diagnose, api_aiBot_clearFlowSession,  /* BOT_DIAGNOSE_v1 */
   // Public tenant API (auto-exposed via tenantApi.js loader)
