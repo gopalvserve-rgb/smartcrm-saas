@@ -44975,22 +44975,84 @@ function packFinanceLeadBlock(leadId) {
         try { const r = await api('api_fin_commission_add', { lead_id: leadId, lender_name: cLend.value.trim(), disbursed_amount: Number(cDisb.value) || 0, commission_pct: Number(cPct.value) || 0 }); toast('Commission ' + _packINR(r.commission_amount) + ' added', 'ok'); reload(); } catch (e) { toast(e.message, 'err'); }
       } }, '➕ Add commission')));
 
-    // ---- Document checklist ----
+    // ---- Document checklist ----  FIN_DOC_UPLOAD_v1 (2026-07-08)
     root.appendChild(_sec('📁 Document checklist'));
-    const dl = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } });
+    const dl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+    /* Each doc row is: [status dot] name pending/received/verified   [📎 upload | 👁 view | 🗑 remove file] */
+    function _finViewDoc(doc) {
+      if (!doc.file_url) return;
+      // Append the auth token as query param so the browser can open it directly
+      const tok = (localStorage.getItem('crm_token_' + (window.CRM && CRM.slug || '')) || localStorage.getItem('crm_token') || '');
+      const sep = doc.file_url.indexOf('?') >= 0 ? '&' : '?';
+      window.open(doc.file_url + sep + 'tok=' + encodeURIComponent(tok), '_blank', 'noopener');
+    }
+    async function _finUploadForDoc(doc) {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = 'image/*,application/pdf,.doc,.docx,.xls,.xlsx';
+      inp.style.display = 'none';
+      inp.onchange = async () => {
+        const f = inp.files && inp.files[0];
+        try { document.body.removeChild(inp); } catch (_) {}
+        if (!f) return;
+        if (f.size > 25 * 1024 * 1024) { toast('Max 25 MB', 'err'); return; }
+        const tok = (localStorage.getItem('crm_token_' + (window.CRM && CRM.slug || '')) || localStorage.getItem('crm_token') || '');
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('doc_id', String(doc.id));
+        try {
+          const r = await fetch('/api/fin-doc-upload', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: fd });
+          const j = await r.json();
+          if (!r.ok || j.error) throw new Error(j.error || ('upload failed (HTTP ' + r.status + ')'));
+          toast('✓ Uploaded ' + (j.filename || f.name), 'ok');
+          reload();
+        } catch (e) { toast('Upload failed: ' + e.message, 'err'); }
+      };
+      document.body.appendChild(inp);
+      inp.click();
+    }
+    async function _finRemoveDocFile(doc) {
+      if (!confirm('Remove uploaded file for "' + doc.doc_name + '"?')) return;
+      try { await api('api_fin_doc_removeFile', { id: doc.id }); toast('File removed', 'ok'); reload(); }
+      catch (e) { toast(e.message, 'err'); }
+    }
     d.docs.forEach(doc => {
-      const chip = h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 8px', borderRadius: '14px', fontSize: '11.5px', cursor: 'pointer', background: '#fff', border: '1px solid ' + DOC_COLOR[doc.status] },
-        title: 'Click to cycle status', onclick: async () => { try { await api('api_fin_doc_setStatus', { id: doc.id, status: DOC_NEXT[doc.status] || 'pending' }); reload(); } catch (e) { toast(e.message, 'err'); } } },
-        h('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: DOC_COLOR[doc.status] } }),
-        h('span', {}, doc.doc_name),
-        h('span', { style: { color: DOC_COLOR[doc.status], fontWeight: 600 } }, doc.status));
-      dl.appendChild(chip);
+      const hasFile = !!doc.file_url;
+      const row = h('div', {
+        style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px',
+                 borderRadius: '8px', border: '1px solid ' + (hasFile ? '#86efac' : '#e2e8f0'),
+                 background: hasFile ? '#f0fdf4' : '#fff', fontSize: '12px' }
+      },
+        h('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: DOC_COLOR[doc.status], flex: '0 0 auto' } }),
+        h('span', {
+          style: { flex: '1', cursor: 'pointer', fontWeight: '500' },
+          title: 'Click to cycle status',
+          onclick: async () => { try { await api('api_fin_doc_setStatus', { id: doc.id, status: DOC_NEXT[doc.status] || 'pending' }); reload(); } catch (e) { toast(e.message, 'err'); } }
+        }, doc.doc_name),
+        h('span', { style: { color: DOC_COLOR[doc.status], fontWeight: 600, fontSize: '10.5px', textTransform: 'uppercase' } }, doc.status),
+        hasFile ? h('button', {
+          class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' },
+          title: 'View uploaded file — ' + (doc.file_name || ''),
+          onclick: () => _finViewDoc(doc)
+        }, '👁 View') : null,
+        h('button', {
+          class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' },
+          title: hasFile ? 'Replace the uploaded file' : 'Upload a file for this document',
+          onclick: () => _finUploadForDoc(doc)
+        }, hasFile ? '↻ Replace' : '📎 Upload'),
+        hasFile ? h('button', {
+          class: 'btn ghost', style: { fontSize: '11px', padding: '2px 6px', color: '#dc2626' },
+          title: 'Remove the uploaded file (keeps the checklist row)',
+          onclick: () => _finRemoveDocFile(doc)
+        }, '🗑') : null
+      );
+      dl.appendChild(row);
     });
     root.appendChild(dl);
-    const dName = h('input', { placeholder: 'Add document…', style: { fontSize: '11px', padding: '2px 5px', width: '150px' } });
-    root.appendChild(h('div', { style: { display: 'flex', gap: '4px', marginTop: '6px' } },
+    const dName = h('input', { placeholder: 'Add document type (e.g. "GST Certificate")…', style: { fontSize: '11px', padding: '4px 6px', width: '260px' } });
+    root.appendChild(h('div', { style: { display: 'flex', gap: '4px', marginTop: '8px' } },
       dName,
-      h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' }, onclick: async () => { if (!dName.value.trim()) return; try { await api('api_fin_doc_add', { lead_id: leadId, doc_name: dName.value.trim() }); reload(); } catch (e) { toast(e.message, 'err'); } } }, '➕ Add doc')));
+      h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' }, onclick: async () => { if (!dName.value.trim()) return; try { await api('api_fin_doc_add', { lead_id: leadId, doc_name: dName.value.trim() }); dName.value=''; reload(); } catch (e) { toast(e.message, 'err'); } } }, '➕ Add doc type')));
 
     // ---- Renewals (insurance) ----
     if (d.renewals.length) {
