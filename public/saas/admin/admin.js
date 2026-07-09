@@ -455,6 +455,31 @@ function editPackage(p) {
   document.body.appendChild(m);
 }
 
+// PAGINATION_HELPER_v1 — reusable client-side pager for super-admin lists.
+function _mkPager({ total, page, pageSize, sizes, onPage, onPageSize, noun }) {
+  sizes = sizes || [25, 50, 100, 200, 500];
+  noun = noun || 'rows';
+  const bar = h('div', { class: 'pagination-bar', style: { display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', padding: '.6rem .2rem' } });
+  const pages = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safe = Math.min(Math.max(1, page), pages);
+  const from = total === 0 ? 0 : (safe - 1) * pageSize + 1;
+  const to = Math.min(safe * pageSize, total);
+  const sizeSel = h('select', { onchange: ev => onPageSize && onPageSize(Number(ev.target.value) || 50) });
+  sizes.forEach(n => sizeSel.appendChild(h('option', { value: n, selected: n === pageSize ? 'selected' : null }, n + ' per page')));
+  bar.appendChild(sizeSel);
+  bar.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } }, total === 0 ? ('No ' + noun) : (from + '–' + to + ' of ' + total)));
+  const nav = h('span', { style: { display: 'inline-flex', gap: '.25rem', flexWrap: 'wrap' } });
+  const btn = (label, p, dis, isNum) => h('button', { class: 'btn ghost xs' + (isNum && p === safe ? ' primary' : ''), disabled: dis ? 'disabled' : null, onclick: () => onPage && onPage(p) }, label);
+  nav.appendChild(btn('« First', 1, safe === 1));
+  nav.appendChild(btn('‹ Prev', safe - 1, safe === 1));
+  const start = Math.max(1, safe - 2), end = Math.min(pages, start + 4);
+  for (let p = start; p <= end; p++) nav.appendChild(btn(String(p), p, false, true));
+  nav.appendChild(btn('Next ›', safe + 1, safe >= pages));
+  nav.appendChild(btn('Last »', pages, safe >= pages));
+  bar.appendChild(nav);
+  return bar;
+}
+
 VIEWS.tenants = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
     h('h1', {}, 'Tenants'),
@@ -1851,17 +1876,12 @@ VIEWS.errors = async (view) => {
     return;
   }
 
-  const tbl = h('table', {},
-    h('thead', {}, h('tr', {},
-      h('th', {}, 'Last seen'),
-      h('th', {}, 'Source'),
-      h('th', {}, 'Sev'),
-      h('th', {}, 'Message'),
-      h('th', {}, 'URL'),
-      h('th', { style: { textAlign: 'right' } }, '×'),
-      h('th', {}, '')
-    )),
-    h('tbody', {}, ...rows.map(r => h('tr', { class: Number(r.resolved) === 1 ? 'row-resolved' : '' },
+  // PAGINATION_HELPER_v1 — client-side paging over fetched error rows.
+  const _errBody = h('tbody', {});
+  const _errPager = h('div', {});
+  let _errPage = APP._errPage || 1;
+  let _errPS = APP._errPS || 50;
+  const _errRow = (r) => h('tr', { class: Number(r.resolved) === 1 ? 'row-resolved' : '' },
       h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDateTime(r.last_seen_at)),
       h('td', { style: { fontSize: '.78rem' } }, r.source || '—'),
       h('td', {}, h('span', { class: 'tag ' + _errSeverityClass(r.severity) }, r.severity || 'error')),
@@ -1882,9 +1902,30 @@ VIEWS.errors = async (view) => {
               catch (e) { toast(e.message, 'err'); }
             } }, '✓ Resolve')
       )
-    )))
+    );
+  function _renderErrPage() {
+    _errBody.innerHTML = ''; _errPager.innerHTML = '';
+    const pages = Math.max(1, Math.ceil(rows.length / _errPS));
+    if (_errPage > pages) _errPage = pages;
+    const st = (_errPage - 1) * _errPS;
+    rows.slice(st, st + _errPS).forEach(r => _errBody.appendChild(_errRow(r)));
+    if (rows.length > 25) _errPager.appendChild(_mkPager({
+      total: rows.length, page: _errPage, pageSize: _errPS, noun: 'errors',
+      onPage: p => { _errPage = p; APP._errPage = p; _renderErrPage(); },
+      onPageSize: n => { _errPS = n; APP._errPS = n; _errPage = 1; APP._errPage = 1; _renderErrPage(); }
+    }));
+  }
+  const tbl = h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Last seen'), h('th', {}, 'Source'), h('th', {}, 'Sev'),
+      h('th', {}, 'Message'), h('th', {}, 'URL'),
+      h('th', { style: { textAlign: 'right' } }, '×'), h('th', {}, '')
+    )),
+    _errBody
   );
+  _renderErrPage();
   view.appendChild(h('div', { class: 'card', style: { padding: 0, overflowX: 'auto' } }, tbl));
+  view.appendChild(_errPager);
 
   // Restore filter selections after re-render
   setTimeout(() => {

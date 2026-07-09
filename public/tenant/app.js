@@ -6372,6 +6372,33 @@ function renderLeadsPagination({ total, page, pageSize }) {
   bar.appendChild(nav);
 }
 
+// PAGINATION_HELPER_v1 — reusable client-side pager (per-page + first/prev/
+// numbered/next/last). Returns a DOM node. Reuses the same .pagination-* CSS
+// as the leads list. onPage(newPage) / onPageSize(newSize) are called on click.
+function _mkPager({ total, page, pageSize, sizes, onPage, onPageSize, noun }) {
+  sizes = sizes || [10, 25, 50, 100, 200];
+  noun = noun || 'records';
+  const bar = h('div', { class: 'pagination-bar' });
+  const pages = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safe = Math.min(Math.max(1, page), pages);
+  const from = total === 0 ? 0 : (safe - 1) * pageSize + 1;
+  const to = Math.min(safe * pageSize, total);
+  const sizeSel = h('select', { class: 'page-size-sel', onchange: ev => onPageSize && onPageSize(Number(ev.target.value) || 25) });
+  sizes.forEach(n => sizeSel.appendChild(h('option', { value: n, selected: n === pageSize ? 'selected' : null }, n + ' per page')));
+  bar.appendChild(h('div', { class: 'pagination-left' }, sizeSel));
+  bar.appendChild(h('div', { class: 'pagination-info muted' }, total === 0 ? ('No ' + noun) : (from + '–' + to + ' of ' + total)));
+  const nav = h('div', { class: 'pagination-nav' });
+  const btn = (label, p, dis, isNum) => h('button', { class: 'btn sm' + (isNum && p === safe ? ' primary' : ''), disabled: dis ? 'disabled' : null, onclick: () => onPage && onPage(p) }, label);
+  nav.appendChild(btn('« First', 1, safe === 1));
+  nav.appendChild(btn('‹ Prev', safe - 1, safe === 1));
+  const start = Math.max(1, safe - 2), end = Math.min(pages, start + 4);
+  for (let p = start; p <= end; p++) nav.appendChild(btn(String(p), p, false, true));
+  nav.appendChild(btn('Next ›', safe + 1, safe >= pages));
+  nav.appendChild(btn('Last »', pages, safe >= pages));
+  bar.appendChild(nav);
+  return bar;
+}
+
 function renderStatusChips(statusCount) {
   const el = $('#status-chips');
   if (!el) return;
@@ -18506,21 +18533,39 @@ function _viewCampaign(c) {
     // Recipients table
     body.appendChild(h('div', { style: { fontSize: '.8rem', fontWeight: 700, margin: '.2rem 0 .4rem' } },
       '📇 Recipients (' + targets.length + ')'));
-    const rows = targets.map((t, i) => {
-      const exp = t.status === 'failed' && t.error ? _waErrExplain(t.error) : null;
-      return h('tr', {},
-        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, String(i + 1)),
-        h('td', { style: { fontWeight: 600, fontSize: '.82rem' } }, t.name || '—'),
-        h('td', { style: { fontFamily: 'monospace', fontSize: '.82rem' } }, t.phone || '—'),
-        h('td', {}, stChip(t.status)),
-        h('td', { style: { fontSize: '.78rem', color: exp ? '#b91c1c' : '#94a3b8', maxWidth: '260px' } },
-          exp ? (exp.code ? ('#' + exp.code + ' — ') : '') + exp.title : (t.status === 'failed' ? 'Failed' : '—'))
-      );
-    });
+    // PAGINATION_HELPER_v1 — paginate the recipient list.
+    const _tb = h('tbody', {});
+    const _ph = h('div', {});
+    let _cp = 1, _cps = 25;
+    function _renderCampPage() {
+      _tb.innerHTML = ''; _ph.innerHTML = '';
+      const pages = Math.max(1, Math.ceil(targets.length / _cps));
+      if (_cp > pages) _cp = pages;
+      const st = (_cp - 1) * _cps;
+      targets.slice(st, st + _cps).forEach((t, j) => {
+        const i = st + j;
+        const exp = t.status === 'failed' && t.error ? _waErrExplain(t.error) : null;
+        _tb.appendChild(h('tr', {},
+          h('td', { class: 'muted', style: { fontSize: '.78rem' } }, String(i + 1)),
+          h('td', { style: { fontWeight: 600, fontSize: '.82rem' } }, t.name || '—'),
+          h('td', { style: { fontFamily: 'monospace', fontSize: '.82rem' } }, t.phone || '—'),
+          h('td', {}, stChip(t.status)),
+          h('td', { style: { fontSize: '.78rem', color: exp ? '#b91c1c' : '#94a3b8', maxWidth: '260px' } },
+            exp ? (exp.code ? ('#' + exp.code + ' — ') : '') + exp.title : (t.status === 'failed' ? 'Failed' : '—'))
+        ));
+      });
+      if (targets.length > 10) _ph.appendChild(_mkPager({
+        total: targets.length, page: _cp, pageSize: _cps, noun: 'recipients',
+        onPage: p => { _cp = p; _renderCampPage(); },
+        onPageSize: n => { _cps = n; _cp = 1; _renderCampPage(); }
+      }));
+    }
+    _renderCampPage();
     body.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
       h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'Name'), h('th', {}, 'Number'), h('th', {}, 'Status'), h('th', {}, 'Reason (if failed)'))),
-      h('tbody', {}, ...rows)
+      _tb
     )));
+    body.appendChild(_ph);
     // If any failed, show the distinct fixes once.
     const failedExp = {};
     targets.forEach(t => { if (t.status === 'failed' && t.error) { const e = _waErrExplain(t.error); failedExp[e.code + e.title] = e; } });
@@ -20694,32 +20739,48 @@ async function wbActivity() {
   );
   const searchInp = h('input', { id: 'wb-act-q', placeholder: 'Search name / template…', style: { flex: 1 } });
   const tbody = h('tbody', {});
-  const reload = async () => {
-    const data = await api('api_wb_activity_list', { category: catSel.value || undefined, q: searchInp.value || undefined }).catch(() => []);
-    tbody.innerHTML = '';
-    if (!data.length) {
+  const pagerHost = h('div', {});
+  // PAGINATION_HELPER_v1 — client-side paging over the fetched activity rows.
+  let _actRows = [], _actPage = 1;
+  let _actPageSize = Number(localStorage.getItem('wb_act_page_size') || 25);
+  function _renderActRow(r) {
+    const codeColor = r.response_code === 200 ? '#10b981' : (r.response_code ? '#ef4444' : '#94a3b8');
+    const catColor = {
+      chat: '#3b82f6', campaign: '#8b5cf6',
+      message_bot: '#06b6d4', template_bot: '#06b6d4',
+      template_sync: '#64748b',
+      webhook_in: '#fbbf24', webhook_status: '#10b981', webhook_message: '#14b8a6'
+    }[r.category] || '#64748b';
+    return h('tr', {},
+      h('td', {}, r.id),
+      h('td', {}, h('span', { class: 'tag', style: { background: catColor, color: '#fff', fontSize: '.7rem' } }, r.category)),
+      h('td', {}, r.name || '—'),
+      h('td', {}, r.template_name ? h('code', {}, r.template_name) : '—'),
+      h('td', {}, h('span', { class: 'tag', style: { background: codeColor, color: '#fff' } }, r.response_code || '—')),
+      h('td', { class: 'muted' }, r.type || '—'),
+      h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDate(r.recorded_on, 'relative')),
+      h('td', {}, h('button', { class: 'btn sm', onclick: () => openWbActivityDetailModal(r.id) }, '🔍 View'))
+    );
+  }
+  function renderActPage() {
+    tbody.innerHTML = ''; pagerHost.innerHTML = '';
+    if (!_actRows.length) {
       tbody.appendChild(h('tr', {}, h('td', { colspan: 8, class: 'muted', style: { textAlign: 'center', padding: '1.5rem' } }, 'No activity matching this filter.')));
       return;
     }
-    data.forEach(r => {
-      const codeColor = r.response_code === 200 ? '#10b981' : (r.response_code ? '#ef4444' : '#94a3b8');
-      const catColor = {
-        chat: '#3b82f6', campaign: '#8b5cf6',
-        message_bot: '#06b6d4', template_bot: '#06b6d4',
-        template_sync: '#64748b',
-        webhook_in: '#fbbf24', webhook_status: '#10b981', webhook_message: '#14b8a6'
-      }[r.category] || '#64748b';
-      tbody.appendChild(h('tr', {},
-        h('td', {}, r.id),
-        h('td', {}, h('span', { class: 'tag', style: { background: catColor, color: '#fff', fontSize: '.7rem' } }, r.category)),
-        h('td', {}, r.name || '—'),
-        h('td', {}, r.template_name ? h('code', {}, r.template_name) : '—'),
-        h('td', {}, h('span', { class: 'tag', style: { background: codeColor, color: '#fff' } }, r.response_code || '—')),
-        h('td', { class: 'muted' }, r.type || '—'),
-        h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDate(r.recorded_on, 'relative')),
-        h('td', {}, h('button', { class: 'btn sm', onclick: () => openWbActivityDetailModal(r.id) }, '🔍 View'))
-      ));
-    });
+    const pages = Math.max(1, Math.ceil(_actRows.length / _actPageSize));
+    if (_actPage > pages) _actPage = pages;
+    const startIdx = (_actPage - 1) * _actPageSize;
+    _actRows.slice(startIdx, startIdx + _actPageSize).forEach(r => tbody.appendChild(_renderActRow(r)));
+    pagerHost.appendChild(_mkPager({
+      total: _actRows.length, page: _actPage, pageSize: _actPageSize, noun: 'entries',
+      onPage: p => { _actPage = p; renderActPage(); },
+      onPageSize: n => { _actPageSize = n; localStorage.setItem('wb_act_page_size', String(n)); _actPage = 1; renderActPage(); }
+    }));
+  }
+  const reload = async () => {
+    const data = await api('api_wb_activity_list', { category: catSel.value || undefined, q: searchInp.value || undefined }).catch(() => []);
+    _actRows = data || []; _actPage = 1; renderActPage();
   };
   catSel.onchange = reload;
   let _searchTimer = null;
@@ -20766,6 +20827,7 @@ async function wbActivity() {
     )),
     tbody
   )));
+  wrap.appendChild(pagerHost);
   await reload();
   return wrap;
 }
