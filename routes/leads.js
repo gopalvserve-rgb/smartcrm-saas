@@ -1095,13 +1095,14 @@ async function api_leads_create(token, payload) {
 
   const id = await db.insert('leads', base);
 
-  /* REMINDER_DEFAULT_FLOW_v1 (2026-07-08) — also queue reminders on lead
-   * CREATE when the payload includes a future next_followup_at. */
+  /* REMINDER_OPT_IN_v1 (2026-07-08) — NO auto-attach on create. Reminders
+   * only queue if the payload explicitly includes reminder_flow_id (rare —
+   * usually only when the API is called with an explicit flow chosen). */
   try {
-    if (base.next_followup_at) {
+    if (base.next_followup_at && base.reminder_flow_id) {
       const fr = require('./followupReminders');
-      if (fr && typeof fr.scheduleForLeadWithDefaultFlow === 'function') {
-        await fr.scheduleForLeadWithDefaultFlow(id, new Date(base.next_followup_at).toISOString(), me.id);
+      if (fr && typeof fr.scheduleForLeadWithFlow === 'function') {
+        await fr.scheduleForLeadWithFlow(id, new Date(base.next_followup_at).toISOString(), Number(base.reminder_flow_id), me.id);
       }
     }
   } catch (_) {}
@@ -1731,18 +1732,17 @@ async function api_leads_update(token, id, patch) {
 
   if ('next_followup_at' in patch && patch.next_followup_at !== lead.next_followup_at) {
     try { require('./tat').logAction(id, 'followup_set', me.id, { due_at: patch.next_followup_at }); } catch (_) {}
-    /* REMINDER_DEFAULT_FLOW_v1 (2026-07-08) — auto-queue reminders using the
-     * default flow whenever a rep changes the follow-up from the classic lead
-     * modal. Before this, reminders only fired if the rep also picked a flow
-     * explicitly, which almost never happened — so nothing ever sent. */
+    /* REMINDER_OPT_IN_v1 (2026-07-08) — auto-attach REMOVED. Only reschedule
+     * reminders if the lead ALREADY has an explicit reminder_flow_id (rep
+     * picked one earlier). If follow-up cleared, cancel pending reminders. */
     try {
       if (patch.next_followup_at) {
         const fr = require('./followupReminders');
-        if (fr && typeof fr.scheduleForLeadWithDefaultFlow === 'function') {
-          await fr.scheduleForLeadWithDefaultFlow(id, new Date(patch.next_followup_at).toISOString(), me.id);
+        const existing = (await db.query(`SELECT reminder_flow_id FROM leads WHERE id=$1`, [id])).rows[0];
+        if (existing && existing.reminder_flow_id && fr && typeof fr.scheduleForLeadWithFlow === 'function') {
+          await fr.scheduleForLeadWithFlow(id, new Date(patch.next_followup_at).toISOString(), Number(existing.reminder_flow_id), me.id);
         }
       } else {
-        // Follow-up cleared → cancel any pending reminders on this lead
         await db.query(
           `UPDATE followup_reminders SET status='cancelled', error='Follow-up cleared' WHERE lead_id=$1 AND status='scheduled'`,
           [id]
