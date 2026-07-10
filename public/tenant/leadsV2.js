@@ -601,21 +601,20 @@ tr:hover .lv2-actions { opacity: 1; }
       // Qualified
       if (S.fQualified === 'yes' && !l.qualified) return false;
       if (S.fQualified === 'no' && l.qualified) return false;
-      // Date range (created_at)
-      if (S.fDateFrom && new Date(l.created_at) < new Date(S.fDateFrom)) return false;
-      if (S.fDateTo) {
-        const dTo = new Date(S.fDateTo); dTo.setHours(23, 59, 59);
-        if (new Date(l.created_at) > dTo) return false;
-      }
-      /* LEADS_FUFILTER_v1 (2026-07-09) — follow-up range */
-      if (S.fFollowupFrom) {
-        if (!l.next_followup_at) return false;
-        if (new Date(l.next_followup_at) < new Date(S.fFollowupFrom + 'T00:00:00')) return false;
-      }
-      if (S.fFollowupTo) {
-        if (!l.next_followup_at) return false;
-        const fuTo = new Date(S.fFollowupTo + 'T23:59:59');
-        if (new Date(l.next_followup_at) > fuTo) return false;
+      /* LEADS_DATEFIELD_v1 — one date-range check that targets whichever
+       * field the user picked (created_at or next_followup_at). */
+      {
+        const field = (S.fDateField === 'followup') ? 'next_followup_at' : 'created_at';
+        const val = l[field];
+        if (S.fDateFrom) {
+          if (!val) return false;
+          if (new Date(val) < new Date(S.fDateFrom + 'T00:00:00')) return false;
+        }
+        if (S.fDateTo) {
+          if (!val) return false;
+          const dTo = new Date(S.fDateTo + 'T23:59:59');
+          if (new Date(val) > dTo) return false;
+        }
       }
       // Search — LEADS_SEARCH_WIDEN_v1 (2026-06-21): widened to remark,
       // city, state, company, address, source, campaign and description.
@@ -972,7 +971,6 @@ tr:hover .lv2-actions { opacity: 1; }
     let n = 0;
     if (S.search) n++;
     if (S.fDatePreset || S.fDateFrom || S.fDateTo) n++;
-      if (S.fFollowupFrom || S.fFollowupTo) n++;
     ['fStatus','fSource','fOwner','fScore','fTag','fCampaign'].forEach(k => { if (Array.isArray(S[k]) && S[k].length) n++; });
     if (S.fFollowup) n++;
     if (S.fQualified) n++;
@@ -1017,6 +1015,26 @@ tr:hover .lv2-actions { opacity: 1; }
       h('input', { placeholder: 'Search name, phone, email, remark, tag, city, campaign…', value: S.search,
         style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12px', width: '100%', minWidth: '0', color: '#0f172a' },
         oninput: (e) => { S.search = e.target.value; if (onChange) onChange(); } })));
+    /* LEADS_DATEFIELD_v1 (2026-07-09) — the From/To pickers + preset pills
+     * below can apply to Created OR next_followup_at. Pill toggle switches
+     * which field the current date range targets. Default: Created. */
+    if (!S.fDateField) S.fDateField = 'created';
+    const dfPills = [['created','📅 Created'], ['followup','⏰ Follow-up']];
+    dfPills.forEach(([k, lab]) => {
+      const active = S.fDateField === k;
+      row1.appendChild(h('button', {
+        title: k === 'followup' ? 'Filter by next follow-up date' : 'Filter by lead created date',
+        style: {
+          padding: '4px 10px',
+          background: active ? '#0369a1' : 'white',
+          color: active ? 'white' : '#334155',
+          border: '1px solid ' + (active ? '#0369a1' : '#cbd5e1'),
+          borderRadius: '14px', fontSize: '11px', cursor: 'pointer', fontWeight: active ? 700 : 500,
+          boxShadow: active ? '0 1px 3px rgba(3,105,161,.3)' : 'none'
+        },
+        onclick: () => { S.fDateField = k; _reloadAndRender(onChange); }
+      }, lab));
+    });
     // Date preset pills
     const datePresets = [['today','Today'],['yesterday','Yesterday'],['7d','Last 7d'],['30d','Last 30d'],['all','All']];
     datePresets.forEach(([k, lab]) => {
@@ -1044,24 +1062,6 @@ tr:hover .lv2-actions { opacity: 1; }
       style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
       onchange: (e) => { S.fDateTo = e.target.value; S.fDatePreset = ''; _reloadAndRender(onChange); } }));
 
-    /* LEADS_FUFILTER_v1 (2026-07-09) — Follow-up date-range filter next to
-     * Created date. Client-side only. */
-    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b', margin: '0 4px 0 12px', fontWeight: 600 } }, '⏰ F-up'));
-    row1.appendChild(h('input', { type: 'date', value: S.fFollowupFrom || '', title: 'Follow-up from',
-      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
-      onchange: (e) => { S.fFollowupFrom = e.target.value; _reloadAndRender(onChange); } }));
-    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b', margin: '0 2px' } }, '→'));
-    row1.appendChild(h('input', { type: 'date', value: S.fFollowupTo || '', title: 'Follow-up to',
-      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
-      onchange: (e) => { S.fFollowupTo = e.target.value; _reloadAndRender(onChange); } }));
-    if (S.fFollowupFrom || S.fFollowupTo) {
-      row1.appendChild(h('button', {
-        title: 'Clear follow-up date range',
-        style: { padding: '2px 8px', background: 'transparent', border: '1px solid #cbd5e1',
-                 borderRadius: '10px', fontSize: '11px', cursor: 'pointer', color: '#dc2626' },
-        onclick: () => { S.fFollowupFrom = ''; S.fFollowupTo = ''; _reloadAndRender(onChange); }
-      }, '✕ clear'));
-    }
     wrap.appendChild(row1);
 
     // Row 2: multi-select filter chips (only the ones in visibleFilters)
