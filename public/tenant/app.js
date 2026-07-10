@@ -5214,7 +5214,33 @@ VIEWS.leads = async (view) => {
   }
   fromInput.addEventListener('change', () => { _lfSaveFrom(fromInput.value); applyFilters(); });
   toInput.addEventListener('change',   () => { _lfSaveTo(toInput.value);     applyFilters(); });
-  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInput, toInput, { key: 'leads', apply: () => { _lfSaveFrom(fromInput.value); _lfSaveTo(toInput.value); applyFilters(); } }); } catch (_) {} }, 0);
+  /* LEADS_DATEFIELD_v3 (2026-07-09) — robust _attachDatePresets call.
+   * v2 used setTimeout(0) which sometimes fired before the toolbar was
+   * settled in the DOM, so the helper's parent lookup returned null and
+   * the chip bar silently no-op'd. Fix: double-rAF + 100ms + 500ms
+   * fallbacks that re-attempt attachment until the bar shows up. */
+  const _lfEnsurePresets = () => {
+    try {
+      /* Skip if already attached to this fromInput's chain */
+      const host = fromInput && fromInput.closest && fromInput.closest('.toolbar');
+      if (!host) return false;
+      const already = host.querySelector('.date-preset-bar');
+      if (already) return true;
+      if (window._attachDatePresets) {
+        window._attachDatePresets(fromInput, toInput, {
+          key: 'leads',
+          apply: () => { _lfSaveFrom(fromInput.value); _lfSaveTo(toInput.value); applyFilters(); }
+        });
+        return !!host.querySelector('.date-preset-bar');
+      }
+    } catch (_) {}
+    return false;
+  };
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!_lfEnsurePresets()) {
+      setTimeout(() => { if (!_lfEnsurePresets()) setTimeout(_lfEnsurePresets, 400); }, 100);
+    }
+  }));
 
   /* Pill styles — OBJECT form so h()'s Object.assign path is used. */
   function _lfPillStyle(active) {
