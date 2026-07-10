@@ -9445,12 +9445,29 @@ async function openLeadModal(id) {
     form.appendChild(customFieldInput(cf, extra[cf.key]));
   });
 
-  /* LEAD_HIDDEN_FIELDS_v1 (2026-07-09) — hide any field whose key is listed
-   * in CRM.brand.LEAD_HIDDEN_FIELDS (CSV). Applies to inputs added by both
-   * the hardcoded block above AND the custom-fields loop. Never hides
-   * name/phone (required for a lead to exist). */
+  /* LEAD_HIDDEN_FIELDS_v3 (2026-07-10) — hide any field whose key is listed
+   * in the admin's LEAD_HIDDEN_FIELDS setting (CSV). Read from every likely
+   * bucket because bootstrap stores it in CRM.cache.config but CRM.brand
+   * is only populated lazily by other feature paths. Also mirror the value
+   * into CRM.brand so downstream reads see it consistently. */
   try {
-    const _hidCsv = (CRM.brand && CRM.brand.LEAD_HIDDEN_FIELDS) || '';
+    const _lhfCfg = (CRM && CRM.cache && CRM.cache.config) || {};
+    const _lhfBrand = (CRM && CRM.brand) || {};
+    const _lhfEarly = (CRM && CRM._earlyBrand) || {};
+    let _hidCsv = _lhfBrand.LEAD_HIDDEN_FIELDS || _lhfCfg.LEAD_HIDDEN_FIELDS || _lhfEarly.LEAD_HIDDEN_FIELDS || '';
+    /* Also try a live refresh if still empty and we haven't yet (once). */
+    if (!_hidCsv && !CRM._lhfChecked) {
+      try {
+        const fresh = await api('api_admin_brand').catch(() => null);
+        if (fresh && fresh.LEAD_HIDDEN_FIELDS) {
+          _hidCsv = fresh.LEAD_HIDDEN_FIELDS;
+          CRM.brand = Object.assign(CRM.brand || {}, fresh);
+        }
+      } catch(_){}
+      CRM._lhfChecked = true;
+    }
+    /* Mirror to CRM.brand for future openLeadModal calls (avoid re-fetch). */
+    if (_hidCsv && CRM.brand && !CRM.brand.LEAD_HIDDEN_FIELDS) CRM.brand.LEAD_HIDDEN_FIELDS = _hidCsv;
     const _hidSet = new Set(String(_hidCsv).split(',').map(x => x.trim().toLowerCase()).filter(Boolean));
     if (_hidSet.size) {
       _hidSet.delete('name'); _hidSet.delete('phone');   /* safety: never hide */
