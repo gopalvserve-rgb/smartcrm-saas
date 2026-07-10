@@ -253,26 +253,42 @@ async function provisionFromSignup(signupId) {
     tenure: _meta.desired_tenure || null,
     admin_remarks: _meta.payment_remarks || null
   };
+  // TENANT_DUP_KEY_FIX_v1 — idempotent tenant create. UNIQUE(slug) + UNIQUE(db_name)
+  // mean a retry (or a double-click race, or a tenant whose slug was later edited)
+  // can collide. Look up by slug OR db_name, UPDATE if found, and if an INSERT
+  // still races into a duplicate, re-fetch and reuse instead of throwing.
   let tenantId;
-  const existing = await control.findOneBy('tenants', 'slug', slug);
+  let existing = await control.findOneBy('tenants', 'slug', slug);
+  if (!existing) existing = await control.findOneBy('tenants', 'db_name', dbName);
+  const _tenantFields = () => Object.assign({
+    package_id: pkg ? pkg.id : null,
+    status: 'active',
+    current_period_start: now.toISOString(),
+    current_period_end: periodEnd.toISOString()
+  }, _tenantBilling);
   if (existing) {
     tenantId = existing.id;
-    await control.update('tenants', tenantId, Object.assign({
-      package_id: pkg ? pkg.id : null,
-      status: 'active',
-      current_period_start: now.toISOString(),
-      current_period_end: periodEnd.toISOString()
-    }, _tenantBilling));
+    await control.update('tenants', tenantId, _tenantFields());
   } else {
-    tenantId = await control.insert('tenants', Object.assign({
-      slug, org_name: signup.org_name || signup.name,
-      contact_name: signup.name, contact_email: signup.email, contact_mobile: signup.mobile,
-      db_name: dbName, package_id: pkg ? pkg.id : null,
-      status: 'active',
-      current_period_start: now.toISOString(),
-      current_period_end: periodEnd.toISOString()
-    }, _tenantBilling));
+    try {
+      tenantId = await control.insert('tenants', Object.assign({
+        slug, org_name: signup.org_name || signup.name,
+        contact_name: signup.name, contact_email: signup.email, contact_mobile: signup.mobile,
+        db_name: dbName
+      }, _tenantFields()));
+    } catch (e) {
+      if (!/duplicate key|unique/i.test(String(e && e.message))) throw e;
+      existing = await control.findOneBy('tenants', 'slug', slug);
+      if (!existing) existing = await control.findOneBy('tenants', 'db_name', dbName);
+      if (!existing) throw e;
+      tenantId = existing.id;
+      await control.update('tenants', tenantId, _tenantFields());
+    }
   }
+  // Use the ACTUAL tenant identity for the login URL / credentials (a reused row
+  // may have a different slug/db_name than the one we derived from the signup).
+  const effSlug   = (existing && existing.slug)    ? existing.slug    : slug;
+  const effDbName = (existing && existing.db_name) ? existing.db_name : dbName;
 
   // 5. First invoice + mark paid (amounts computed above as _bSub/_bTax/_bGrand).
   const invNumber = await _nextInvoiceNumber();
@@ -315,13 +331,13 @@ async function provisionFromSignup(signupId) {
 
   // 8. Email credentials (best-effort)
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
-  const loginUrl = baseUrl + '/t/' + slug;
+  const loginUrl = baseUrl + '/t/' + effSlug;
   // WELCOME_EMAIL_v2 — branded template + per-tenant status tracking. Any
   // failure is logged with the [EMAIL_ISSUE] category and stamped on the tenant.
   await sendWelcomeEmail({
     tenantId,
     name: signup.name, orgName: signup.org_name || signup.name,
-    packageName: pkg ? pkg.name : 'Custom plan', slug,
+    packageName: pkg ? pkg.name : 'Custom plan', slug: effSlug,
     email: String(signup.email || '').toLowerCase().trim(),
     password: oneTimePassword
   });
@@ -345,7 +361,7 @@ async function provisionFromSignup(signupId) {
   } catch (e) { console.warn('[provisioning] welcome WA error:', e.message); }
 
   return {
-    tenant_id: tenantId, slug, db_name: dbName, invoice_id: invoiceId,
+    tenant_id: tenantId, slug: effSlug, db_name: effDbName, invoice_id: invoiceId,
     login_url: loginUrl,
     email: String(signup.email || '').toLowerCase().trim(),
     password: oneTimePassword
