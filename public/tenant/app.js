@@ -18693,12 +18693,45 @@ function _showCampaignErrors(c) {
         h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.6rem' } },
           'Fixes: 132001 → template language mismatch (set it to en_US or the language Meta approved). 131026 → recipient not on WhatsApp. 132000 → template variable count mismatch. 100 / 190 → access token expired — reconnect WhatsApp in Settings.')
       ),
-      h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end' } },
+      h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'space-between', gap: '.4rem' } },
+        h('div', { style: { display: 'flex', gap: '.35rem' } },
+          Number(c.recipients_failed) > 0
+            ? h('button', { class: 'btn ghost', style: { color: '#dc2626', fontWeight: 600 }, onclick: async () => { modal.remove(); await _campaignRetry(c); } }, '↻ Retry failed')
+            : null,
+          h('button', { class: 'btn ghost', onclick: async () => { modal.remove(); await _campaignClone(c, 'failed'); } }, '📋 Clone (failed only)'),
+          h('button', { class: 'btn ghost', onclick: async () => { modal.remove(); await _campaignClone(c, 'none'); } }, '📋 Clone (config only)')
+        ),
         h('button', { class: 'btn primary', onclick: () => modal.remove() }, 'Close')
       )
     )
   );
   document.body.appendChild(modal);
+}
+
+/* WA_CAMPAIGN_RETRY_CLONE_v1 (2026-07-09) — shared UI actions for the
+ * campaign row and the failure modal. */
+async function _campaignRetry(c) {
+  const n = Number(c.recipients_failed || 0);
+  if (!n) { toast('No failed recipients to retry', 'err'); return; }
+  if (!confirm('Retry the ' + n + ' failed recipient' + (n===1?'':'s') + ' on "' + (c.name || 'this campaign') + '"?\n\nThey will be re-queued and the campaign worker will re-send within a minute.')) return;
+  try {
+    const r = await api('api_wb_campaigns_retryFailed', c.id);
+    toast('↻ Re-queued ' + r.retried + ' recipient' + (r.retried===1?'':'s') + ' — sending shortly', 'ok');
+    setTimeout(() => showWbTab('campaigns'), 800);
+  } catch (e) { toast('Retry failed: ' + e.message, 'err'); }
+}
+async function _campaignClone(c, include) {
+  /* include: 'none' (config only) | 'failed' (failed recipients too) | 'all' */
+  const inc = include || 'none';
+  const name = prompt('Name for the clone campaign?', (c.name || 'Campaign') + ' (copy)');
+  if (name === null) return;
+  const label = inc === 'failed' ? 'the failed recipients' : (inc === 'all' ? 'ALL original recipients' : 'no recipients (you pick fresh)');
+  if (!confirm('Clone "' + (c.name || 'this campaign') + '" as "' + name + '" with ' + label + '?')) return;
+  try {
+    const r = await api('api_wb_campaigns_clone', { id: c.id, new_name: name, include_targets: inc });
+    toast('📋 Cloned as "' + r.name + '" — ' + r.recipients_copied + ' recipient' + (r.recipients_copied===1?'':'s') + ' queued', 'ok');
+    setTimeout(() => showWbTab('campaigns'), 800);
+  } catch (e) { toast('Clone failed: ' + e.message, 'err'); }
 }
 
 async function wbCampaigns() {
@@ -18750,7 +18783,13 @@ async function wbCampaigns() {
               try { await api('api_wb_campaigns_pause', c.id); toast('Paused'); showWbTab('campaigns'); }
               catch (e) { toast(e.message, 'err'); }
             } }, '⏸ Pause')
-          : null
+          : null,
+        /* WA_CAMPAIGN_RETRY_CLONE_v1 — always-on Retry+Clone.
+         * Retry only shows when there ARE failed recipients. Clone always. */
+        Number(c.recipients_failed) > 0
+          ? h('button', { class: 'btn sm ghost', style: { marginLeft: '.3rem', color: '#dc2626', fontWeight: 600 }, title: 'Re-queue the failed recipients', onclick: () => _campaignRetry(c) }, '↻ Retry')
+          : null,
+        h('button', { class: 'btn sm ghost', style: { marginLeft: '.3rem' }, title: 'Clone this campaign', onclick: () => _campaignClone(c, 'none') }, '📋 Clone')
       )
     )))
   )));
