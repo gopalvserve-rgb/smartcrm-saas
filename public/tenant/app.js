@@ -1793,7 +1793,7 @@ const NAV_GROUPS = [
   /* META_MODULE_v1 — Marketing & Communication groups all outbound
    * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
   { label: 'Marketing & Communication', icon: '📣', items: [
-    { id: 'campaigns',      label: 'Campaigns',            icon: '📣', roles: ['admin','manager'], search: 'campaign campaign list lead campaign source' },
+    { id: 'campaigns',      label: 'Workspace',            icon: '📁', roles: ['admin','manager'], search: 'workspace campaign campaign list lead campaign source workspaces' },
     { id: 'socialinbox',    label: 'Social Inbox',         icon: '💬', vserveOnly: true, countKey: 'social_unread',    search: 'social inbox inbox messages dm facebook instagram messenger' },
     { id: 'socialcomments', label: 'Social Comments',      icon: '💭', countKey: 'social_unreplied', search: 'comments social comments replies' },
     { id: 'socialpublish',  label: 'Social Publisher',     icon: '📤', search: 'publisher post schedule post social post' },
@@ -1860,7 +1860,7 @@ const NAV_GROUPS = [
   /* AICALL_v1 — Smart Call AI moved to the bottom of the menu per user request. */
   { label: 'Smart Call AI', icon: '🎙️', items: [
     { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall dashboard call volume outcomes' },
-    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall campaign csv outbound voice' },
+    { id: 'aicallCampaigns', label: 'AI Campaign',  icon: '🤖', roles: ['admin','manager','team_leader'], requiresBrandFlag: 'AI_CALL_ENABLED', search: 'ai campaign smart call ai smartcall campaign csv outbound voice' },
     { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall call logs transcripts recordings' },
     { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              requiresBrandFlag: 'AI_CALL_ENABLED', search: 'smart call ai smartcall vapi phone numbers assistants knowledge base' },
     { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'smart call ai smartcall settings vapi api key provider' }
@@ -15058,7 +15058,7 @@ VIEWS.aicallDashboard = async (view) => {
 };
 VIEWS.aicallCampaigns = async (view) => {
   const wrap = h('div', { style: { padding: '1.5rem' } });
-  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📣 Smart Call AI — Campaigns'));
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '🤖 AI Campaign — Smart Call AI'));
   wrap.appendChild(h('p', { class: 'muted' }, 'Bulk AI voice campaigns over uploaded contact lists.'));
   wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
     h('div', { style: { fontSize: '2rem' } }, '🚧'),
@@ -17026,7 +17026,7 @@ VIEWS.whatsbot = async (view) => {
     { id: 'flows',     label: '🗺️ Bot Flows' },
     { id: 'msgbots',   label: '💬 Message Bot' },
     { id: 'tplbots',   label: '🤖 Template Bot' },
-    { id: 'campaigns', label: '📣 Campaigns' },
+    { id: 'campaigns', label: '📱 WA Campaign' },
     { id: 'chat',      label: '💭 Chat' },
     { id: 'assign',    label: '👥 Auto-assign' },
     { id: 'activity',  label: '📑 Activity Log' },
@@ -18902,7 +18902,7 @@ async function wbCampaigns() {
   const wrap = h('div', {});
   const [campaigns, templates] = await Promise.all([api('api_wb_campaigns_list'), api('api_wb_templates_list')]);
   wrap.appendChild(h('div', { class: 'toolbar' },
-    h('h3', { style: { margin: 0, flex: 1 } }, '📣 Campaigns'),
+    h('h3', { style: { margin: 0, flex: 1 } }, '📱 WA Campaign'),
     h('button', { class: 'btn primary', onclick: () => openCampaignModal(templates) }, '+ Send new campaign')
   ));
   if (!campaigns.length) {
@@ -26800,7 +26800,7 @@ async function adminMetaCapi() {
 async function adminCampaigns(reload) {
   if (typeof reload !== 'function') reload = () => reload();
   const root = h('div', { class: 'admin-section' });
-  root.appendChild(h('h3', {}, '🎯 Campaigns'));
+  root.appendChild(h('h3', {}, '📁 Workspace'));
   root.appendChild(h('p', { class: 'muted' },
     'Group leads under named campaigns and decide how each campaign distributes new leads to its agents. ' +
     'Phase 1 = create / edit / pause. Distribution enforcement, automation hooks (WhatsApp / Email on lead events), ' +
