@@ -18335,6 +18335,40 @@ function openMsgBotModal(bot) {
   body.appendChild(form);
   body.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    /* WA_CAMPAIGN_PREVIEW_v1 — dry-run count before Send */
+    h('button', { class: 'btn ghost', style: { background: '#eef2ff', color: '#3730a3', fontWeight: '600' }, onclick: async () => {
+      try {
+        const _dm2 = (name) => {
+          const w = form.querySelector('[data-dm="' + name + '"]');
+          if (!w) return [];
+          return (w.getAttribute('data-picked') || '').split(',').map(s => s.trim()).filter(Boolean);
+        };
+        const _cf2 = {};
+        form.querySelectorAll('[data-dm^="cf_"]').forEach(w => {
+          const key = w.getAttribute('data-cf-key') || (w.getAttribute('data-dm')||'').replace(/^cf_/, '');
+          const arr = (w.getAttribute('data-picked') || '').split(',').map(s => s.trim()).filter(Boolean);
+          if (arr.length) _cf2[key] = arr;
+        });
+        const previewFilter = {
+          status_ids: _dm2('status_ids').length ? _dm2('status_ids') : undefined,
+          sources:    _dm2('sources').length   ? _dm2('sources')    : undefined,
+          assigned_to_ids: _dm2('assigned_to_ids').length ? _dm2('assigned_to_ids') : undefined,
+          cf: Object.keys(_cf2).length ? _cf2 : undefined,
+          tag: form.tag.value || undefined,
+          created_from: form.created_from.value || undefined,
+          created_to: form.created_to.value || undefined
+        };
+        const previewRows = (typeof form._getExcelRows === 'function') ? (form._getExcelRows() || []) : [];
+        const previewPasted = (typeof form._getPastedRows === 'function') ? (form._getPastedRows() || []) : [];
+        const merged = [...previewRows, ...previewPasted];
+        const pv = await api('api_wb_campaigns_previewCount', {
+          filter: previewFilter,
+          uploaded_rows: merged.length ? merged : undefined
+        });
+        const sampleTxt = (pv.sample || []).slice(0, 8).map(x => (x.name || '—') + ' · ' + (x.phone || '')).join('\n');
+        toast('👁 ' + pv.count + ' recipient' + (pv.count === 1 ? '' : 's') + ' will be sent to' + (sampleTxt ? '\n\n' + sampleTxt + (pv.count > 8 ? '\n… + ' + (pv.count - 8) + ' more' : '') : ''), 'ok');
+      } catch (e) { toast('Preview failed: ' + e.message, 'err'); }
+    } }, '👁 Preview count'),
     h('button', { class: 'btn primary', onclick: async () => {
       const fd = new FormData(form);
       try {
@@ -18437,6 +18471,40 @@ function openTplBotModal(bot, templates) {
   body.appendChild(form);
   body.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    /* WA_CAMPAIGN_PREVIEW_v1 — dry-run count before Send */
+    h('button', { class: 'btn ghost', style: { background: '#eef2ff', color: '#3730a3', fontWeight: '600' }, onclick: async () => {
+      try {
+        const _dm2 = (name) => {
+          const w = form.querySelector('[data-dm="' + name + '"]');
+          if (!w) return [];
+          return (w.getAttribute('data-picked') || '').split(',').map(s => s.trim()).filter(Boolean);
+        };
+        const _cf2 = {};
+        form.querySelectorAll('[data-dm^="cf_"]').forEach(w => {
+          const key = w.getAttribute('data-cf-key') || (w.getAttribute('data-dm')||'').replace(/^cf_/, '');
+          const arr = (w.getAttribute('data-picked') || '').split(',').map(s => s.trim()).filter(Boolean);
+          if (arr.length) _cf2[key] = arr;
+        });
+        const previewFilter = {
+          status_ids: _dm2('status_ids').length ? _dm2('status_ids') : undefined,
+          sources:    _dm2('sources').length   ? _dm2('sources')    : undefined,
+          assigned_to_ids: _dm2('assigned_to_ids').length ? _dm2('assigned_to_ids') : undefined,
+          cf: Object.keys(_cf2).length ? _cf2 : undefined,
+          tag: form.tag.value || undefined,
+          created_from: form.created_from.value || undefined,
+          created_to: form.created_to.value || undefined
+        };
+        const previewRows = (typeof form._getExcelRows === 'function') ? (form._getExcelRows() || []) : [];
+        const previewPasted = (typeof form._getPastedRows === 'function') ? (form._getPastedRows() || []) : [];
+        const merged = [...previewRows, ...previewPasted];
+        const pv = await api('api_wb_campaigns_previewCount', {
+          filter: previewFilter,
+          uploaded_rows: merged.length ? merged : undefined
+        });
+        const sampleTxt = (pv.sample || []).slice(0, 8).map(x => (x.name || '—') + ' · ' + (x.phone || '')).join('\n');
+        toast('👁 ' + pv.count + ' recipient' + (pv.count === 1 ? '' : 's') + ' will be sent to' + (sampleTxt ? '\n\n' + sampleTxt + (pv.count > 8 ? '\n… + ' + (pv.count - 8) + ' more' : '') : ''), 'ok');
+      } catch (e) { toast('Preview failed: ' + e.message, 'err'); }
+    } }, '👁 Preview count'),
     h('button', { class: 'btn primary', onclick: async () => {
       const combo = form.querySelector('[name="template_combo"]').value;
       const [name, lang] = combo.split('||');
@@ -18977,34 +19045,115 @@ function openCampaignModal(templates) {
   form.appendChild(selectField('template_combo', 'Template *', '',
     [{ value: '', label: '— pick a template —' }, ...tplOpts]));
   // Filter pickers
-  /* WA_CAMPAIGN_MULTI_v2 (2026-07-06) — checkbox grid multi-select.
-   * Much clearer than native <select multiple> which requires Ctrl/Cmd
-   * and doesn't work well on mobile. Each field gets a scrollable box
-   * of checkboxes; nothing checked = any value matches. */
-  const _mkCheckMulti = (name, label, opts) => {
-    const wrap = h('div', { class: 'f-row full' },
-      h('label', { style: { fontWeight: 600, marginBottom: '.35rem', display: 'block' } },
-        label + ' — tick to include (none ticked = all)'),
-      h('div', {
-        'data-checkmulti': name,
-        style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.4rem',
-                 maxHeight: '140px', overflowY: 'auto', background: '#f8fafc',
-                 display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '.25rem' } },
-        ...opts.map(o => h('label', {
-          style: { display: 'flex', alignItems: 'center', gap: '.35rem', padding: '.25rem .4rem',
-                   background: '#fff', borderRadius: '4px', border: '1px solid #e2e8f0',
-                   cursor: 'pointer', fontSize: '.82rem' } },
-          h('input', { type: 'checkbox', 'data-multi-val': String(o.value) }),
-          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, o.label)))));
+  /* WA_CAMPAIGN_DROPDOWN_MULTI_v1 (2026-07-09) — dropdown-multi picker.
+   * Matches the leads-filter pattern in the SPA: click a compact button
+   * showing "Label: Any / N selected", pops a portal-style panel with
+   * Search + Select All / Deselect All + checkbox rows + Cancel / Apply.
+   * `data-dm="<name>"` on the outer wrapper stores the CSV of picked values
+   * for read-back at submit time. */
+  const _mkDropMulti = (name, label, opts) => {
+    const wrap = h('div', { class: 'f-row full', 'data-dm': name, 'data-picked': '' });
+    const btnLabel = h('span', {}, label + ': Any');
+    const chevron = h('span', { style: { marginLeft: 'auto' } }, '▾');
+    const btn = h('button', { type: 'button',
+      style: { display: 'flex', alignItems: 'center', width: '100%', padding: '.55rem .75rem',
+               background: '#fff', border: '1px solid #cbd5e1', borderRadius: '8px',
+               fontSize: '.85rem', cursor: 'pointer', color: '#0f172a', fontWeight: 500 } },
+      btnLabel, chevron);
+    wrap.appendChild(btn);
+    /* State: set of picked values (as strings) */
+    const picked = new Set();
+    function _updateBtn() {
+      if (!picked.size) btnLabel.textContent = label + ': Any';
+      else if (picked.size === 1) {
+        const only = [...picked][0];
+        const o = opts.find(x => String(x.value) === only);
+        btnLabel.textContent = label + ': ' + (o ? o.label : only);
+      } else btnLabel.textContent = label + ': ' + picked.size + ' selected';
+      wrap.setAttribute('data-picked', [...picked].join(','));
+    }
+    btn.onclick = () => {
+      /* Portal-style panel — floats above the form */
+      const backdrop = h('div', {
+        style: { position: 'fixed', inset: '0', background: 'rgba(15,23,42,0.35)', zIndex: '10050',
+                 display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        onclick: (ev) => { if (ev.target === backdrop) backdrop.remove(); }
+      });
+      const panel = h('div', {
+        style: { background: '#fff', borderRadius: '10px', minWidth: '320px', maxWidth: '380px',
+                 maxHeight: '70vh', display: 'flex', flexDirection: 'column',
+                 boxShadow: '0 12px 32px rgba(0,0,0,0.18)' }
+      });
+      const search = h('input', { placeholder: '🔍 Search…',
+        style: { margin: '.6rem .8rem', padding: '.4rem .6rem', border: '1px solid #cbd5e1',
+                 borderRadius: '6px', fontSize: '.85rem' } });
+      const rowsWrap = h('div', { style: { flex: '1', overflowY: 'auto', padding: '0 .8rem' } });
+      const actions = h('div', { style: { display: 'flex', gap: '.4rem', padding: '.4rem .8rem',
+                                          borderTop: '1px solid #e2e8f0', background: '#f8fafc' } });
+      const allBtn = h('button', { type: 'button', class: 'btn primary',
+        style: { flex: '1', padding: '.4rem', fontSize: '.82rem' } }, 'Select All');
+      const noneBtn = h('button', { type: 'button', class: 'btn ghost',
+        style: { flex: '1', padding: '.4rem', fontSize: '.82rem' } }, 'Deselect All');
+      actions.appendChild(allBtn); actions.appendChild(noneBtn);
+      const footer = h('div', { style: { display: 'flex', gap: '.4rem', padding: '.6rem .8rem', justifyContent: 'flex-end' } },
+        h('button', { type: 'button', class: 'btn ghost', onclick: () => backdrop.remove() }, 'Cancel'),
+        h('button', { type: 'button', class: 'btn primary', onclick: () => backdrop.remove() }, 'Apply'));
+      panel.appendChild(h('div', { style: { padding: '.6rem .8rem .2rem', fontWeight: 600 } }, label));
+      panel.appendChild(search); panel.appendChild(actions); panel.appendChild(rowsWrap); panel.appendChild(footer);
+      backdrop.appendChild(panel);
+      function renderRows() {
+        const q = String(search.value || '').toLowerCase().trim();
+        rowsWrap.innerHTML = '';
+        for (const o of opts) {
+          const lbl = String(o.label);
+          if (q && !lbl.toLowerCase().includes(q)) continue;
+          const cb = h('input', { type: 'checkbox' });
+          cb.checked = picked.has(String(o.value));
+          cb.onchange = () => {
+            if (cb.checked) picked.add(String(o.value)); else picked.delete(String(o.value));
+            _updateBtn();
+          };
+          const row = h('label', {
+            style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.35rem 0',
+                     fontSize: '.85rem', cursor: 'pointer' } }, cb, h('span', {}, lbl));
+          rowsWrap.appendChild(row);
+        }
+      }
+      search.oninput = renderRows;
+      allBtn.onclick  = () => { opts.forEach(o => picked.add(String(o.value))); _updateBtn(); renderRows(); };
+      noneBtn.onclick = () => { picked.clear(); _updateBtn(); renderRows(); };
+      renderRows();
+      document.body.appendChild(backdrop);
+    };
     return wrap;
   };
-  form.appendChild(_mkCheckMulti('status_ids', 'Filter — status',
+  form.appendChild(_mkDropMulti('status_ids', 'Status',
     statuses.map(s => ({ value: s.id, label: s.name }))));
-  form.appendChild(_mkCheckMulti('sources', 'Filter — source',
+  form.appendChild(_mkDropMulti('sources', 'Source',
     sources.map(s => ({ value: s.name, label: s.name }))));
-  form.appendChild(_mkCheckMulti('assigned_to_ids', 'Filter — assignee',
+  form.appendChild(_mkDropMulti('assigned_to_ids', 'Assignee',
     users.map(u => ({ value: u.id, label: u.name }))));
-  form.appendChild(field('tag', 'Filter — tag', ''));
+  form.appendChild(field('tag', 'Tag', ''));
+
+  /* WA_CAMPAIGN_CF_v1 (2026-07-09) — one dropdown-multi per active custom
+   * field, populated with distinct values sampled from leads.extra_json. */
+  const _cfWrap = h('div', { class: 'f-row full', 'data-cf-fields': '1' });
+  form.appendChild(_cfWrap);
+  (async () => {
+    try {
+      const fopts = await api('api_wb_campaigns_filterOptions');
+      const cfList = (fopts && fopts.custom_fields) || [];
+      cfList.forEach(cf => {
+        if (!cf || !cf.key) return;
+        const values = Array.isArray(cf.values) ? cf.values : [];
+        if (!values.length) return;
+        const dm = _mkDropMulti('cf_' + cf.key, cf.label || cf.key,
+          values.map(v => ({ value: v, label: v })));
+        dm.setAttribute('data-cf-key', cf.key);
+        _cfWrap.appendChild(dm);
+      });
+    } catch (_) {}
+  })();
   /* WA_CAMPAIGN_DATE_FILTER_v1 (2026-07-06) — Created date range */
   form.appendChild(field('created_from', 'Filter — Created from', '', { type: 'date' }));
   form.appendChild(field('created_to',   'Filter — Created to',   '', { type: 'date' }));
@@ -19254,27 +19403,71 @@ function openCampaignModal(templates) {
   body.appendChild(form);
   body.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    /* WA_CAMPAIGN_PREVIEW_v1 — dry-run count before Send */
+    h('button', { class: 'btn ghost', style: { background: '#eef2ff', color: '#3730a3', fontWeight: '600' }, onclick: async () => {
+      try {
+        const _dm2 = (name) => {
+          const w = form.querySelector('[data-dm="' + name + '"]');
+          if (!w) return [];
+          return (w.getAttribute('data-picked') || '').split(',').map(s => s.trim()).filter(Boolean);
+        };
+        const _cf2 = {};
+        form.querySelectorAll('[data-dm^="cf_"]').forEach(w => {
+          const key = w.getAttribute('data-cf-key') || (w.getAttribute('data-dm')||'').replace(/^cf_/, '');
+          const arr = (w.getAttribute('data-picked') || '').split(',').map(s => s.trim()).filter(Boolean);
+          if (arr.length) _cf2[key] = arr;
+        });
+        const previewFilter = {
+          status_ids: _dm2('status_ids').length ? _dm2('status_ids') : undefined,
+          sources:    _dm2('sources').length   ? _dm2('sources')    : undefined,
+          assigned_to_ids: _dm2('assigned_to_ids').length ? _dm2('assigned_to_ids') : undefined,
+          cf: Object.keys(_cf2).length ? _cf2 : undefined,
+          tag: form.tag.value || undefined,
+          created_from: form.created_from.value || undefined,
+          created_to: form.created_to.value || undefined
+        };
+        const previewRows = (typeof form._getExcelRows === 'function') ? (form._getExcelRows() || []) : [];
+        const previewPasted = (typeof form._getPastedRows === 'function') ? (form._getPastedRows() || []) : [];
+        const merged = [...previewRows, ...previewPasted];
+        const pv = await api('api_wb_campaigns_previewCount', {
+          filter: previewFilter,
+          uploaded_rows: merged.length ? merged : undefined
+        });
+        const sampleTxt = (pv.sample || []).slice(0, 8).map(x => (x.name || '—') + ' · ' + (x.phone || '')).join('\n');
+        toast('👁 ' + pv.count + ' recipient' + (pv.count === 1 ? '' : 's') + ' will be sent to' + (sampleTxt ? '\n\n' + sampleTxt + (pv.count > 8 ? '\n… + ' + (pv.count - 8) + ' more' : '') : ''), 'ok');
+      } catch (e) { toast('Preview failed: ' + e.message, 'err'); }
+    } }, '👁 Preview count'),
     h('button', { class: 'btn primary', onclick: async () => {
       const combo = form.querySelector('[name="template_combo"]').value;
       const [name, lang] = combo.split('||');
       if (!name) { toast('Pick a template', 'err'); return; }
       const variables = [];
       [...form.querySelectorAll('input[name^="cv_"]')].forEach((i, idx) => variables.push({ name: 'V' + (idx + 1), value: i.value }));
-      /* WA_CAMPAIGN_MULTI_v2 — collect checked values from checkbox grids. */
-      const _cmv = (name) => {
-        const box = form.querySelector('[data-checkmulti="' + name + '"]');
-        if (!box) return [];
-        return Array.from(box.querySelectorAll('input[type="checkbox"]:checked'))
-          .map(i => i.getAttribute('data-multi-val'))
-          .filter(Boolean);
+      /* WA_CAMPAIGN_DROPDOWN_MULTI_v1 — read picks from data-dm wrappers.
+       * Each wrapper stores CSV of picked values in data-picked. */
+      const _dm = (name) => {
+        const w = form.querySelector('[data-dm="' + name + '"]');
+        if (!w) return [];
+        const csv = w.getAttribute('data-picked') || '';
+        return csv.split(',').map(s => s.trim()).filter(Boolean);
       };
-      const _statusIds = _cmv('status_ids');
-      const _sources   = _cmv('sources');
-      const _assignees = _cmv('assigned_to_ids');
+      const _statusIds = _dm('status_ids');
+      const _sources   = _dm('sources');
+      const _assignees = _dm('assigned_to_ids');
+      /* Custom fields — one entry per cf_<key> wrapper */
+      const _cf = {};
+      form.querySelectorAll('[data-dm^="cf_"]').forEach(w => {
+        const nm = w.getAttribute('data-dm') || '';
+        const key = w.getAttribute('data-cf-key') || nm.replace(/^cf_/, '');
+        const csv = w.getAttribute('data-picked') || '';
+        const arr = csv.split(',').map(s => s.trim()).filter(Boolean);
+        if (arr.length) _cf[key] = arr;
+      });
       const filter = {
         status_ids: _statusIds.length ? _statusIds : undefined,
         sources:    _sources.length   ? _sources   : undefined,
         assigned_to_ids: _assignees.length ? _assignees : undefined,
+        cf: Object.keys(_cf).length ? _cf : undefined,
         tag: form.tag.value || undefined,
         created_from: form.created_from.value || undefined,
         created_to: form.created_to.value || undefined
