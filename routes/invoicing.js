@@ -110,6 +110,9 @@ async function _ensureTables() {
   // the shared custom_fields table. Idempotent self-heal for existing tenants.
   try { await db.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS custom_fields JSONB`); } catch (_) {}
   try { await db.query(`ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS entity TEXT NOT NULL DEFAULT 'lead'`); } catch (_) {}
+  // INVOICE_SOCIAL_QR_v1 — Instagram + Google Review links printed as QR codes.
+  try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS instagram_url TEXT`); } catch (_) {}
+  try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS google_review_url TEXT`); } catch (_) {}
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -635,6 +638,32 @@ async function api_invoicing_invoices_cancel(token, id) {
   return { ok: true };
 }
 
+async function api_invoicing_invoices_delete(token, id) {
+  // INVOICE_DELETE_v1 — hard-delete an invoice + its lines + payments.
+  const { user } = await _ctx(token);
+  const iid = Number(id);
+  const ex = await db.query(`SELECT id, invoice_no, total FROM invoices_inv WHERE id=$1`, [iid]);
+  if (!ex.rows.length) throw new Error('Invoice not found');
+  let store = null; try { store = db.tenantStorage.getStore(); } catch (_) {}
+  const pool = store && store.pool;
+  if (!pool) throw new Error('Tenant pool unavailable');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM invoice_payments_inv WHERE invoice_id=$1`, [iid]).catch(() => {});
+    await client.query(`DELETE FROM invoice_lines_inv WHERE invoice_id=$1`, [iid]);
+    await client.query(`DELETE FROM invoices_inv WHERE id=$1`, [iid]);
+    await client.query('COMMIT');
+  } catch (e) { try { await client.query('ROLLBACK'); } catch (_) {} throw e; }
+  finally { client.release(); }
+  await db.query(
+    `INSERT INTO inv_audit_log (user_id, user_email, action, entity, entity_id, detail)
+     VALUES ($1,$2,'invoice.delete','invoice',$3,$4)`,
+    [user.id, user.email, iid, JSON.stringify(ex.rows[0])]
+  ).catch(() => {});
+  return { ok: true };
+}
+
 async function api_invoicing_invoices_pdf_html(token, id) {
   await _ctx(token);
   const inv = await api_invoicing_invoices_get(token, id);
@@ -706,6 +735,22 @@ async function api_invoicing_invoices_pdf_html(token, id) {
       qrImgTag = `<img src="${dataUri}" width="150" height="150" alt="Scan to pay via UPI"/>`;
     } catch (_e) { qrImgTag = ''; }
   }
+
+  // INVOICE_SOCIAL_QR_v1 — Instagram + Google Review QR codes on every invoice.
+  let socialQrHtml = '';
+  try {
+    const QRCode = require('qrcode');
+    const _mkQr = async (url) => {
+      const svg = await QRCode.toString(String(url), { type: 'svg', margin: 0, width: 150, color: { dark: '#0f172a', light: '#ffffff' } });
+      return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
+    };
+    const _ig = String(settings.instagram_url || '').trim();
+    const _gr = String(settings.google_review_url || '').trim();
+    const cells = [];
+    if (_ig) cells.push(`<div class="sqr"><img src="${await _mkQr(_ig)}" width="92" height="92" alt="Instagram"/><div class="sqr-cap">📸 Follow us on Instagram</div></div>`);
+    if (_gr) cells.push(`<div class="sqr"><img src="${await _mkQr(_gr)}" width="92" height="92" alt="Google Review"/><div class="sqr-cap">⭐ Rate us on Google</div></div>`);
+    if (cells.length) socialQrHtml = `<div class="social-qr"><div class="social-qr-title">Scan to connect &amp; review us</div><div class="social-qr-row">${cells.join('')}</div></div>`;
+  } catch (_e) { socialQrHtml = ''; }
 
   // --- Brand mark: logo, else initials monogram in the accent colour ---
   const _initials = String(inv.company_name || '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || 'CO';
@@ -792,6 +837,12 @@ async function api_invoicing_invoices_pdf_html(token, id) {
   .paybox-lines .due .v { color:#b91c1c; }
   .foot { margin-top:18px; padding-top:12px; border-top:1px solid #eef2f7; font-size:11px; color:#64748b; display:flex; gap:22px; justify-content:space-between; }
   .foot .notes { flex:1.4; } .foot .sign { flex:1; text-align:right; }
+  .social-qr { margin-top:14px; border-top:1px dashed #cbd5e1; padding-top:12px; text-align:center; }
+  .social-qr-title { font-size:12px; font-weight:700; color:#334155; margin-bottom:8px; }
+  .social-qr-row { display:flex; justify-content:center; gap:40px; flex-wrap:wrap; }
+  .sqr { text-align:center; }
+  .sqr img { border:1px solid #e2e8f0; border-radius:8px; padding:4px; background:#fff; }
+  .sqr-cap { font-size:10px; color:#475569; margin-top:5px; font-weight:600; }
   .foot b { color:#334155; }
   .terms { margin-top:7px; font-size:10.3px; color:#64748b; line-height:1.45; }
   .sign-space { height:40px; }
@@ -886,6 +937,7 @@ async function api_invoicing_invoices_pdf_html(token, id) {
         </div>
       </div>
 
+      ${socialQrHtml}
       ${settings.invoice_footer ? `<div class="thanks">${esc(settings.invoice_footer)}</div>` : ''}
     </div>
   </div>
@@ -1122,7 +1174,7 @@ async function api_invoicing_settings_save(token, payload) {
   payload = payload || {};
   const allowed = ['default_gst_pct','currency_symbol','currency_code','date_format',
     'b2cl_threshold','fy_start_month','default_terms','default_notes','invoice_footer',
-    'enable_qr','enable_round_off'];
+    'enable_qr','enable_round_off','instagram_url','google_review_url'];
   const sets = []; const vals = []; let i = 1;
   allowed.forEach(k => {
     if (payload[k] !== undefined) { sets.push(`${k} = $${i++}`); vals.push(payload[k]); }
@@ -1151,6 +1203,7 @@ module.exports = {
   api_invoicing_invoices_get,
   api_invoicing_invoices_save,
   api_invoicing_invoices_cancel,
+  api_invoicing_invoices_delete,
   api_invoicing_invoices_pdf_html,
   api_invoicing_payments_list,
   api_invoicing_payments_add,

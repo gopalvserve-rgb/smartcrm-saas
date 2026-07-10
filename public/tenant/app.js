@@ -55937,7 +55937,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     );
   }
   function _statusChip(s) {
-    const palette = { paid:['#dcfce7','#166534'], partial:['#fef3c7','#92400e'], unpaid:['#fee2e2','#991b1b'], cancelled:['#e5e7eb','#374151'], draft:['#dbeafe','#1e40af'], finalized:['#dcfce7','#166534'] };
+    const palette = { paid:['#dcfce7','#166534'], partial:['#fef3c7','#92400e'], unpaid:['#ffedd5','#9a3412'], cancelled:['#fee2e2','#b91c1c'], draft:['#dbeafe','#1e40af'], finalized:['#dcfce7','#166534'] };
     const [bg,fg] = palette[s] || ['#e5e7eb','#374151'];
     return h('span', { style: { background:bg, color:fg, padding:'.15rem .55rem', borderRadius:'10px', fontSize:'.72rem', fontWeight:600, textTransform:'uppercase' } }, s || '—');
   }
@@ -55973,8 +55973,9 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     const tbl = h('div'); pg.appendChild(tbl);
     view.appendChild(pg);
 
-    async function load() {
-      const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined });
+    let _invRows = [], _invPage = 1;
+    let _invPS = Number(localStorage.getItem('inv_list_page_size') || 25);
+    function _renderInvPage() {
       tbl.innerHTML = '';
       const t = h('table', { class:'data', style: { width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:'8px', overflow:'hidden', boxShadow:'0 1px 3px rgba(0,0,0,.06)' } });
       t.innerHTML = `<thead><tr style="background:#f8fafc;text-align:left">
@@ -55983,8 +55984,11 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
         <th style="padding:.55rem .7rem;text-align:right">Paid</th>
         <th style="padding:.55rem .7rem">Status</th><th style="padding:.55rem .7rem;text-align:right">Actions</th></tr></thead>`;
       const tb = h('tbody');
-      if (!rows.length) tb.appendChild(h('tr', {}, h('td', { colspan:7, style:{padding:'1rem',textAlign:'center',color:'#94a3b8'} }, 'No invoices match the filters.')));
-      rows.forEach(r => {
+      if (!_invRows.length) tb.appendChild(h('tr', {}, h('td', { colspan:7, style:{padding:'1rem',textAlign:'center',color:'#94a3b8'} }, 'No invoices match the filters.')));
+      const pages = Math.max(1, Math.ceil(_invRows.length / _invPS));
+      if (_invPage > pages) _invPage = pages;
+      const stIdx = (_invPage - 1) * _invPS;
+      _invRows.slice(stIdx, stIdx + _invPS).forEach(r => {
         const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9' } });
         tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600,cursor:'pointer'}, onclick:() => openInvoiceModal(r.id) }, r.invoice_no,
           (r.doc_type === 'proforma') ? h('span', { style:{ marginLeft:'.4rem', background:'#fef3c7', color:'#92400e', padding:'1px 6px', borderRadius:'4px', fontSize:'.68rem', fontWeight:700, verticalAlign:'middle' } }, 'PROFORMA') : null));
@@ -55996,12 +56000,28 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
         const act = h('td', { style:{padding:'.5rem .7rem',textAlign:'right',whiteSpace:'nowrap'} });
         act.appendChild(_btn('PDF',     { kind:'ghost', onclick: () => openInvoicePdf(r.id), style:{marginRight:'.3rem'} }));
         act.appendChild(_btn('Pay',     { kind:'ghost', onclick: () => openPaymentModal(r.id, () => load()), style:{marginRight:'.3rem'} }));
-        act.appendChild(_btn('Open',    { kind:'ghost', onclick: () => openInvoiceModal(r.id) }));
+        act.appendChild(_btn('Open',    { kind:'ghost', onclick: () => openInvoiceModal(r.id), style:{marginRight:'.3rem'} }));
+        act.appendChild(_btn('🗑', { kind:'ghost', title:'Delete invoice', style:{ color:'#b91c1c' }, onclick: async () => {
+          if (!confirm('Delete invoice ' + r.invoice_no + '? This permanently removes the invoice, its line items and payments. This cannot be undone.')) return;
+          try { await api('api_invoicing_invoices_delete', r.id); toast('Invoice deleted', 'ok'); load(); }
+          catch (e) { toast(e.message, 'err'); }
+        } }));
         tr.appendChild(act);
         tb.appendChild(tr);
       });
       t.appendChild(tb);
       tbl.appendChild(t);
+      if (_invRows.length > 10) {
+        tbl.appendChild(_mkPager({
+          total: _invRows.length, page: _invPage, pageSize: _invPS, noun: 'invoices',
+          onPage: p => { _invPage = p; _renderInvPage(); },
+          onPageSize: n => { _invPS = n; localStorage.setItem('inv_list_page_size', String(n)); _invPage = 1; _renderInvPage(); }
+        }));
+      }
+    }
+    async function load() {
+      const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined });
+      _invRows = rows || []; _invPage = 1; _renderInvPage();
     }
     load();
   });
@@ -56932,6 +56952,18 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     const notes = h('textarea', { name:'default_notes', rows: 3, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical' }, placeholder:'e.g. Thank you for your business!' }, s.default_notes || '');
     card.appendChild(notes);
 
+    // ---- Social QR (Instagram + Google Review) ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '📱 Social QR codes on invoice'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Paste your links — QR codes are printed on every invoice PDF so customers can scan to follow you on Instagram and leave a Google review. Leave blank to hide.'));
+    const igUrl = h('input', { name:'instagram_url', type:'url', placeholder:'https://instagram.com/yourpage', style:{ width:'100%', padding:'.55rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', marginBottom:'.5rem' } });
+    igUrl.value = s.instagram_url || '';
+    const grUrl = h('input', { name:'google_review_url', type:'url', placeholder:'https://g.page/r/…/review  (your Google review link)', style:{ width:'100%', padding:'.55rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px' } });
+    grUrl.value = s.google_review_url || '';
+    card.appendChild(h('label', { style:{ fontSize:'.8rem', fontWeight:600, color:'#475569', display:'block', marginBottom:'.2rem' } }, '📸 Instagram page URL'));
+    card.appendChild(igUrl);
+    card.appendChild(h('label', { style:{ fontSize:'.8rem', fontWeight:600, color:'#475569', display:'block', marginBottom:'.2rem' } }, '⭐ Google Review URL'));
+    card.appendChild(grUrl);
+
     // ---- Footer ----
     card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '🦶 Invoice Footer'));
     card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Optional footer text printed at the bottom of every PDF (e.g. company tagline, registration numbers, fine print).'));
@@ -56968,6 +57000,8 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
           invoice_footer:  footer.value,
           enable_round_off: roundOff.querySelector('input').checked ? 1 : 0,
           enable_qr:        qr.querySelector('input').checked ? 1 : 0,
+          instagram_url:    igUrl.value.trim(),
+          google_review_url: grUrl.value.trim(),
         });
         toast('Settings saved — they will apply to your next new invoice', 'ok');
       } catch (e) { toast(e.message, 'err'); }

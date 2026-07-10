@@ -1620,6 +1620,9 @@ CREATE TABLE IF NOT EXISTS inv_settings (
   CONSTRAINT inv_settings_singleton CHECK (id = 1)
 );
 INSERT INTO inv_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- INVOICE_SOCIAL_QR_v1 — Instagram + Google Review links (printed as QR on PDFs).
+ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS instagram_url     TEXT;
+ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS google_review_url TEXT;
 
 -- ---- inv_audit_log (per-tenant lightweight audit) ----------------
 CREATE TABLE IF NOT EXISTS inv_audit_log (
