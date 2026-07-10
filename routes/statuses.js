@@ -23,9 +23,14 @@ const PIPE_STAGES = ['fresh', 'attempted', 'qualified', 'negotiation', 'proposal
 async function _heal() {
   try {
     await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS stage TEXT`);
+    /* WORKSPACE_v1 (2026-07-10) — statuses can be scoped to specific
+     * workspaces (campaigns). Empty array = available in all workspaces.
+     * Nullable + default '[]' so every existing status keeps today's
+     * behaviour (visible everywhere) with zero data migration. */
+    await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS workspace_ids JSONB DEFAULT '[]'`);
     return true;
   } catch (e) {
-    console.warn('[statuses] stage column heal failed:', e.message);
+    console.warn('[statuses] column heal failed:', e.message);
     return false;
   }
 }
@@ -40,11 +45,18 @@ async function api_statuses_save(token, s) {
   if (me.role !== 'admin') throw new Error('Admin only');
   if (!s.name) throw new Error('name required');
   const haveStage = await _heal();
+  /* WORKSPACE_v1 — coerce workspace_ids to array-of-integers.
+   * Empty array = 'all workspaces' (today's behaviour). */
+  let wsIds = [];
+  if (Array.isArray(s.workspace_ids)) {
+    wsIds = s.workspace_ids.map(x => Number(x)).filter(x => Number.isInteger(x) && x > 0);
+  }
   const payload = {
     name: s.name,
     color: s.color || '#6b7280',
     sort_order: Number(s.sort_order) || 10,
-    is_final: Number(s.is_final) || 0
+    is_final: Number(s.is_final) || 0,
+    workspace_ids: JSON.stringify(wsIds)
   };
   // Only include `stage` if the column actually exists on this tenant.
   if (haveStage) {
@@ -60,12 +72,20 @@ async function api_statuses_save(token, s) {
     try {
       await db.query('UPDATE statuses SET stage = $1 WHERE id = $2', [payload.stage, Number(s.id)]);
     } catch (e) { console.warn('[statuses] raw stage update failed:', e.message); }
+    /* WORKSPACE_v1 — belt-and-braces raw write for workspace_ids too */
+    try {
+      await db.query('UPDATE statuses SET workspace_ids = $1::jsonb WHERE id = $2', [payload.workspace_ids, Number(s.id)]);
+    } catch (e) { console.warn('[statuses] raw workspace_ids update failed:', e.message); }
     return { id: Number(s.id) };
   }
   const id = await db.insert('statuses', payload);
   try {
     if (payload.stage) await db.query('UPDATE statuses SET stage = $1 WHERE id = $2', [payload.stage, Number(id)]);
   } catch (e) { console.warn('[statuses] raw stage insert update failed:', e.message); }
+  /* WORKSPACE_v1 — write workspace_ids after insert too */
+  try {
+    await db.query('UPDATE statuses SET workspace_ids = $1::jsonb WHERE id = $2', [payload.workspace_ids, Number(id)]);
+  } catch (e) { console.warn('[statuses] raw workspace_ids insert failed:', e.message); }
   return { id };
 }
 async function api_statuses_delete(token, id) {
