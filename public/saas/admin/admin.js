@@ -3567,9 +3567,34 @@ VIEWS.tickets = async (view) => {
   view.appendChild(h('h1', {}, '🎫 Support Tickets'));
 
   // Filter bar
-  const statusSel = h('select', { class: 'input' });
-  statusSel.appendChild(h('option', { value: '' }, 'All statuses'));
-  (cat.statuses || []).forEach(s => statusSel.appendChild(h('option', { value: s.id }, s.label)));
+  // TKT_STATUS_MULTI_v1 — multi-select status; resolved + closed hidden by default.
+  const _hiddenByDefault = ['resolved', 'closed'];
+  let _tkStatuses = (cat.statuses || []).map(s => s.id).filter(id => !_hiddenByDefault.includes(id));
+  const statusBox = h('details', { style: { position: 'relative', display: 'inline-block' } });
+  const statusSummary = h('summary', { style: { cursor: 'pointer', listStyle: 'none', padding: '.45rem .7rem', border: '1px solid #cbd5e1', borderRadius: '6px', background: '#fff', fontSize: '.9rem', userSelect: 'none' } }, 'Status');
+  const statusMenu = h('div', { style: { position: 'absolute', zIndex: '30', top: '100%', left: '0', marginTop: '4px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.4rem .6rem', minWidth: '200px', boxShadow: '0 8px 22px rgba(0,0,0,.14)', maxHeight: '260px', overflow: 'auto' } });
+  function _statusLabel() {
+    const all = (cat.statuses || []).length;
+    statusSummary.textContent = 'Status: ' + (_tkStatuses.length >= all ? 'All' : (_tkStatuses.length ? (_tkStatuses.length + ' selected') : 'None'));
+  }
+  const _allCb = h('label', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', padding: '2px 0', fontSize: '.82rem', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', marginBottom: '3px', fontWeight: 700 } });
+  const _allBox = h('input', { type: 'checkbox' });
+  _allCb.appendChild(_allBox); _allCb.appendChild(h('span', {}, 'All / none'));
+  statusMenu.appendChild(_allCb);
+  const _cbs = [];
+  (cat.statuses || []).forEach(sT => {
+    const cb = h('input', { type: 'checkbox', checked: _tkStatuses.includes(sT.id) ? 'checked' : null });
+    cb.onchange = () => { _tkStatuses = _tkStatuses.filter(x => x !== sT.id); if (cb.checked) _tkStatuses.push(sT.id); _statusLabel(); load(); };
+    _cbs.push({ id: sT.id, cb });
+    statusMenu.appendChild(h('label', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', padding: '2px 0', fontSize: '.85rem', cursor: 'pointer' } }, cb, sT.label));
+  });
+  _allBox.onchange = () => {
+    _tkStatuses = _allBox.checked ? (cat.statuses || []).map(s => s.id) : [];
+    _cbs.forEach(x => { x.cb.checked = _allBox.checked; });
+    _statusLabel(); load();
+  };
+  statusBox.appendChild(statusSummary); statusBox.appendChild(statusMenu);
+  _statusLabel();
   const prioSel = h('select', { class: 'input' });
   prioSel.appendChild(h('option', { value: '' }, 'All priorities'));
   (cat.priorities || []).forEach(p => prioSel.appendChild(h('option', { value: p.id }, p.label)));
@@ -3587,7 +3612,7 @@ VIEWS.tickets = async (view) => {
     onclick: () => exportCsv('tickets-' + _csvTs() + '.csv', _lastTickets) }, '\u2b07 Export CSV');
 
   view.appendChild(h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '1rem 0' } },
-    statusSel, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn, exportBtn
+    statusBox, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn, exportBtn
   ));
 
   const statsRow = h('div', { id: 'tk-stats', style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } });
@@ -3604,7 +3629,7 @@ VIEWS.tickets = async (view) => {
     let res;
     try {
       res = await api('api_saas_tk_admin_listAll', {
-        status: statusSel.value || null,
+        statuses: _tkStatuses,
         priority: prioSel.value || null,
         category: catSel.value || null,
         q: searchIn.value.trim() || null,

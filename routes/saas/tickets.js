@@ -516,7 +516,11 @@ async function api_saas_tk_admin_listAll(token, filters) {
   await _ensureSchema();
   const f = filters || {};
   const where = []; const params = [];
-  if (f.status   && VALID_STATUSES.includes(f.status))     { params.push(f.status);   where.push(`t.status = $${params.length}`); }
+  // TKT_STATUS_MULTI_v1 — accept a statuses[] array (multi-select) or single status.
+  if (Array.isArray(f.statuses) && f.statuses.length) {
+    const valid = f.statuses.filter(x => VALID_STATUSES.includes(x));
+    if (valid.length) { const ph = valid.map(v => { params.push(v); return '$' + params.length; }); where.push(`t.status IN (${ph.join(',')})`); }
+  } else if (f.status && VALID_STATUSES.includes(f.status)) { params.push(f.status); where.push(`t.status = $${params.length}`); }
   if (f.category && VALID_CATEGORIES.includes(f.category)) { params.push(f.category); where.push(`t.category = $${params.length}`); }
   if (f.priority && VALID_PRIORITIES.includes(f.priority)) { params.push(f.priority); where.push(`t.priority = $${params.length}`); }
   if (f.tenant_id) { params.push(Number(f.tenant_id)); where.push(`t.tenant_id = $${params.length}`); }
