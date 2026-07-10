@@ -166,8 +166,8 @@ const SCHEMA = {
     json: []
   },
   statuses: {
-    columns: ['name', 'color', 'sort_order', 'is_final', 'stage'],
-    json: []
+    columns: ['name', 'color', 'sort_order', 'is_final', 'stage', 'workspace_ids'],
+    json: ['workspace_ids']
   },
   roles: {
     columns: ['key', 'label', 'hierarchy_level', 'is_system', 'is_active', 'created_at'],
@@ -178,8 +178,8 @@ const SCHEMA = {
     json: []
   },
   products: {
-    columns: ['name', 'description', 'price', 'is_active', 'gst_pct', 'image_url'],
-    json: []
+    columns: ['name', 'description', 'price', 'is_active', 'gst_pct', 'image_url', 'workspace_ids'],
+    json: ['workspace_ids']
   },
   custom_fields: {
     columns: ['key', 'label', 'field_type', 'options', 'is_required',
