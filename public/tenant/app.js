@@ -529,6 +529,67 @@ window._apkUpdateCheck = async function _apkUpdateCheck() {
 // Kick off the first check on script load.
 try { window._apkUpdateCheck(); } catch (_) {}
 
+/* INCOMING_CARD_OPEN_LEAD_FIX (2026-07-10) — SPA-side consumer for the
+ * mobile app's incoming-call popup "Open lead" button. MainActivity.java
+ * stashes the deeplink path on window.LeadCRMDeeplink then calls this
+ * function. Paths we handle:
+ *   /#/leads/<id>              → open existing lead modal
+ *   /#/leads?new=1&phone=<n>   → open new-lead modal, prefill phone
+ * If openLeadModal isn't ready yet (SPA still booting), we poll for it
+ * up to 8 seconds so the tap never silently drops. */
+window.__consumeLeadCRMDeeplink = function __consumeLeadCRMDeeplink() {
+  try {
+    var raw = window.LeadCRMDeeplink;
+    if (!raw) return;
+    delete window.LeadCRMDeeplink;
+    try { console.log('[DEEPLINK] consuming', raw); } catch (_) {}
+    var goLeads = function () {
+      try {
+        if (String(location.hash || '').indexOf('#/leads') !== 0) {
+          location.hash = '#/leads';
+        }
+      } catch (_) {}
+    };
+    var tryOpen = function (fn) {
+      var tries = 0;
+      var t = setInterval(function () {
+        tries++;
+        if (typeof window.openLeadModal === 'function') {
+          try { fn(); } catch (e) { try { console.warn('[DEEPLINK] open failed', e); } catch (_) {} }
+          clearInterval(t);
+        } else if (tries > 40) {
+          try { console.warn('[DEEPLINK] openLeadModal never became available'); } catch (_) {}
+          clearInterval(t);
+        }
+      }, 200);
+    };
+    var mExisting = String(raw).match(/#\/leads\/(\d+)/);
+    if (mExisting) {
+      goLeads();
+      tryOpen(function () { window.openLeadModal(Number(mExisting[1])); });
+      return;
+    }
+    var mNew = String(raw).match(/#\/leads\?[^#]*[?&]phone=([^&]+)/);
+    var isNew = /new=1/.test(String(raw));
+    if (isNew && mNew) {
+      goLeads();
+      var phone = '';
+      try { phone = decodeURIComponent(mNew[1]); } catch (_) { phone = mNew[1]; }
+      tryOpen(function () { window.openLeadModal(null, { phone: phone }); });
+      return;
+    }
+    if (String(raw).startsWith('#/') || String(raw).startsWith('/#/')) {
+      var h = String(raw).replace(/^\//, '');
+      try { location.hash = h; } catch (_) {}
+    }
+  } catch (e) { try { console.warn('[DEEPLINK] consumer threw', e); } catch (_) {} }
+};
+try {
+  if (window.LeadCRMDeeplink) {
+    setTimeout(function () { try { window.__consumeLeadCRMDeeplink(); } catch (_) {} }, 800);
+  }
+} catch (_) {}
+
 function _renderApkUpdateBanner(installedCode, meta) {
   // APK_AUTO_UPDATE_v2 (2026-05-31): a centered modal popup is the right UX
   // for an app-update prompt - banners get ignored, modals don't. Shows on
