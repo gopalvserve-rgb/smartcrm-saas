@@ -3123,13 +3123,13 @@ VIEWS.dashboard = async (view) => {
   if (_oldCampBar) _oldCampBar.remove();
   if (_campOpts && _campOpts.length && CRM.user && ['admin','manager','team_leader'].includes(CRM.user.role)) {
     const filterBar = h('div', { id: 'dash-camp-filter-bar', style: { display:'flex', alignItems:'center', gap:'8px', marginBottom:'.7rem', padding:'8px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', flexWrap:'wrap' } });
-    filterBar.appendChild(h('span', { style: { fontWeight:600, fontSize:'.85rem', color:'#475569' } }, '🎯 Campaign filter:'));
+    filterBar.appendChild(h('span', { style: { fontWeight:600, fontSize:'.85rem', color:'#475569' } }, '📁 Workspace filter:'));
     // Use existing multiSelectDropdown helper
     const sel = multiSelectDropdown({
-      id: 'dash-camp-filter', label: 'Campaign',
+      id: 'dash-camp-filter', label: 'Workspace',
       options: _campOpts.map(c => ({ id: c.id, name: c.name })),
       values: CRM._dashCampaignIds,
-      allLabel: 'All campaigns',
+      allLabel: 'All workspaces',
       onApply: (vals) => {
         CRM._dashCampaignIds = vals.map(v => Number(v));
         VIEWS.dashboard(view);
@@ -4823,7 +4823,7 @@ const LEAD_COLUMNS = [
   { key: 'whatsapp',    label: 'WhatsApp',      default: false },
   { key: 'source',      label: 'Source',        default: true },
   /* LEAD_LIST_CAMPAIGN_COL_v1 (2026-07-02) — show/hide Campaign name. Off by default. */
-  { key: 'campaign',    label: 'Campaign',      default: false },
+  { key: 'campaign',    label: 'Workspace',     default: false },
   { key: 'product',     label: 'Product',       default: false },
   { key: 'status',      label: 'Status',        default: true },
   { key: 'stage',       label: 'Stage',         default: true },
@@ -5385,10 +5385,10 @@ VIEWS.leads = async (view) => {
       : null,
     // CAMPAIGN_FILTER_v1 — campaign multi-select. Pulls from CRM.cache.campaigns (warmed on demand).
     multiSelectDropdown({
-      id: 'f-campaign', label: 'Campaign',
+      id: 'f-campaign', label: 'Workspace',
       options: (CRM.cache.campaigns || []).map(c => ({ id: c.id, name: c.name })),
       values: CRM.prefs.filters.campaign_ids || [],
-      allLabel: 'Any campaign',
+      allLabel: 'Any workspace',
       onApply: (vals) => {
         CRM.prefs.filters.campaign_ids = vals.map(v => Number(v));
         CRM._leadsPage = 1; loadLeads({ page: 1 });
@@ -12619,7 +12619,7 @@ async function _renderPipelineFunnel(view) {
       values:  fp.products || [],
       onApply: (v) => { fp.products = v; _renderPipelineFunnel(view); }
     }));
-    filterBar.appendChild(multiSelectDropdown({ label:'Campaign', allLabel:'Any campaign',
+    filterBar.appendChild(multiSelectDropdown({ label:'Workspace', allLabel:'Any workspace',
       options: _camps.map(c => ({ id: String(c.id), name: c.name })),
       values:  fp.campaigns || [],
       onApply: (v) => { fp.campaigns = v; _renderPipelineFunnel(view); }
@@ -28077,7 +28077,7 @@ function _leadCardFieldCatalog() {
     { key: 'city',         label: '📍 City' },
     { key: 'company',      label: '🏢 Company' },
     { key: 'tag',          label: '🏷 Tag' },
-    { key: 'campaign_name',label: '📣 Campaign' },   /* MOBILE_LEAD_CARD_POLISH_v1 */
+    { key: 'campaign_name',label: '📁 Workspace' },  /* WORKSPACE_v1 P1b — was: 📣 Campaign */
     { key: 'source',       label: '🌐 Source' },     /* MOBILE_LEAD_CARD_POLISH_v1 */
     { key: 'phone',        label: '📞 Phone' },      /* MOBILE_LEAD_CARD_POLISH_v1 */
     { key: 'assigned_name',label: '👤 Assigned to' },
@@ -30012,7 +30012,7 @@ async function adminLeadFieldVisibility() {
     { key: 'source',             label: '📥 Source' },
     { key: 'product_id',         label: '📦 Product' },
     { key: 'assigned_to',        label: '👤 Assigned To' },
-    { key: 'campaign_id',        label: '🎯 Campaign' },
+    { key: 'campaign_id',        label: '📁 Workspace' },
     { key: 'tags',               label: '🏷 Tags' },
     { key: 'city',               label: '📍 City' },
     { key: 'qualified',          label: '✅ Qualified lead toggle' },
@@ -54954,7 +54954,7 @@ const RB_DIM_CATALOGUE = [
   { key: 'source',         label: 'Source',         icon: '🌐' },
   { key: 'product',        label: 'Product',        icon: '📦' },
   { key: 'assigned_to',    label: 'Assigned user',  icon: '👤' },
-  { key: 'campaign',       label: 'Campaign',       icon: '📣' },
+  { key: 'campaign',       label: 'Workspace',      icon: '📁' },
   { key: 'qualified',      label: 'Qualified flag', icon: '✅' },
   { key: 'is_duplicate',   label: 'Duplicate flag', icon: '👯' },
   { key: 'created_day',    label: 'Created date (day)',   icon: '📅' },
