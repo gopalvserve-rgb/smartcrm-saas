@@ -19377,17 +19377,75 @@ function openCampaignModal(templates) {
     previewBox.appendChild(wrap);
   }
 
+  /* WA_CAMPAIGN_MERGE_CHIPS_v1 (2026-07-09) — clickable chips for the standard
+   * merge tokens. On click: insert the token at the input's caret. Below each
+   * variable input, chips row = @name @firstname @phone @email @source. Also
+   * a persistent hint tells the user WHY the section is empty when a template
+   * has zero body variables. */
+  const _MERGE_TOKENS = [
+    { label: '@name',      value: '@{name}' },
+    { label: '@firstname', value: '@{firstname}' },
+    { label: '@phone',     value: '@{phone}' },
+    { label: '@email',     value: '@{email}' },
+    { label: '@source',    value: '@{source}' }
+  ];
+  function _insertAtCaret(inp, text) {
+    const start = inp.selectionStart != null ? inp.selectionStart : (inp.value || '').length;
+    const end   = inp.selectionEnd   != null ? inp.selectionEnd   : start;
+    inp.value = String(inp.value || '').slice(0, start) + text + String(inp.value || '').slice(end);
+    inp.focus();
+    try { inp.selectionStart = inp.selectionEnd = start + text.length; } catch (_) {}
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  }
   function renderVars(combo) {
     const [name, lang] = String(combo || '').split('||');
     const t = approved.find(x => x.name === name && x.language === lang);
     varsBox.innerHTML = '';
     if (!t) { previewBox.innerHTML = ''; return; }
-    varsBox.appendChild(h('label', {}, 'Variables — use @{name}, @{firstname}, @{phone}, @{email}, @{source} for merge fields'));
-    for (let i = 0; i < t.body_params; i++) {
-      const inp = h('input', { name: 'cv_' + i, placeholder: 'Variable ' + (i + 1) });
-      inp.addEventListener('input', () => _campTplRenderPreview(t));
-      varsBox.appendChild(inp);
+    if (!t.body_params) {
+      varsBox.appendChild(h('div', {
+        style: { padding: '.55rem .7rem', background: '#f8fafc', border: '1px solid #e2e8f0',
+                 borderRadius: '6px', fontSize: '.8rem', color: '#475569' }
+      }, '✓ This template has no variables. Nothing to fill — go straight to Preview or Send.'));
+      _campTplRenderPreview(t);
+      return;
     }
+    varsBox.appendChild(h('label', {
+      style: { fontWeight: 600, display: 'block', marginBottom: '.35rem' }
+    }, 'Variables — type text or click a chip below to insert a merge field'));
+    for (let i = 0; i < t.body_params; i++) {
+      const row = h('div', { style: { marginBottom: '.5rem' } });
+      const inp = h('input', {
+        name: 'cv_' + i,
+        placeholder: 'Value for {{' + (i + 1) + '}} — e.g. @{firstname} or "Hi there"',
+        style: { width: '100%', padding: '.4rem .6rem', border: '1px solid #cbd5e1',
+                 borderRadius: '6px', fontSize: '.85rem', boxSizing: 'border-box' }
+      });
+      inp.addEventListener('input', () => _campTplRenderPreview(t));
+      row.appendChild(h('div', { style: { fontSize: '.75rem', color: '#64748b', fontWeight: 600, marginBottom: '.2rem' } },
+        'Variable {{' + (i + 1) + '}}'));
+      row.appendChild(inp);
+      const chipRow = h('div', {
+        style: { display: 'flex', flexWrap: 'wrap', gap: '.3rem', marginTop: '.3rem' }
+      });
+      _MERGE_TOKENS.forEach(tok => {
+        const chip = h('button', {
+          type: 'button',
+          style: { fontSize: '.72rem', padding: '.15rem .5rem', borderRadius: '10px',
+                   background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3',
+                   cursor: 'pointer', fontWeight: 600 },
+          title: 'Insert ' + tok.value + ' — resolved to each lead\'s actual ' + tok.label.slice(1) + ' at send time',
+          onclick: () => _insertAtCaret(inp, tok.value)
+        }, tok.label);
+        chipRow.appendChild(chip);
+      });
+      row.appendChild(chipRow);
+      varsBox.appendChild(row);
+    }
+    varsBox.appendChild(h('div', {
+      style: { marginTop: '.4rem', padding: '.4rem .6rem', background: '#fffbeb',
+               border: '1px solid #fde68a', borderRadius: '6px', fontSize: '.75rem', color: '#92400e' }
+    }, '💡 Chips resolve per-recipient at send time (each lead sees their own name/phone/etc.). Plain text stays the same for everyone.'));
     _campTplRenderPreview(t);
   }
   form.querySelector('[name="template_combo"]')?.addEventListener('change', ev => renderVars(ev.target.value));
