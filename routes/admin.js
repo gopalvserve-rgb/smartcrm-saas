@@ -406,7 +406,12 @@ async function api_admin_brand(_token) {
     POOL_PULL_USER_IDS: cfg.POOL_PULL_USER_IDS || '',  /* LEAD_POOL_v1 — per-user pull allow-list (SPA nav gate) */
     POOL_PULL_RULES: cfg.POOL_PULL_RULES || '',  /* LEAD_POOL_v2 — JSON [{user_id,count}] per-user batch rules (SPA nav gate) */
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',
-    DEMO_REMINDER_SETTINGS: cfg.DEMO_REMINDER_SETTINGS || ''
+    DEMO_REMINDER_SETTINGS: cfg.DEMO_REMINDER_SETTINGS || '',
+    /* LEAD_HIDDEN_FIELDS_v2 (2026-07-10) — surface admin-picked hidden
+     * fields to every SPA (all roles). Without this, openLeadModal's
+     * hide check read undefined from CRM.brand.LEAD_HIDDEN_FIELDS and
+     * no field ever disappeared even though the config was saved. */
+    LEAD_HIDDEN_FIELDS: cfg.LEAD_HIDDEN_FIELDS || ''
   ,
     // TENANT_PARTIAL_PAY_v1 — billing fields
     ...billing
