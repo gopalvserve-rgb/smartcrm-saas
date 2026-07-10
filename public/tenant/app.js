@@ -32699,8 +32699,13 @@ async function adminStatuses() {
             }
             else patch[f] = inp.value;
           });
-          try { await api('api_statuses_save', patch); toast('Saved · ' + _wsLabelFor(patch.workspace_ids || [])); }
-          catch (e) { toast(e.message, 'err'); }
+          try {
+            await api('api_statuses_save', patch);
+            /* WORKSPACE_v1 P5 — refresh cache so lead modal picks up new
+             * workspace_ids without needing a page reload. */
+            try { await warmCache(); } catch(_){}
+            toast('Saved · ' + _wsLabelFor(patch.workspace_ids || []));
+          } catch (e) { toast(e.message, 'err'); }
         } }, '💾'),
         h('button', { class: 'btn sm danger', onclick: async () => {
           if (!await confirmDialog(`Delete status "${s.name}"?`)) return;
@@ -32713,14 +32718,18 @@ async function adminStatuses() {
   card.appendChild(h('form', { class: 'inline-form', onsubmit: async ev => {
     ev.preventDefault();
     const f = ev.target;
-    try { await api('api_statuses_save', {
-      name: f.n.value,
-      color: f.c.value,
-      sort_order: Number(f.o.value) || 10,
-      is_final: f.fi.checked ? 1 : 0,
-      stage: f.st.value || null
-    }); toast('Added'); showAdminTab('statuses'); }
-    catch (e) { toast(e.message, 'err'); }
+    try {
+      await api('api_statuses_save', {
+        name: f.n.value,
+        color: f.c.value,
+        sort_order: Number(f.o.value) || 10,
+        is_final: f.fi.checked ? 1 : 0,
+        stage: f.st.value || null
+      });
+      /* WORKSPACE_v1 P5 — refresh cache after add */
+      try { await warmCache(); } catch(_){}
+      toast('Added'); showAdminTab('statuses');
+    } catch (e) { toast(e.message, 'err'); }
   }},
     h('input', { name: 'n', placeholder: 'Status name', required: true }),
     h('input', { name: 'c', type: 'color', value: '#6366f1' }),
