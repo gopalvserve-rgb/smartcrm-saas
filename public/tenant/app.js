@@ -6307,10 +6307,16 @@ async function loadLeads(opts) {
   }
   const filters = {
     q:           $('#f-q')?.value || undefined,
-    /* LEADS_FUFILTER_v1 (2026-07-09) — pass followup_from/to when the
-     * date-field toggle is set to 'followup'; otherwise honour from/to. */
-    followup_from: CRM.prefs.filters.followup_from || undefined,
-    followup_to:   CRM.prefs.filters.followup_to   || undefined,
+    /* LEADS_DATEFIELD_v5 (2026-07-10) — MUTUALLY EXCLUSIVE date filter:
+     * only one of {from,to} or {followup_from,followup_to} is sent based
+     * on which pill is active. v4 leaked both because the shared date
+     * inputs (#f-from/#f-to) always populated `from`/`to`, so the server
+     * AND-combined created_at + next_followup_at filters and returned 0
+     * rows when the same date was applied to both. */
+    ...(function(){ const df = CRM.prefs.filters.dateField;
+      if (df === 'followup') return { followup_from: CRM.prefs.filters.followup_from || undefined,
+                                       followup_to:   CRM.prefs.filters.followup_to   || undefined };
+      return {}; })(),
     status_id:   sids ? (sids.length === 1 ? sids[0] : undefined) : (CRM.prefs.filters.status_id || undefined),
     status_ids:  (_stageStatusIds && _stageStatusIds.length) ? _stageStatusIds : (sids || undefined),
     source:      srcs ? (srcs.length === 1 ? srcs[0] : undefined) : (CRM.prefs.filters.source || undefined),
@@ -6327,8 +6333,10 @@ async function loadLeads(opts) {
     qualified:   $('#f-qualified')?.value || undefined,
     duplicate:   $('#f-duplicate')?.value || undefined,
     sort:        $('#f-sort')?.value || undefined,
-    from:        $('#f-from')?.value || undefined,
-    to:          $('#f-to')?.value || undefined,
+    /* LEADS_DATEFIELD_v5 — when Follow-up pill is active, do NOT send
+     * created-at from/to (input boxes are shared between both modes). */
+    from:  (CRM.prefs.filters.dateField === 'followup') ? undefined : ($('#f-from')?.value || undefined),
+    to:    (CRM.prefs.filters.dateField === 'followup') ? undefined : ($('#f-to')?.value   || undefined),
     /* LEAD_SCORING_v1 P1.5 — smart-category multi-select + smart_score range. */
     smart_categories: (CRM.prefs.filters.smart_categories && CRM.prefs.filters.smart_categories.length)
                       ? CRM.prefs.filters.smart_categories : undefined,
