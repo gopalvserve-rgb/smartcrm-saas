@@ -120,6 +120,13 @@ try {
     // First snapshot after 90 seconds (let the server settle)
     setTimeout(() => social._runAdDailySnapshot().catch(() => {}), 90_000);
   }
+  // TKT_AUTOCLOSE_v1 — support tickets: remind tenant at 24h, auto-close at 48h.
+  try {
+    if (tickets && typeof tickets.sweepStaleTickets === 'function') {
+      setInterval(() => tickets.sweepStaleTickets().catch(() => {}), 60 * 60 * 1000);
+      setTimeout(() => tickets.sweepStaleTickets().catch(() => {}), 120_000);
+    }
+  } catch (_) {}
 } catch (_) {}
 
 // Combine every SaaS api_* into one dispatch map
