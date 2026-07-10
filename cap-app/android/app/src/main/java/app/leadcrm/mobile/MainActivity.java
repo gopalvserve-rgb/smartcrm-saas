@@ -85,6 +85,10 @@ public class MainActivity extends BridgeActivity {
         registerCallReceiver();
         getBridge().getWebView().addJavascriptInterface(new LeadCRMBridge(), "LeadCRMNative");
         handleSharedIntent(getIntent());
+        /* INCOMING_CARD_OPEN_LEAD_FIX (2026-07-10) — process the
+         * "deeplink" extra pushed by IncomingCallActivity so tapping
+         * 'Open lead' actually routes the WebView to the lead modal. */
+        handleDeeplink(getIntent());
         // REC_AUTOSYNC_KILL_v1 — disabled periodic 15-min WorkManager auto-sync per user request
         // scheduleRecordingBgSync();
 
@@ -137,6 +141,11 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleSharedIntent(intent);
+        /* INCOMING_CARD_OPEN_LEAD_FIX — also read the deeplink extra when
+         * MainActivity is already alive and IncomingCallActivity brings it
+         * to front via REORDER_TO_FRONT / SINGLE_TOP. Without this the
+         * extra is silently dropped and the popup dismisses to Dashboard. */
+        handleDeeplink(intent);
     }
 
     @Override
@@ -147,6 +156,36 @@ public class MainActivity extends BridgeActivity {
         // sync stays bulletproof. start() is idempotent — safe to call on every
         // resume.
         try { CallTrackingForegroundService.start(this); } catch (Exception e) {}
+        /* INCOMING_CARD_OPEN_LEAD_FIX — safety net: if the deeplink extra
+         * arrived during a slow resume, re-consume it here. Idempotent
+         * because handleDeeplink calls intent.removeExtra("deeplink"). */
+        try { handleDeeplink(getIntent()); } catch (Exception e) {}
+    }
+
+    /* INCOMING_CARD_OPEN_LEAD_FIX (2026-07-10) — consume the "deeplink"
+     * extra pushed by IncomingCallActivity so tapping "Open lead" reaches
+     * the SPA. Path shapes:
+     *   /#/leads/<id>              (renderKnown — existing lead by id)
+     *   /#/leads?new=1&phone=<n>   (renderUnknown — new-lead prefilled)
+     * We stash the path on window.LeadCRMDeeplink and call the SPA's
+     * consumer __consumeLeadCRMDeeplink() which handles both shapes. */
+    private void handleDeeplink(Intent intent) {
+        if (intent == null) return;
+        final String path = intent.getStringExtra("deeplink");
+        if (path == null || path.isEmpty()) return;
+        intent.removeExtra("deeplink");
+        final WebView wv = getBridge().getWebView();
+        if (wv == null) {
+            Log.w(TAG, "handleDeeplink: webview null, path=" + path);
+            return;
+        }
+        Log.i(TAG, "handleDeeplink: pushing to SPA: " + path);
+        wv.postDelayed(() -> {
+            String js = "try { window.LeadCRMDeeplink = " + jsStr(path) + "; " +
+                    "if (typeof window.__consumeLeadCRMDeeplink === 'function') " +
+                    "window.__consumeLeadCRMDeeplink(); } catch(e){ console.error('deeplink', e); }";
+            wv.evaluateJavascript(js, null);
+        }, 300);
     }
 
     private void handleSharedIntent(Intent intent) {
@@ -422,6 +461,30 @@ public class MainActivity extends BridgeActivity {
             if (url == null || url.isEmpty()) return;
             runOnUiThread(() -> {
                 try {
+                    /* APK_UPDATE_FIX_v1 (2026-07-10) — check if the OS will let
+                     * us prompt for the install. Without this permission the
+                     * PackageInstaller intent silently no-ops on Android 8+
+                     * and the user thinks the download itself failed. */
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                            && !getPackageManager().canRequestPackageInstalls()) {
+                        Log.w(TAG, "installApk: REQUEST_INSTALL_PACKAGES not granted — opening system dialog");
+                        try {
+                            Intent settingsIntent = new Intent(
+                                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + getPackageName()));
+                            settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(settingsIntent);
+                            android.widget.Toast.makeText(MainActivity.this,
+                                "Please grant 'Install unknown apps' for SmartCRM, then tap Update Now again.",
+                                android.widget.Toast.LENGTH_LONG).show();
+                        } catch (Exception ex) {
+                            Log.w(TAG, "settings intent failed: " + ex.getMessage());
+                        }
+                        /* Also start the browser download so the user has a
+                         * working fallback even if they don't grant now. */
+                        try { downloadApk(url); } catch (Exception ignored) {}
+                        return;
+                    }
                     String full = url;
                     if (full.startsWith("/")) {
                         String origin = "https://crm.smartcrmsolution.com";
@@ -473,6 +536,32 @@ public class MainActivity extends BridgeActivity {
                     } else {
                         registerReceiver(receiver, filter);
                     }
+                    /* APK_UPDATE_FIX_v1 — friendly kick-off toast so the user
+                     * knows the download started (DownloadManager runs silently
+                     * in bg and users think nothing happened). */
+                    try {
+                        android.widget.Toast.makeText(MainActivity.this,
+                            "Downloading SmartCRM update…",
+                            android.widget.Toast.LENGTH_LONG).show();
+                    } catch (Exception ignored) {}
+                    /* APK_UPDATE_FIX_v1 — 90-second watchdog. If the receiver
+                     * never fires (OEM DownloadManager quirk, or the app was
+                     * killed then relaunched) then poke the file directly OR
+                     * fall back to browser download so the user isn't stuck
+                     * on "Downloading forever". */
+                    final Handler dlWatch = new Handler(Looper.getMainLooper());
+                    dlWatch.postDelayed(() -> {
+                        try {
+                            if (outFile.exists() && outFile.length() > 200_000) {
+                                Log.i(TAG, "installApk: watchdog — file exists, launching installer");
+                                launchInstaller(outFile);
+                            } else {
+                                Log.w(TAG, "installApk: watchdog — file missing/small, falling back to browser");
+                                try { unregisterReceiver(receiver); } catch (Exception ignored) {}
+                                downloadApk(url);
+                            }
+                        } catch (Exception ex) { Log.w(TAG, "watchdog failed: " + ex.getMessage()); }
+                    }, 90_000L);
                 } catch (Exception e) {
                     Log.e(TAG, "installApk failed: " + e.getMessage());
                     // Fall back to browser-launch path if anything blew up.
