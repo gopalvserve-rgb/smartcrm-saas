@@ -311,7 +311,11 @@ async function _executeNode(session, flow, node, ctx) {
     case 'cta': {
       // URL button (single Call-To-Action) using interactive cta_url
       const body = text(node.body || '');
-      const url = String(node.url || '').trim();
+      let url = String(node.url || '').trim();
+      // WA_FLOW_CTA_URL_FIX_v1 — Meta's cta_url rejects a URL with no scheme
+      // (the send fails and silently falls back to plain text, so the button
+      // never appears / "won't open"). Prepend https:// when missing.
+      if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
       const label = String(node.button_label || 'Open').slice(0, 20);
       if (url) {
         const c = ctx.cfg || await wb._cfg();
