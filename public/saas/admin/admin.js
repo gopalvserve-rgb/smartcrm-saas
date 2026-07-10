@@ -3220,7 +3220,7 @@ async function openSignupRequestModal(id, onClose) {
     }
     el.value = row[key] == null ? '' : row[key];
     el.dataset.field = key;
-    if (row.status !== 'pending') el.disabled = true;
+    // SIGNUP_EDIT_ANY_STATUS_v1 — editable for every status (fix slug/details anytime).
     wrap.appendChild(el);
     f.appendChild(wrap);
     return el;
@@ -3306,6 +3306,25 @@ async function openSignupRequestModal(id, onClose) {
     'Submitted by: ' + (row.submitted_by || 'public form') + (row.ip_address ? ' · IP ' + row.ip_address : '')
   ));
 
+  // SIGNUP_EDIT_ANY_STATUS_v1 — shared collect + slug validation, used by the
+  // pending Save/Approve AND the any-status Save button below.
+  function collect() {
+    const out = { id: row.id };
+    f.querySelectorAll('[data-field]').forEach(el => { out[el.dataset.field] = el.value; });
+    return out;
+  }
+  function _ensureSlug() {
+    const el = f.querySelector('[data-field="desired_slug"]');
+    const v = String((el && el.value) || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]{2,40}$/.test(v)) {
+      toast('Enter a valid slug first — 3–41 chars, lowercase letters/numbers/hyphens, starts with a letter.', 'err');
+      if (el) { el.style.border = '1px solid #ef4444'; el.focus(); }
+      return null;
+    }
+    if (el) { el.value = v; el.style.border = ''; }
+    return v;
+  }
+
   // ── Action buttons (only for pending)
   if (row.status === 'pending') {
     const actions = h('div', {
@@ -3320,23 +3339,6 @@ async function openSignupRequestModal(id, onClose) {
     actions.appendChild(btnApprove);
     body.appendChild(actions);
 
-    function collect() {
-      const out = { id: row.id };
-      f.querySelectorAll('[data-field]').forEach(el => { out[el.dataset.field] = el.value; });
-      return out;
-    }
-    // SIGNUP_SLUG_REQUIRED_v1 — slug is mandatory (it becomes /t/<slug> + the DB name).
-    function _ensureSlug() {
-      const el = f.querySelector('[data-field="desired_slug"]');
-      const v = String((el && el.value) || '').trim().toLowerCase();
-      if (!/^[a-z][a-z0-9-]{2,40}$/.test(v)) {
-        toast('Enter a valid slug first — 3–41 chars, lowercase letters/numbers/hyphens, starts with a letter.', 'err');
-        if (el) { el.style.border = '1px solid #ef4444'; el.focus(); }
-        return null;
-      }
-      if (el) { el.value = v; el.style.border = ''; }
-      return v;
-    }
     btnSave.onclick = async () => {
       if (!_ensureSlug()) return;
       btnSave.disabled = true;
@@ -3381,27 +3383,45 @@ async function openSignupRequestModal(id, onClose) {
   // moved to a tenant here. Provisioning is idempotent: it creates the tenant if
   // missing (or returns the existing one), shares the id+password and sends the
   // welcome email.
-  if (row.status && row.status !== 'pending' && row.status !== 'rejected') {
+  // SIGNUP_EDIT_ANY_STATUS_v1 — for ANY non-pending status show a Save button so
+  // slug/details can be edited + saved; paid/approved also get Move-to-Tenant.
+  if (row.status && row.status !== 'pending') {
     const hasTenant = !!(row.provisioned_tenant_slug || row.provisioned_slug);
-    const prov = h('div', { class: 'modal-foot', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '1.25rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem' } });
+    const canProvision = row.status !== 'rejected';
+    const prov = h('div', { class: 'modal-foot', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '1.25rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem', flexWrap: 'wrap' } });
     prov.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginRight: 'auto' } },
-      hasTenant ? 'Tenant already exists — re-run to resend the login details + welcome email.'
-                : 'Payment recorded. Create the tenant workspace, share the login id + password and send the welcome email.'));
-    const btn = h('button', { class: 'btn sm', style: { background: '#16a34a', color: '#fff' } },
-      hasTenant ? '🔁 Re-provision & Resend Welcome' : '🚀 Move to Tenant & Send Welcome');
-    prov.appendChild(btn);
-    body.appendChild(prov);
-    btn.onclick = async () => {
-      if (!confirm('Create / verify the tenant workspace for this request and send the welcome email?')) return;
-      btn.disabled = true; const _t = btn.textContent; btn.textContent = 'Provisioning…';
-      try {
-        const r = await api('api_saas_sr_provision', row.id);
-        const res = (r && r.result) ? r.result : r;
-        toast('Tenant ready — credentials generated & welcome email sent', 'ok');
-        showCredentialsModal(res);
-        close();
-      } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = _t; }
+      canProvision
+        ? (hasTenant ? 'Edit any field (e.g. slug) and Save. Re-run to resend the login details + welcome email.'
+                     : 'Edit any field (e.g. slug) and Save, then create the tenant workspace + send the welcome email.')
+        : 'Edit any field and Save.'));
+    const saveBtn2 = h('button', { class: 'btn sm ghost' }, '💾 Save changes');
+    saveBtn2.onclick = async () => {
+      if (!_ensureSlug()) return;
+      saveBtn2.disabled = true;
+      try { await api('api_saas_sr_update', collect()); toast('Saved', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+      finally { saveBtn2.disabled = false; }
     };
+    prov.appendChild(saveBtn2);
+    if (canProvision) {
+      const btn = h('button', { class: 'btn sm', style: { background: '#16a34a', color: '#fff' } },
+        hasTenant ? '🔁 Re-provision & Resend Welcome' : '🚀 Move to Tenant & Send Welcome');
+      prov.appendChild(btn);
+      btn.onclick = async () => {
+        if (!_ensureSlug()) return;
+        if (!confirm('Save changes, create / verify the tenant workspace, and send the welcome email?')) return;
+        btn.disabled = true; const _t = btn.textContent; btn.textContent = 'Provisioning…';
+        try {
+          await api('api_saas_sr_update', collect());   // persist slug/edits first
+          const r = await api('api_saas_sr_provision', row.id);
+          const res = (r && r.result) ? r.result : r;
+          toast('Tenant ready — credentials generated & welcome email sent', 'ok');
+          showCredentialsModal(res);
+          close();
+        } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = _t; }
+      };
+    }
+    body.appendChild(prov);
   }
 }
 
