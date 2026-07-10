@@ -3853,15 +3853,36 @@ async function openAdminTicketModal(ticketId) {
 
     // Composer
     const compWrap = h('div', { style: { marginTop: '1rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.85rem' } });
+    const _draftKey = 'tk_draft_' + t.id;   // TKT_REPLY_DRAFT_v2 — persist across close/reopen
     const replyIn = h('textarea', { class: 'input', rows: 4, placeholder: 'Type your reply...', style: { width: '100%', minHeight: '80px' } });
-    replyIn.value = _replyDraft || '';
-    replyIn.addEventListener('input', () => { _replyDraft = replyIn.value; });
+    let _saved = ''; try { _saved = localStorage.getItem(_draftKey) || ''; } catch (_) {}
+    replyIn.value = _replyDraft || _saved || '';
+    const _draftHint = h('span', { style: { fontSize: '.72rem', color: '#94a3b8' } }, replyIn.value ? '📝 Draft restored' : '');
+    replyIn.addEventListener('input', () => {
+      _replyDraft = replyIn.value;
+      try { if (replyIn.value.trim()) localStorage.setItem(_draftKey, replyIn.value); else localStorage.removeItem(_draftKey); } catch (_) {}
+      _draftHint.textContent = replyIn.value.trim() ? '📝 Draft saved' : '';
+    });
     const fileIn = h('input', { type: 'file' });
     const intCb = h('input', { type: 'checkbox' });
     compWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '✏ Reply'));
     compWrap.appendChild(replyIn);
+    const aiBtn = h('button', { class: 'btn', title: 'Let AI draft a step-by-step resolution from the ticket — you can edit before sending' }, '✨ AI Suggest');
+    aiBtn.onclick = async () => {
+      aiBtn.disabled = true; const _t = aiBtn.textContent; aiBtn.textContent = '✨ Thinking…';
+      try {
+        const r = await api('api_saas_tk_admin_aiSuggest', { ticket_id: t.id });
+        replyIn.value = r.suggestion || '';
+        _replyDraft = replyIn.value;
+        try { localStorage.setItem(_draftKey, replyIn.value); } catch (_) {}
+        _draftHint.textContent = '✨ AI draft — review & edit before sending';
+        toast('AI suggestion ready — review & edit', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      aiBtn.disabled = false; aiBtn.textContent = _t;
+    };
     compWrap.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
       fileIn,
+      aiBtn, _draftHint,
       h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem', fontSize: '.85rem' } }, intCb, '🔒 Internal note (hidden from customer)'),
       h('button', { class: 'btn primary', onclick: async (e) => {
         if (!replyIn.value.trim()) { toast('Type a reply', 'err'); return; }
@@ -3887,8 +3908,9 @@ async function openAdminTicketModal(ticketId) {
           }
           replyIn.value = '';
           _replyDraft = '';
+          try { localStorage.removeItem(_draftKey); } catch (_) {}
           intCb.checked = false;
-          toast('✓ Reply sent');
+          toast('✓ Reply sent — ticket assigned to you');
           load();
         } catch (err) {
           toast(err.message, 'err');

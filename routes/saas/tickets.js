@@ -636,7 +636,45 @@ async function api_saas_tk_admin_reply(token, payload) {
     })();
   }
 
-  return { ok: true, reply_id: replyId };
+  // TKT_AUTO_ASSIGN_v1 — whoever replies takes ownership of the ticket.
+  try { await control.query(`UPDATE support_tickets SET assignee_id = $1, updated_at = NOW() WHERE id = $2`, [me.id, ticketId]); } catch (_) {}
+
+  return { ok: true, reply_id: replyId, assigned_to: me.id };
+}
+
+// TKT_AI_SUGGEST_v1 — draft a step-by-step resolution from the ticket thread using
+// the platform Gemini key. The admin edits/approves before sending.
+async function api_saas_tk_admin_aiSuggest(token, payload) {
+  const me = await requireSuperAdmin(token);
+  await _ensureSchema();
+  const ticketId = Number((payload || {}).ticket_id);
+  if (!ticketId) throw new Error('ticket_id required');
+  const t = await control.findById('support_tickets', ticketId);
+  if (!t) throw new Error('Ticket not found');
+  const reps = await control.query(
+    `SELECT author_type, author_name, body, is_internal, created_at
+       FROM support_ticket_replies WHERE ticket_id = $1 ORDER BY created_at ASC LIMIT 40`, [ticketId]);
+  const convo = (reps.rows || [])
+    .filter(r => Number(r.is_internal) !== 1)
+    .map(r => (r.author_type === 'admin' ? 'Support' : 'Customer') + ': ' + String(r.body || '').trim())
+    .join('\n');
+  const system = 'You are a senior customer-support agent for SmartCRM, a CRM SaaS used by sales teams (leads, WhatsApp, calling, invoicing, campaigns, reports). ' +
+    'Given a support ticket, write a clear, friendly reply the agent can send to the customer that RESOLVES the issue with concrete, numbered step-by-step instructions specific to SmartCRM. ' +
+    'Be concise and practical. Do not invent features. If information is missing, ask one crisp clarifying question at the end. Output only the reply text (no preamble).';
+  const prompt = 'Category: ' + (t.category || '-') + '\nSubject: ' + (t.subject || '') +
+    '\n\nCustomer description:\n' + (t.description || '(none)') +
+    (convo ? ('\n\nConversation so far:\n' + convo) : '') +
+    '\n\nWrite the resolution reply now.';
+  let text = '';
+  try {
+    const gemini = require('../../utils/geminiClient');
+    const r = await gemini.generate({ system, prompt, maxOutputTokens: 700, temperature: 0.4 });
+    text = String((r && r.text) || '').trim();
+  } catch (e) {
+    throw new Error('AI is not available: ' + (e.message || e) + ' (set the platform Gemini key in AI settings).');
+  }
+  if (!text) throw new Error('AI returned an empty suggestion — try again.');
+  return { ok: true, suggestion: text };
 }
 
 /** Admin: change ticket status. */
@@ -836,6 +874,7 @@ module.exports = {
   api_saas_tk_admin_listAll,
   api_saas_tk_admin_get,
   api_saas_tk_admin_reply,
+  api_saas_tk_admin_aiSuggest,
   api_saas_tk_admin_setStatus,
   api_saas_tk_admin_setPriority,
   api_saas_tk_admin_assign,
