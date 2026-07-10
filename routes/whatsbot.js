@@ -1197,6 +1197,26 @@ async function api_wb_templates_delete(token, payload) {
 
 // ---------- Send a single template (used by chat + bots + campaigns) ----
 
+/* TPL_PARAM_SANITIZE_v1 (2026-07-09) — Meta rejects template body parameters
+ * (#132012 "Template parameter format is invalid") when the value contains
+ *   • newlines (\r\n, \n) or tabs
+ *   • runs of 4+ consecutive whitespace
+ *   • more than 1024 chars in a single parameter
+ * Sanitize before every send so a stray copy/paste with a newline never
+ * silently kills a whole campaign. Preserves internal single spaces + emoji. */
+function _sanitizeTplParam(v) {
+  let s = (v == null) ? '' : String(v);
+  // Kill every kind of whitespace-that-Meta-hates → single space
+  s = s.replace(/[\r\n\t\v\f]/g, ' ');
+  // Collapse repeated whitespace to a single space
+  s = s.replace(/ {2,}/g, ' ');
+  // Trim ends
+  s = s.trim();
+  // Meta caps parameters at 1024 chars per Cloud API docs
+  if (s.length > 1024) s = s.slice(0, 1021).replace(/\s+$/, '') + '...';
+  return s;
+}
+
 async function _sendTemplate({ to, templateName, language, variables, imageUrl, leadId, userId, fromPhoneNumberId, campaignId }, cfg) {
   // If a specific from-phone is requested, swap cfg in-place so the
   // _graphPost call below uses that phone's token + phone_number_id.
@@ -1232,7 +1252,7 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
   if (Array.isArray(variables) && variables.length) {
     components.push({
       type: 'body',
-      parameters: variables.map(v => ({ type: 'text', text: String(v ?? '') }))
+      parameters: variables.map(v => ({ type: 'text', text: _sanitizeTplParam(v) }))
     });
   }
   const body = {
