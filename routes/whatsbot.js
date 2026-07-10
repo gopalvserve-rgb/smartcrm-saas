@@ -2650,6 +2650,98 @@ async function api_wb_campaigns_send_now(token, id) {
   return { ok: true };
 }
 
+/* WA_CAMPAIGN_RETRY_v1 (2026-07-09) — re-queue every FAILED target on a
+ * campaign so the worker picks them up on the next tick. Adjusts the
+ * campaign's recipients_failed counter down and sets status back to
+ * 'sending' so it's active. Admin/manager only. */
+async function api_wb_campaigns_retryFailed(token, id) {
+  const me = await authUser(token);
+  if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
+  const campaignId = Number(id);
+  if (!campaignId) throw new Error('campaign id required');
+  const camp = await db.findById('wa_campaigns', campaignId);
+  if (!camp) throw new Error('Campaign not found');
+  const q = await db.query(
+    `UPDATE wa_campaign_targets SET status='queued', error=NULL, sent_at=NULL, wa_message_id=NULL
+      WHERE campaign_id=$1 AND status='failed' RETURNING id`,
+    [campaignId]
+  );
+  const retried = q.rows.length;
+  if (retried > 0) {
+    const newFailed = Math.max(0, Number(camp.recipients_failed || 0) - retried);
+    await db.update('wa_campaigns', campaignId, {
+      status: 'sending',
+      recipients_failed: newFailed,
+      completed_at: null
+    });
+    /* Nudge the tick so the user sees action immediately */
+    try { setImmediate(() => _campaignTick().catch(() => {})); } catch (_) {}
+  }
+  return { ok: true, retried, campaign_id: campaignId };
+}
+
+/* WA_CAMPAIGN_CLONE_v1 (2026-07-09) — clone campaign config into a fresh
+ * queued campaign. Options:
+ *   include_targets: 'all' | 'failed' | 'none' (default 'none')
+ * Cloned campaigns start with recipients_* zeroed + status='queued'. */
+async function api_wb_campaigns_clone(token, payload) {
+  const me = await authUser(token);
+  if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
+  const p = payload || {};
+  const srcId = Number(p.id || p.source_id);
+  if (!srcId) throw new Error('campaign id required');
+  const src = await db.findById('wa_campaigns', srcId);
+  if (!src) throw new Error('Source campaign not found');
+  const includeTargets = String(p.include_targets || 'none').toLowerCase();
+
+  const newName = (p.new_name || '').trim() || (String(src.name || 'Campaign') + ' (copy ' + new Date().toISOString().slice(0,16).replace('T',' ') + ')');
+  const cloneRow = {
+    name: newName,
+    relation_type: src.relation_type,
+    template_name: src.template_name,
+    template_language: src.template_language,
+    variables_json: src.variables_json,
+    image_url: src.image_url,
+    filter_json: src.filter_json,
+    scheduled_at: null,
+    send_now: 1,
+    status: 'queued',
+    recipients_total: 0,
+    recipients_sent: 0, recipients_failed: 0,
+    recipients_delivered: 0, recipients_read: 0,
+    created_by: me.id,
+    created_at: db.nowIso()
+  };
+  const newId = await db.insert('wa_campaigns', cloneRow);
+
+  let copied = 0;
+  if (includeTargets === 'all' || includeTargets === 'failed') {
+    const clause = includeTargets === 'failed' ? "AND status='failed'" : '';
+    const src_targets = await db.query(
+      `SELECT lead_id, phone, vars_json FROM wa_campaign_targets WHERE campaign_id=$1 ${clause}`,
+      [srcId]
+    );
+    for (const t of src_targets.rows) {
+      await db.insert('wa_campaign_targets', {
+        campaign_id: newId,
+        lead_id: t.lead_id,
+        phone: t.phone,
+        vars_json: t.vars_json,
+        status: 'queued'
+      });
+      copied++;
+    }
+    await db.update('wa_campaigns', newId, { recipients_total: copied });
+  }
+
+  /* Nudge the tick when we cloned with recipients so the user sees action */
+  if (copied > 0) {
+    try { setImmediate(() => _campaignTick().catch(() => {})); } catch (_) {}
+  }
+  return { ok: true, new_id: newId, name: newName, recipients_copied: copied, include: includeTargets };
+}
+
+
 async function api_wb_campaigns_pause(token, id) {
   const me = await authUser(token);
   if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
@@ -4379,6 +4471,7 @@ module.exports = {
   // Campaigns
   api_wb_campaigns_list, api_wb_campaigns_create, api_wb_campaigns_send_now,
   api_wb_campaigns_previewCount, api_wb_campaigns_filterOptions,
+  api_wb_campaigns_retryFailed, api_wb_campaigns_clone,
   api_wb_campaigns_pause, api_wb_campaigns_targets,
   // Activity
   api_wb_activity_list, api_wb_activity_get, api_wb_activity_clear,
