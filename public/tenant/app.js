@@ -25496,7 +25496,9 @@ VIEWS.admin = async (view) => {
       { id: 'customfields', label: '➕ Lead Custom Fields',  search: 'custom fields fields lead fields form fields' },
       { id: 'tags',         label: '🏷 Lead Tags',           search: 'tags label lead tag segmentation' },
       { id: 'duplicates',   label: '👥 Duplicate Rules',     search: 'duplicates duplicate lead merge duplicate detection' },
-      { id: 'leadcardextras', label: '🪪 Lead Card Fields',  search: 'lead card card fields visible fields card view' }
+      { id: 'leadcardextras', label: '🪪 Lead Card Fields',  search: 'lead card card fields visible fields card view' },
+      /* LEAD_HIDDEN_FIELDS_v1 (2026-07-09) — hide fields from Lead-Edit modal for the whole team */
+      { id: 'leadhide',       label: '🙈 Hide Lead Fields',   roles: ['admin'], search: 'hide lead fields visibility form fields show hide lead form remove fields email budget campaign' }
     ]},
     { title: 'Sales & Quotation Setup', items: [
       { id: 'products',     label: '📦 Products / Services',    search: 'products services items product master service master' },
@@ -25633,6 +25635,7 @@ async function showAdminTab(id) {
     if (id === 'menu')     body.replaceChildren(await adminMenuVisibility());
     if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
     if (id === 'leadcardextras') body.replaceChildren(await adminLeadCardExtras());
+    if (id === 'leadhide')       body.replaceChildren(await adminLeadFieldVisibility());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'forms')      body.replaceChildren(await adminForms());
     if (id === 'pages')      body.replaceChildren(await adminPages());
