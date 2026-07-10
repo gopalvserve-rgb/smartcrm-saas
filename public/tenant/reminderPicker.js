@@ -113,8 +113,15 @@
                    m >= 60 ? Math.round(m / 60) + 'h' : m + 'm';
           }).join(' + ');
           var chan = [Number(f.channel_wa) ? 'WA' : '', Number(f.channel_email) ? 'Email' : ''].filter(Boolean).join('+');
+          /* REMINDER_PICKER_NONE_DEFAULT_v1 (2026-07-09) — do NOT auto-select
+           * the tenant's default flow. Default is '— None —' across all
+           * tenants. Only pre-select if the lead ALREADY had this flow
+           * attached (rep picked it before), which the caller signals via
+           * data-rp-existing-flow-id on the input. */
+          var _existing = Number(input.dataset.rpExistingFlowId || 0);
+          var _selected = (_existing && Number(f.id) === _existing);
           var label = f.name + (rungs ? '  (' + rungs + ' · ' + chan + ')' : '') + (Number(f.is_default) ? '  ★ default' : '');
-          return '<option value="' + f.id + '"' + (Number(f.is_default) ? ' selected' : '') + '>' + label + '</option>';
+          return '<option value="' + f.id + '"' + (_selected ? ' selected' : '') + '>' + label + '</option>';
         }).join('') +
       '</select>' +
       '<div data-rp-preview="1" style="font-size:.75rem;color:#1e40af;margin-top:.35rem"></div>';
