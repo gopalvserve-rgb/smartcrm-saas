@@ -3229,7 +3229,7 @@ async function openSignupRequestModal(id, onClose) {
   field('Organisation', 'org_name');
   field('Email', 'email', 'email');
   field('Mobile', 'mobile');
-  field('Desired slug', 'desired_slug');
+  const _slugField = field('Desired slug *', 'desired_slug');
   const pkgOptions = [{ value: '', label: '— pick a package —' }].concat(
     packages.map(p => ({ value: String(p.id), label: p.name + ' — ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') + ' / ' + (p.is_lifetime ? 'lifetime' : ((p.recurring_period_count || 1) + ' ' + (p.recurring_period || 'month'))) }))
   );
@@ -3237,7 +3237,7 @@ async function openSignupRequestModal(id, onClose) {
   // custom amount below; the preview is tenure-driven.
   const endPreview = h('div', { style: { gridColumn: 'span 2', background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '6px', fontSize: '.85rem', color: '#334155', marginTop: '.25rem' } }, 'Pick a tenure to see the valid-till date');
   function _tenureMonths(t) { return ({ month:1, quarter:3, half_year:6, year:12, '2year':24, '3year':36 })[String(t||'').toLowerCase()] || 0; }
-  function _refreshEndPreview() {
+  function _refreshEndPreview(force) {
     const tenEl = f.querySelector('[data-field="desired_tenure"]');
     const mo = _tenureMonths(tenEl && tenEl.value);
     if (!mo) { endPreview.textContent = 'Pick a tenure to see the valid-till date'; endPreview.style.background = '#f1f5f9'; endPreview.style.color = '#334155'; return; }
@@ -3245,7 +3245,7 @@ async function openSignupRequestModal(id, onClose) {
     const days = Math.round((end - new Date()) / 86400000);
     endPreview.style.background = '#ecfdf5'; endPreview.style.color = '#065f46';
     endPreview.innerHTML = '<b>✓ Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) + '</b> &nbsp;·&nbsp; ' + days + ' days from today';
-    try { const due = f.querySelector('[data-field="next_payment_at"]'); if (due) { const y=end.getFullYear(), m=String(end.getMonth()+1).padStart(2,'0'), d=String(end.getDate()).padStart(2,'0'); due.value=y+'-'+m+'-'+d; } } catch(_){}  /* SIGNUP_NEXTDUE_v1 — always follow the selected tenure */
+    try { const due = f.querySelector('[data-field="next_payment_at"]'); if (due && (force || !due.value)) { const y=end.getFullYear(), m=String(end.getMonth()+1).padStart(2,'0'), d=String(end.getDate()).padStart(2,'0'); due.value=y+'-'+m+'-'+d; } } catch(_){}  /* SIGNUP_NEXTDUE_v1 — tenure drives the due date (force on change, fill-if-empty on load) */
   }
   f.appendChild(endPreview);
   field('Industry pack', 'industry_pack', 'select', false, [
@@ -3263,7 +3263,7 @@ async function openSignupRequestModal(id, onClose) {
     { value: '3year', label: '3 years' }
   ]);
   _tenSel.value = row.desired_tenure || '';
-  _tenSel.addEventListener('change', _refreshEndPreview);
+  _tenSel.addEventListener('change', () => _refreshEndPreview(true));
   _refreshEndPreview();
   field('Number of users', 'desired_users', 'number');
   // SIGNUP_REQUEST_v2 — payment fields shown in the edit modal so admin
@@ -3290,6 +3290,7 @@ async function openSignupRequestModal(id, onClose) {
   _gstSel.addEventListener('change', _refreshGst); _totInp.addEventListener('input', _refreshGst); _refreshGst();
   field('Amount paid so far (₹)','amount_paid_inr',  'number');
   field('Next payment due date','next_payment_at',  'date');
+  _refreshEndPreview(false);  // SIGNUP_NEXTDUE_v1 — now that the due field exists, fill it from tenure
   field('Transaction mode', 'transaction_mode', 'select', false, [
     { value: '', label: '— not specified —' },
     { value: 'upi', label: 'UPI' }, { value: 'bank_transfer', label: 'Bank transfer / NEFT' },
@@ -3324,7 +3325,20 @@ async function openSignupRequestModal(id, onClose) {
       f.querySelectorAll('[data-field]').forEach(el => { out[el.dataset.field] = el.value; });
       return out;
     }
+    // SIGNUP_SLUG_REQUIRED_v1 — slug is mandatory (it becomes /t/<slug> + the DB name).
+    function _ensureSlug() {
+      const el = f.querySelector('[data-field="desired_slug"]');
+      const v = String((el && el.value) || '').trim().toLowerCase();
+      if (!/^[a-z][a-z0-9-]{2,40}$/.test(v)) {
+        toast('Enter a valid slug first — 3–41 chars, lowercase letters/numbers/hyphens, starts with a letter.', 'err');
+        if (el) { el.style.border = '1px solid #ef4444'; el.focus(); }
+        return null;
+      }
+      if (el) { el.value = v; el.style.border = ''; }
+      return v;
+    }
     btnSave.onclick = async () => {
+      if (!_ensureSlug()) return;
       btnSave.disabled = true;
       try { await api('api_saas_sr_update', collect()); toast('Saved', 'ok'); }
       catch (e) { toast(e.message, 'err'); }
@@ -3341,6 +3355,7 @@ async function openSignupRequestModal(id, onClose) {
       } catch (e) { toast(e.message, 'err'); btnReject.disabled = false; }
     };
     btnApprove.onclick = async () => {
+      if (!_ensureSlug()) return;
       if (!confirm('Approve this request? This will create the tenant workspace and generate login credentials.')) return;
       // Save edits first
       btnApprove.disabled = true;
@@ -3649,6 +3664,8 @@ VIEWS.tickets = async (view) => {
       h('th', {}, 'Status'),
       h('th', {}, 'Priority'),
       h('th', {}, 'Assignee'),
+      h('th', {}, 'Created'),
+      h('th', {}, 'Last remark'),
       h('th', {}, 'Last activity'),
       h('th', {}, 'Replies'),
       h('th', {}, '')
@@ -3667,6 +3684,9 @@ VIEWS.tickets = async (view) => {
         h('td', {}, _tkStatusPill(t.status, cat)),
         h('td', {}, _tkPrioPill(t.priority, cat)),
         h('td', { style: { fontSize: '.85rem', fontWeight: t.assignee_name ? 600 : 400, color: t.assignee_name ? '#0f172a' : '#94a3b8', whiteSpace: 'nowrap' } }, t.assignee_name ? ('🧑‍💼 ' + t.assignee_name) : 'Unassigned'),
+        h('td', { class: 'muted', style: { fontSize: '.82rem', whiteSpace: 'nowrap' } }, _tkFmt(t.created_at)),
+        h('td', { style: { fontSize: '.8rem', color: t.last_reply_body ? '#334155' : '#94a3b8', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: t.last_reply_body || '' },
+          t.last_reply_body ? (String(t.last_reply_body).slice(0, 80) + (String(t.last_reply_body).length > 80 ? '…' : '')) : '—'),
         h('td', { class: 'muted', style: { fontSize: '.82rem' } }, _tkFmt(t.last_reply_at || t.created_at)),
         h('td', { style: { textAlign: 'center' } }, String(t.reply_count || 0)),
         h('td', {}, h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); openAdminTicketModal(t.id); } }, 'Open →'))
@@ -3685,6 +3705,9 @@ VIEWS.tickets = async (view) => {
 // ---- Ticket detail modal ----------------------------------------
 async function openAdminTicketModal(ticketId) {
   const cat = await _loadTkCatalog();
+  // TKT_REPLY_DRAFT_v1 — preserve the reply being typed across in-modal reloads
+  // (assign / status / priority changes call load() which rebuilds the composer).
+  let _replyDraft = '';
   const m = h('div', { class: 'modal-bd' });
   const card = h('div', { class: 'modal', style: { maxWidth: '880px', maxHeight: '90vh', overflow: 'auto', width: '95%' } });
   m.appendChild(card);
@@ -3811,6 +3834,8 @@ async function openAdminTicketModal(ticketId) {
     // Composer
     const compWrap = h('div', { style: { marginTop: '1rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.85rem' } });
     const replyIn = h('textarea', { class: 'input', rows: 4, placeholder: 'Type your reply...', style: { width: '100%', minHeight: '80px' } });
+    replyIn.value = _replyDraft || '';
+    replyIn.addEventListener('input', () => { _replyDraft = replyIn.value; });
     const fileIn = h('input', { type: 'file' });
     const intCb = h('input', { type: 'checkbox' });
     compWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '✏ Reply'));
@@ -3841,6 +3866,7 @@ async function openAdminTicketModal(ticketId) {
             } catch (_) {}
           }
           replyIn.value = '';
+          _replyDraft = '';
           intCb.checked = false;
           toast('✓ Reply sent');
           load();

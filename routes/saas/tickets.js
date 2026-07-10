@@ -527,7 +527,9 @@ async function api_saas_tk_admin_listAll(token, filters) {
     where.push(`(LOWER(t.subject) LIKE $${params.length} OR LOWER(t.ticket_number) LIKE $${params.length} OR LOWER(t.tenant_slug) LIKE $${params.length})`);
   }
   const sql = `
-    SELECT t.*, te.org_name, sa.name AS assignee_name
+    SELECT t.*, te.org_name, sa.name AS assignee_name,
+           (SELECT r.body FROM support_ticket_replies r
+              WHERE r.ticket_id = t.id ORDER BY r.created_at DESC LIMIT 1) AS last_reply_body
       FROM support_tickets t
       LEFT JOIN tenants     te ON te.id = t.tenant_id
       LEFT JOIN super_admins sa ON sa.id = t.assignee_id
