@@ -2354,6 +2354,118 @@ async function api_wb_campaigns_list(token) {
 }
 function safeJsonObj(s) { try { return JSON.parse(s); } catch (_) { return {}; } }
 
+/* WA_CAMPAIGN_PREVIEW_v1 (2026-07-09) — dry-run recipient count.
+ * Same filter logic as api_wb_campaigns_create but never inserts anything.
+ * Returns { count, sample: [{id,name,phone}...] } so the SPA can show a
+ * "N recipients — proceed?" confirmation before the actual send. */
+async function api_wb_campaigns_previewCount(token, payload) {
+  const me = await authUser(token);
+  if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
+  const p = payload || {};
+  const filter = p.filter || {};
+  let leads = [];
+
+  if (Array.isArray(p.uploaded_rows) && p.uploaded_rows.length) {
+    /* Uploaded list — count uniquely-normalized phones */
+    const seen = new Set();
+    for (const row of p.uploaded_rows) {
+      const phone = String(row.phone || row.mobile || '').replace(/\D/g, '');
+      if (phone && !seen.has(phone)) {
+        seen.add(phone);
+        leads.push({ id: null, name: row.name || phone, phone });
+        if (leads.length >= 20 && seen.size >= 20) { /* sample cap kept small below */ }
+      } else if (phone) { seen.add(phone); }
+    }
+    // Ensure count reflects total unique, not just the sample
+    const _count = seen.size;
+    return { ok: true, count: _count, sample: leads.slice(0, 20), source: 'uploaded_rows' };
+  }
+
+  if (filter.lead_ids && filter.lead_ids.length) {
+    const ld = await db.query(`SELECT id, name, phone FROM leads WHERE id = ANY($1::int[]) AND COALESCE(phone,'')<>''`, [filter.lead_ids.map(Number)]);
+    return { ok: true, count: ld.rows.length, sample: ld.rows.slice(0, 20), source: 'lead_ids' };
+  }
+
+  /* Standard filter path — mirror api_wb_campaigns_create exactly */
+  const all = await db.getAll('leads');
+  const _fromMs = filter.created_from ? new Date(filter.created_from + 'T00:00:00').getTime() : null;
+  const _toMs   = filter.created_to   ? new Date(filter.created_to   + 'T23:59:59').getTime() : null;
+  const _statusIds = Array.isArray(filter.status_ids) ? filter.status_ids.map(Number).filter(Boolean)
+                   : (filter.status_id ? [Number(filter.status_id)] : []);
+  const _sources   = Array.isArray(filter.sources) ? filter.sources.map(String).filter(Boolean)
+                   : (filter.source ? [String(filter.source)] : []);
+  const _assignees = Array.isArray(filter.assigned_to_ids) ? filter.assigned_to_ids.map(Number).filter(Boolean)
+                   : (filter.assigned_to ? [Number(filter.assigned_to)] : []);
+  const _cf = (filter.cf && typeof filter.cf === 'object' && !Array.isArray(filter.cf)) ? filter.cf : {};
+  const _cfKeys = Object.keys(_cf).filter(k => Array.isArray(_cf[k]) && _cf[k].length);
+  leads = all.filter(l => {
+    if (_statusIds.length && !_statusIds.includes(Number(l.status_id))) return false;
+    if (_sources.length   && !_sources.includes(String(l.source || ''))) return false;
+    if (_assignees.length && !_assignees.includes(Number(l.assigned_to))) return false;
+    if (filter.tag) {
+      const tags = String(l.tags || '').toLowerCase().split(',').map(s => s.trim());
+      if (!tags.includes(String(filter.tag).toLowerCase())) return false;
+    }
+    if (_fromMs || _toMs) {
+      const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
+      if (_fromMs && ts < _fromMs) return false;
+      if (_toMs   && ts > _toMs)   return false;
+    }
+    if (_cfKeys.length) {
+      let extra = l.extra_json || {};
+      if (typeof extra === 'string') { try { extra = JSON.parse(extra); } catch (_) { extra = {}; } }
+      for (const k of _cfKeys) {
+        const wanted = _cf[k].map(v => String(v).toLowerCase());
+        const have = String((extra && extra[k]) != null ? extra[k] : '').toLowerCase();
+        if (!wanted.includes(have)) return false;
+      }
+    }
+    return !!l.phone;
+  });
+  return {
+    ok: true,
+    count: leads.length,
+    sample: leads.slice(0, 20).map(l => ({ id: l.id, name: l.name, phone: l.phone })),
+    source: 'filter'
+  };
+}
+
+/* WA_CAMPAIGN_FILTER_OPTS_v1 (2026-07-09) — dropdown options for the campaign
+ * modal filters: sources / statuses / users / tags / custom fields (with
+ * sampled distinct values). Delegates to api_outboundWebhook_filterOptions
+ * for the heavy lifting where it exists; falls back to inline queries. */
+async function api_wb_campaigns_filterOptions(token) {
+  const me = await authUser(token);
+  if (!['admin','manager','team_leader','sales'].includes(me.role)) throw new Error('Auth required');
+  const out = { sources: [], statuses: [], users: [], tags: [], custom_fields: [] };
+  try { const r = await db.query(`SELECT DISTINCT source FROM leads WHERE COALESCE(source,'')<>'' ORDER BY source LIMIT 300`);
+        out.sources = r.rows.map(x => x.source); } catch (_) {}
+  try { const r = await db.query(`SELECT id, name FROM statuses ORDER BY COALESCE(sort_order,0), id`);
+        out.statuses = r.rows; } catch (_) {}
+  try { const r = await db.query(`SELECT id, name FROM users WHERE is_active=1 ORDER BY name`);
+        out.users = r.rows; } catch (_) {}
+  try {
+    const r = await db.query(`SELECT DISTINCT UNNEST(string_to_array(COALESCE(tags,''), ',')) AS tag FROM leads WHERE COALESCE(tags,'')<>''`);
+    out.tags = r.rows.map(x => String(x.tag || '').trim()).filter(Boolean).slice(0, 200);
+  } catch (_) {}
+  try {
+    const cf = await db.query(`SELECT key, label FROM custom_fields WHERE COALESCE(is_active,1)=1 ORDER BY COALESCE(sort_order,0), id`);
+    for (const f of cf.rows) {
+      if (!f.key) continue;
+      let values = [];
+      try {
+        const vr = await db.query(
+          `SELECT DISTINCT (extra_json->>$1) AS v FROM leads WHERE extra_json IS NOT NULL
+             AND (extra_json->>$1) IS NOT NULL AND (extra_json->>$1) <> '' ORDER BY v LIMIT 60`,
+          [f.key]);
+        values = vr.rows.map(r => r.v).filter(Boolean);
+      } catch (_) {}
+      out.custom_fields.push({ key: f.key, label: f.label || f.key, values });
+    }
+  } catch (_) {}
+  return out;
+}
+
 async function api_wb_campaigns_create(token, payload) {
   const me = await authUser(token);
   if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
@@ -2423,6 +2535,12 @@ async function api_wb_campaigns_create(token, payload) {
                      : (filter.source ? [String(filter.source)] : []);
     const _assignees = Array.isArray(filter.assigned_to_ids) ? filter.assigned_to_ids.map(Number).filter(Boolean)
                      : (filter.assigned_to ? [Number(filter.assigned_to)] : []);
+    /* WA_CAMPAIGN_CF_v1 (2026-07-09) — custom-field multi-select filter.
+     * Shape: filter.cf = { <field_key>: [val1, val2, ...] } — a lead passes
+     * only if extra_json[<key>] is one of the picked values for EVERY listed
+     * key (AND across keys, OR within a key). Keys with no picks are ignored. */
+    const _cf = (filter.cf && typeof filter.cf === 'object' && !Array.isArray(filter.cf)) ? filter.cf : {};
+    const _cfKeys = Object.keys(_cf).filter(k => Array.isArray(_cf[k]) && _cf[k].length);
     leads = all.filter(l => {
       if (_statusIds.length && !_statusIds.includes(Number(l.status_id))) return false;
       if (_sources.length   && !_sources.includes(String(l.source || ''))) return false;
@@ -2435,6 +2553,15 @@ async function api_wb_campaigns_create(token, payload) {
         const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
         if (_fromMs && ts < _fromMs) return false;
         if (_toMs   && ts > _toMs)   return false;
+      }
+      if (_cfKeys.length) {
+        let extra = l.extra_json || {};
+        if (typeof extra === 'string') { try { extra = JSON.parse(extra); } catch (_) { extra = {}; } }
+        for (const k of _cfKeys) {
+          const wanted = _cf[k].map(v => String(v).toLowerCase());
+          const have = String((extra && extra[k]) != null ? extra[k] : '').toLowerCase();
+          if (!wanted.includes(have)) return false;
+        }
       }
       return !!l.phone;
     });
@@ -4226,6 +4353,7 @@ module.exports = {
   api_wb_template_bots_list, api_wb_template_bots_save, api_wb_template_bots_delete,
   // Campaigns
   api_wb_campaigns_list, api_wb_campaigns_create, api_wb_campaigns_send_now,
+  api_wb_campaigns_previewCount, api_wb_campaigns_filterOptions,
   api_wb_campaigns_pause, api_wb_campaigns_targets,
   // Activity
   api_wb_activity_list, api_wb_activity_get, api_wb_activity_clear,
