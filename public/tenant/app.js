@@ -9366,7 +9366,21 @@ async function openLeadModal(id) {
     // Row 3: Remark — full-width (orange) — fires api_leads_addRemark on save.
     field('name', 'Name *', lead.name, { required: true, priority: 'purple' }),
     field('phone', 'Phone *', lead.phone, { required: true, priority: 'purple' }),
-    selectField('status_id', 'Status', lead.status_id, statuses.map(s => ({ value: s.id, label: s.name })), { id: 'lead-status', priority: 'purple' }),
+    /* WORKSPACE_v1 P4 — filter status options by the lead's workspace (campaign_id).
+     * Empty workspace_ids on a status = available everywhere (default). */
+    (() => {
+      const wsId = Number(lead.campaign_id || 0);
+      const _wsMatch = (row) => {
+        let ids = row.workspace_ids;
+        if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch(_) { ids = []; } }
+        if (!Array.isArray(ids) || !ids.length) return true;    /* all workspaces */
+        if (!wsId) return true;                                  /* no workspace picked → show all */
+        return ids.map(Number).includes(wsId);
+      };
+      return selectField('status_id', 'Status', lead.status_id,
+        statuses.filter(_wsMatch).map(s => ({ value: s.id, label: s.name })),
+        { id: 'lead-status', priority: 'purple' });
+    })(),
     // SUB_STATUS_v1 — placeholder for the sub-status dropdown; populated below when SUB_STATUS_ENABLED='1'.
     h('div', { id: 'lead-sub-status-slot', style: { display: 'none' } }),
     field('next_followup_at', 'Next follow-up', isoToLocalDtInput(lead.next_followup_at), { type: 'datetime-local', id: 'lead-fu', priority: 'teal' }),
@@ -9378,9 +9392,21 @@ async function openLeadModal(id) {
     field('whatsapp', 'WhatsApp', lead.whatsapp || lead.phone),
     field('email', 'Email', lead.email, { type: 'email' }),
     selectField('source', 'Source', lead.source, sources.map(s => s.name)),
-    selectField('product_id', 'Product', lead.product_id, [{ value: '', label: '—' }, ...products.map(p => ({ value: p.id, label: p.name }))]),
+    /* WORKSPACE_v1 P4 — same workspace filter for products */
+    (() => {
+      const wsId = Number(lead.campaign_id || 0);
+      const _wsMatch = (row) => {
+        let ids = row.workspace_ids;
+        if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch(_) { ids = []; } }
+        if (!Array.isArray(ids) || !ids.length) return true;
+        if (!wsId) return true;
+        return ids.map(Number).includes(wsId);
+      };
+      return selectField('product_id', 'Product', lead.product_id,
+        [{ value: '', label: '—' }, ...products.filter(_wsMatch).map(p => ({ value: p.id, label: p.name }))]);
+    })(),
     selectField('assigned_to', 'Assigned To', lead.assigned_to, users.map(u => ({ value: u.id, label: u.name }))),
-    selectField('campaign_id', '🎯 Campaign', lead.campaign_id || '',
+    selectField('campaign_id', '📁 Workspace', lead.campaign_id || '',
       [{ value: '', label: '— None —' }].concat(campaigns.map(c => ({ value: c.id, label: c.name })))),
     tagsInput(lead.tags, tagLibrary, isAdmin),
     field('city', 'City', lead.city),
@@ -32603,16 +32629,32 @@ function _pipeStageLabel(id) {
 }
 
 async function adminStatuses() {
-  const [statuses, stages] = await Promise.all([
+  /* WORKSPACE_v1 P3 — also load campaigns (workspaces) so we can render
+   * a multi-select column that scopes each status to specific workspaces. */
+  const [statuses, stages, workspaces] = await Promise.all([
     api('api_statuses_list'),
-    _pipeStageOptions()
+    _pipeStageOptions(),
+    api('api_campaigns_list').catch(() => [])
   ]);
+  /* Small helper — coerce whatever the API sends (JSONB array, string, null) to
+   * an array of positive integers so the UI + save handler agree. */
+  const _wsToArr = (v) => {
+    if (Array.isArray(v)) return v.map(x => Number(x)).filter(x => Number.isInteger(x) && x > 0);
+    if (typeof v === 'string') { try { return _wsToArr(JSON.parse(v)); } catch(_) { return []; } }
+    return [];
+  };
+  const _wsLabelFor = (ids) => {
+    if (!ids || !ids.length) return 'All workspaces';
+    return ids.map(id => (workspaces.find(w => Number(w.id) === Number(id)) || {}).name || ('#' + id)).join(', ');
+  };
   const card = h('div', { class: 'card' }, h('h4', {}, 'Lead statuses'));
   const tbl = h('table', { class: 'mini-table' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Name'),
       h('th', {}, 'Color'),
       h('th', { title: 'Universal pipeline stage. Drives the Pipeline funnel view + Dashboard widget.' }, '🚦 Stage'),
+      /* WORKSPACE_v1 P3 — pick workspaces where this status is available. Empty=all */
+      h('th', { title: 'Restrict this status to specific workspaces. Empty = available in all workspaces (default).' }, '📁 Workspaces'),
       h('th', {}, 'Order'),
       h('th', {}, 'Final'),
       h('th', {})
@@ -32626,6 +32668,23 @@ async function adminStatuses() {
           ...stages.map(st => h('option', { value: st.id, selected: String(s.stage || '') === st.id ? 'selected' : null }, st.label))
         )
       ),
+      /* WORKSPACE_v1 P3 — workspace scope multi-select. Ctrl/Cmd-click to select multiple. Empty=all */
+      h('td', {}, (() => {
+        const cur = _wsToArr(s.workspace_ids);
+        if (!workspaces.length) {
+          return h('span', { class: 'muted', style: { fontSize: '.75rem' } }, 'No workspaces yet');
+        }
+        const sel = h('select', {
+          multiple: 'multiple',
+          'data-id': s.id, 'data-field': 'workspace_ids',
+          size: Math.min(4, Math.max(2, workspaces.length)),
+          title: 'Ctrl/Cmd-click to select multiple. Leave nothing selected = available in ALL workspaces (default).',
+          style: { minWidth: '160px', maxWidth: '220px', fontSize: '.82rem' }
+        }, ...workspaces.map(w => h('option', {
+          value: w.id, selected: cur.includes(Number(w.id)) ? 'selected' : null
+        }, w.name)));
+        return sel;
+      })()),
       h('td', {}, h('input', { type: 'number', value: s.sort_order, style: { width: '70px' }, 'data-id': s.id, 'data-field': 'sort_order' })),
       h('td', {}, h('input', { type: 'checkbox', checked: Number(s.is_final) ? 'checked' : null, 'data-id': s.id, 'data-field': 'is_final' })),
       h('td', {},
@@ -32633,9 +32692,15 @@ async function adminStatuses() {
           const patch = { id: s.id };
           $$(`[data-id="${s.id}"]`, tbl).forEach(inp => {
             const f = inp.dataset.field;
-            patch[f] = inp.type === 'checkbox' ? (inp.checked ? 1 : 0) : inp.value;
+            if (inp.type === 'checkbox') patch[f] = inp.checked ? 1 : 0;
+            /* WORKSPACE_v1 P3 — multi-select stores an array */
+            else if (inp.tagName === 'SELECT' && inp.multiple) {
+              patch[f] = [...inp.selectedOptions].map(o => Number(o.value)).filter(Boolean);
+            }
+            else patch[f] = inp.value;
           });
-          try { await api('api_statuses_save', patch); toast('Saved'); } catch (e) { toast(e.message, 'err'); }
+          try { await api('api_statuses_save', patch); toast('Saved · ' + _wsLabelFor(patch.workspace_ids || [])); }
+          catch (e) { toast(e.message, 'err'); }
         } }, '💾'),
         h('button', { class: 'btn sm danger', onclick: async () => {
           if (!await confirmDialog(`Delete status "${s.name}"?`)) return;
@@ -32917,7 +32982,20 @@ async function adminTat() {
  * columns; this tab is for the products themselves.
  */
 async function adminProducts() {
-  const products = await api("api_products_list");
+  /* WORKSPACE_v1 P3 — load workspaces (campaigns) to render scope column */
+  const [products, workspaces] = await Promise.all([
+    api("api_products_list"),
+    api("api_campaigns_list").catch(() => [])
+  ]);
+  const _wsToArr = (v) => {
+    if (Array.isArray(v)) return v.map(x => Number(x)).filter(x => Number.isInteger(x) && x > 0);
+    if (typeof v === 'string') { try { return _wsToArr(JSON.parse(v)); } catch(_) { return []; } }
+    return [];
+  };
+  const _wsLabelFor = (ids) => {
+    if (!ids || !ids.length) return 'All workspaces';
+    return ids.map(id => (workspaces.find(w => Number(w.id) === Number(id)) || {}).name || ('#' + id)).join(', ');
+  };
   const card = h("div", { class: "card" });
   card.appendChild(h("h4", { style: { margin: "0 0 .35rem" } }, "📦 Products"));
   card.appendChild(h("p", { class: "muted", style: { margin: "0 0 1rem", fontSize: ".88rem" } },
@@ -32930,10 +33008,12 @@ async function adminProducts() {
       h("th", {}, "Description"),
       h("th", { style: { width: "100px", textAlign: "right" } }, "Price (₹)"),
       h("th", { style: { width: "80px", textAlign: "right" } }, "GST %"),
+      /* WORKSPACE_v1 P3 — workspace scope */
+      h("th", { title: 'Restrict this product to specific workspaces. Empty = all workspaces (default).', style: { width: "200px" } }, "📁 Workspaces"),
       h("th", { style: { width: "170px" } }, "")
     )),
     h("tbody", {}, ...(products.length === 0
-      ? [h("tr", {}, h("td", { colspan: 6, class: "muted", style: { textAlign: "center", padding: "1rem" } },
+      ? [h("tr", {}, h("td", { colspan: 7, class: "muted", style: { textAlign: "center", padding: "1rem" } },
           "No products yet — add your first product below."))]
       : products.map(p => h("tr", {},
           h("td", { style: { width: "70px" } },
@@ -32968,16 +33048,39 @@ async function adminProducts() {
           h("td", {}, h("input", { value: p.description || "", "data-id": p.id, "data-field": "description", placeholder: "Optional description", style: { width: "100%" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", step: "0.01", value: Number(p.price) || 0, "data-id": p.id, "data-field": "price", style: { width: "100%", textAlign: "right" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", max: "100", step: "0.01", value: Number(p.gst_pct) || 0, "data-id": p.id, "data-field": "gst_pct", title: "GST percentage applied when this product is added to a quotation", style: { width: "100%", textAlign: "right" } })),
+          /* WORKSPACE_v1 P3 — workspace scope multi-select */
+          h("td", {}, (() => {
+            const cur = _wsToArr(p.workspace_ids);
+            if (!workspaces.length) return h("span", { class: "muted", style: { fontSize: ".75rem" } }, "No workspaces yet");
+            return h("select", {
+              multiple: "multiple",
+              "data-id": p.id, "data-field": "workspace_ids",
+              size: Math.min(4, Math.max(2, workspaces.length)),
+              title: "Ctrl/Cmd-click to select multiple. Empty = available in all workspaces.",
+              style: { width: "100%", fontSize: ".8rem" }
+            }, ...workspaces.map(w => h("option", {
+              value: w.id, selected: cur.includes(Number(w.id)) ? "selected" : null
+            }, w.name)));
+          })()),
           h("td", { style: { whiteSpace: "nowrap" } },
             h("button", { class: "btn sm primary", title: "Save changes to this row",
               onclick: async () => {
                 const patch = { id: p.id };
                 $$(`[data-id="${p.id}"]`, tbl).forEach(inp => {
                   const f = inp.dataset.field;
-                  patch[f] = inp.type === "number" ? Number(inp.value) || 0 : inp.value;
+                  if (inp.tagName === "SELECT" && inp.multiple) {
+                    /* WORKSPACE_v1 P3 — multi-select stores an array */
+                    patch[f] = [...inp.selectedOptions].map(o => Number(o.value)).filter(Boolean);
+                  } else {
+                    patch[f] = inp.type === "number" ? Number(inp.value) || 0 : inp.value;
+                  }
                 });
                 if (!patch.name || !String(patch.name).trim()) { toast("Name is required", "err"); return; }
-                try { await api("api_products_save", patch); toast("Saved"); await warmCache(); } catch (e) { toast(e.message, "err"); }
+                try {
+                  await api("api_products_save", patch);
+                  toast("Saved · " + _wsLabelFor(patch.workspace_ids || []));
+                  await warmCache();
+                } catch (e) { toast(e.message, "err"); }
               }
             }, "💾 Save"),
             h("button", { class: "btn sm danger", style: { marginLeft: ".3rem" },
