@@ -18384,7 +18384,8 @@ async function wbTemplates() {
       ),
       h('td', {}, t.body_params),
       h('td', { style: { maxWidth: '420px' }, title: t.body_text || '' }, (t.body_text || '').slice(0, 100) + ((t.body_text || '').length > 100 ? '\u2026' : '')),
-      h('td', {},
+      h('td', { style: { whiteSpace: 'nowrap' } },
+        h('button', { class: 'btn sm ghost', title: 'View full template', style: { marginRight: '.3rem' }, onclick: () => _viewWaTemplate(t) }, '👁 View'),
         h('button', { class: 'btn sm ghost danger', title: 'Delete from Meta + here', onclick: async () => {
           if (!await confirmDialog('Delete template "' + t.name + '"? It will be removed from Meta as well.')) return;
           try { await api('api_wb_templates_delete', { name: t.name, language: t.language }); toast('Deleted'); showWbTab('templates'); }
@@ -31009,6 +31010,30 @@ async function adminHealth() {
   return wrap;
 }
 
+function _showAutomationLogDetail(r) {
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } },
+    h('div', { class: 'modal', style: { maxWidth: '620px', width: '96%' } },
+      h('div', { class: 'modal-head' }, h('h3', {}, (r.status === 'failed' ? '⚠ ' : '') + 'Automation log — ' + (r.automation_name || '')),
+        h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')),
+      h('div', { style: { fontSize: '.82rem', color: '#64748b', marginBottom: '.5rem' } },
+        (r.event || '') + ' · ' + (r.channel || '') + ' · ' + (r.status || '') + ' · ' + fmtDate(r.created_at)),
+      h('div', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '.86rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.6rem .7rem', color: r.status === 'failed' ? '#b91c1c' : '#0f172a', maxHeight: '50vh', overflow: 'auto' } },
+        String(r.detail || '(no detail)')),
+      h('div', { style: { textAlign: 'right', marginTop: '.6rem' } },
+        h('button', { class: 'btn ghost', onclick: () => { try { navigator.clipboard.writeText(String(r.detail || '')); toast('Copied', 'ok'); } catch (_) {} } }, '📋 Copy'),
+        h('button', { class: 'btn primary', style: { marginLeft: '.4rem' }, onclick: () => m.remove() }, 'Close'))
+    )
+  );
+  document.body.appendChild(m);
+}
+function _insertAtCursor(ta, text) {
+  if (!ta) return;
+  const s0 = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+  const e0 = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length;
+  ta.value = ta.value.slice(0, s0) + text + ta.value.slice(e0);
+  ta.focus(); ta.selectionStart = ta.selectionEnd = s0 + text.length;
+}
+
 async function adminAutomations() {
   const [automations, log] = await Promise.all([
     api('api_automations_list'),
@@ -31059,7 +31084,10 @@ async function adminAutomations() {
         h('td', {}, r.event),
         h('td', {}, r.channel),
         h('td', { class: r.status === 'sent' ? 'cell-ok' : r.status === 'failed' ? 'cell-err' : 'muted' }, r.status),
-        h('td', {}, (r.detail || '').slice(0, 60))
+        h('td', { style: { cursor: (r.detail && String(r.detail).length) ? 'pointer' : '', color: r.status === 'failed' ? '#b91c1c' : undefined }, title: (r.detail && String(r.detail).length > 60) ? 'Click to see the full message' : (r.detail || ''),
+          onclick: () => { if (r.detail) _showAutomationLogDetail(r); } },
+          (r.detail || '').slice(0, 60) + (String(r.detail || '').length > 60 ? ' …' : ''),
+          (String(r.detail || '').length > 60) ? h('span', { style: { color: '#6366f1', fontSize: '.72rem', marginLeft: '4px' } }, '🔍') : null)
       )))
     ));
     card.appendChild(logCard);
@@ -31363,7 +31391,11 @@ function openAutomationModal(existing) {
         ),
         h('div', { class: 'f-row full', id: 'auto-template-row' },
           h('label', {}, 'Template / body (email channel) — supports {{lead.name}}, {{lead.phone}}, {{lead.status_name}}, {{user.name}}, {{new_status.name}}, {{date}}'),
-          h('textarea', { name: 'template', rows: 5, placeholder: 'Hi {{lead.name}}, your status is now {{new_status.name}}. We\'ll get back to you shortly.' }, a.template || '')
+          h('textarea', { name: 'template', id: 'auto-email-template', rows: 5, placeholder: 'Hi {{lead.name}}, your status is now {{new_status.name}}. We\'ll get back to you shortly.' }, a.template || ''),
+          h('div', { style: { marginTop: '.4rem', display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center' } },
+            h('span', { class: 'muted', style: { fontSize: '.74rem' } }, 'Insert variable:'),
+            ...['{{lead.name}}','{{lead.phone}}','{{lead.email}}','{{lead.status_name}}','{{lead.source}}','{{user.name}}','{{new_status.name}}','{{date}}'].map(v =>
+              h('button', { type: 'button', class: 'btn xs ghost', style: { fontSize: '.72rem', padding: '1px 6px' }, onclick: () => _insertAtCursor(document.getElementById('auto-email-template'), v) }, v)))
         )
       ),
       h('div', { class: 'actions' },
