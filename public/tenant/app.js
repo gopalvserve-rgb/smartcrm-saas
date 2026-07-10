@@ -5236,11 +5236,18 @@ VIEWS.leads = async (view) => {
     } catch (_) {}
     return false;
   };
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (!_lfEnsurePresets()) {
-      setTimeout(() => { if (!_lfEnsurePresets()) setTimeout(_lfEnsurePresets, 400); }, 100);
-    }
-  }));
+  /* LEADS_DATEFIELD_v4 (2026-07-10) — v3's rAF+100+400ms retries
+   * still fired before the toolbar was appended (view.appendChild(toolbar)
+   * happens ~600 lines below, AFTER an await for campaigns). Fix: keep
+   * retrying every 150ms for up to 6 seconds until the toolbar is
+   * present in the document AND the chip bar has been attached. */
+  (function _lfPollForToolbar() {
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if (_lfEnsurePresets() || tries > 40) clearInterval(timer);
+    }, 150);
+  })();
 
   /* Pill styles — OBJECT form so h()'s Object.assign path is used. */
   function _lfPillStyle(active) {
