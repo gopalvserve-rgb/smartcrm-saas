@@ -5193,14 +5193,45 @@ VIEWS.leads = async (view) => {
   // Date-range filter — filters.from / filters.to are honoured by
   // api_leads_list (compared against the created_at date prefix), so
   // these two inputs are all we need on the SPA side.
-  const fromInput = h('input', { id: 'f-from', type: 'date', value: CRM.prefs.filters.from || '', title: 'Filter: created on or after this date', style: { width: '140px' } });
-  const toInput   = h('input', { id: 'f-to',   type: 'date', value: CRM.prefs.filters.to   || '', title: 'Filter: created on or before this date', style: { width: '140px' } });
-  fromInput.addEventListener('change', applyFilters);
-  toInput.addEventListener('change', applyFilters);
-  // DATE_PRESETS_v1 — attach chip bar after the inputs are mounted (deferred).
-  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInput, toInput, { key: 'leads', apply: applyFilters }); } catch (_) {} }, 0);
-  const dateWrap = h('div', { class: 'date-range', title: 'Filter by lead-created date range', style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } },
-    h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '📅 From'),
+  /* LEADS_DATEFIELD_v1 (2026-07-09) — Classic view: pill toggle to switch
+   * the date range between Created (created_at) and Follow-up
+   * (next_followup_at). State: CRM.prefs.filters.dateField. Values written
+   * to filters.from/to when 'created' is active, filters.followup_from/to
+   * when 'followup' is active. */
+  if (!CRM.prefs.filters.dateField) CRM.prefs.filters.dateField = 'created';
+  function _lfCurFrom() { return CRM.prefs.filters.dateField === 'followup' ? (CRM.prefs.filters.followup_from || '') : (CRM.prefs.filters.from || ''); }
+  function _lfCurTo()   { return CRM.prefs.filters.dateField === 'followup' ? (CRM.prefs.filters.followup_to   || '') : (CRM.prefs.filters.to   || ''); }
+  const fromInput = h('input', { id: 'f-from', type: 'date', value: _lfCurFrom(), title: 'Filter: from this date', style: { width: '140px' } });
+  const toInput   = h('input', { id: 'f-to',   type: 'date', value: _lfCurTo(),   title: 'Filter: to this date',   style: { width: '140px' } });
+  function _lfSaveFrom(v) {
+    if (CRM.prefs.filters.dateField === 'followup') { CRM.prefs.filters.followup_from = v; }
+    else                                             { CRM.prefs.filters.from = v; }
+  }
+  function _lfSaveTo(v) {
+    if (CRM.prefs.filters.dateField === 'followup') { CRM.prefs.filters.followup_to = v; }
+    else                                             { CRM.prefs.filters.to = v; }
+  }
+  fromInput.addEventListener('change', () => { _lfSaveFrom(fromInput.value); applyFilters(); });
+  toInput.addEventListener('change',   () => { _lfSaveTo(toInput.value);     applyFilters(); });
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInput, toInput, { key: 'leads', apply: () => { _lfSaveFrom(fromInput.value); _lfSaveTo(toInput.value); applyFilters(); } }); } catch (_) {} }, 0);
+  /* Pill toggle: 📅 Created ↔ ⏰ Follow-up */
+  const _mkDfPill = (k, lab) => {
+    const active = CRM.prefs.filters.dateField === k;
+    return h('button', {
+      title: k === 'followup' ? 'Filter by next follow-up date' : 'Filter by lead created date',
+      style: 'padding:.28rem .6rem;background:' + (active ? '#0369a1' : '#fff') + ';color:' + (active ? '#fff' : '#334155') + ';border:1px solid ' + (active ? '#0369a1' : '#cbd5e1') + ';border-radius:14px;font-size:.75rem;cursor:pointer;font-weight:' + (active ? 700 : 500),
+      onclick: () => {
+        CRM.prefs.filters.dateField = k;
+        fromInput.value = _lfCurFrom();
+        toInput.value   = _lfCurTo();
+        applyFilters();
+      }
+    }, lab);
+  };
+  const dateWrap = h('div', { class: 'date-range', title: 'Filter by date', style: { display: 'inline-flex', alignItems: 'center', gap: '.3rem', flexWrap: 'wrap' } },
+    _mkDfPill('created', '📅 Created'),
+    _mkDfPill('followup', '⏰ Follow-up'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', marginLeft: '.2rem' } }, 'From'),
     fromInput,
     h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),
     toInput
@@ -6215,6 +6246,10 @@ async function loadLeads(opts) {
   }
   const filters = {
     q:           $('#f-q')?.value || undefined,
+    /* LEADS_FUFILTER_v1 (2026-07-09) — pass followup_from/to when the
+     * date-field toggle is set to 'followup'; otherwise honour from/to. */
+    followup_from: CRM.prefs.filters.followup_from || undefined,
+    followup_to:   CRM.prefs.filters.followup_to   || undefined,
     status_id:   sids ? (sids.length === 1 ? sids[0] : undefined) : (CRM.prefs.filters.status_id || undefined),
     status_ids:  (_stageStatusIds && _stageStatusIds.length) ? _stageStatusIds : (sids || undefined),
     source:      srcs ? (srcs.length === 1 ? srcs[0] : undefined) : (CRM.prefs.filters.source || undefined),
