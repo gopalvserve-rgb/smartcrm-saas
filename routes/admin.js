@@ -18,6 +18,10 @@ const CONFIG_KEYS = [
   'ENFORCE_GPS', 'OFFICE_LAT', 'OFFICE_LNG', 'OFFICE_RADIUS_M',
   'WORK_START', 'WORK_END', 'WEEKLY_OFFS',
   'DUPLICATE_POLICY', 'DUPLICATE_WINDOW_HOURS', 'DUPLICATE_MATCH_FIELDS', 'DEFAULT_LEAD_COLUMNS',
+  // LEAD_HIDDEN_FIELDS_v1 (2026-07-09) — CSV of field keys admin has hidden
+  // on the lead-edit modal. Applies to all users of this tenant. Example:
+  // "product_id,campaign_id,budget_max,requirement_type" hides those 4.
+  'LEAD_HIDDEN_FIELDS',
   'EMAIL_NOTIFY_ENABLED', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD',
   'EMAIL_NOTIFY_FROM', 'EMAIL_NOTIFY_SUBJECT_PREFIX', 'FOLLOWUP_REMIND_MIN',
   // SMTP (new)
