@@ -6358,6 +6358,18 @@ async function loadLeads(opts) {
   // Save user-visible filters only (not page/page_size — those are session state)
   const savedFilters = Object.assign({}, filters);
   delete savedFilters.page; delete savedFilters.page_size;
+  /* LEADS_DATEFIELD_v6 (2026-07-10) — preserve dateField + followup_from/to
+   * across the CRM.prefs.filters rewrite. Without this, clicking ⏰ Follow-up
+   * set dateField='followup' but the very next applyFilters wiped it back to
+   * undefined, so the next date-input change wrote to 'from' instead of
+   * 'followup_from' and the server AND-combined both filters → 0 rows. */
+  savedFilters.dateField     = CRM.prefs.filters.dateField     || 'created';
+  if (savedFilters.dateField === 'followup') {
+    savedFilters.followup_from = CRM.prefs.filters.followup_from || undefined;
+    savedFilters.followup_to   = CRM.prefs.filters.followup_to   || undefined;
+    /* Also clear stale created-at bounds that came from the shared inputs. */
+    delete savedFilters.from; delete savedFilters.to;
+  }
   CRM.prefs.filters = savedFilters;
   localStorage.setItem('crm_filters', JSON.stringify(savedFilters));
 
