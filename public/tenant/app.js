@@ -32628,6 +32628,81 @@ function _pipeStageLabel(id) {
   return opt ? opt.label : '';
 }
 
+/* WORKSPACE_v1 P6 (2026-07-10) — shared Global+checkbox workspace picker
+ * used by admin Statuses + Products tables. Empty workspace_ids = Global
+ * = available in every workspace (today's default). Ticking Global unticks
+ * specifics; ticking a specific unticks Global. The save handler reads via
+ * `[data-id=X][data-field=workspace_ids]` on the hidden array container. */
+function _wsCheckboxPicker(currentValue, rowId, workspaces) {
+  const cur = (() => {
+    if (Array.isArray(currentValue)) return currentValue.map(x => Number(x)).filter(x => Number.isInteger(x) && x > 0);
+    if (typeof currentValue === 'string') { try { return _wsCheckboxPicker._toArr(JSON.parse(currentValue)); } catch(_) { return []; } }
+    return [];
+  })();
+  if (!workspaces || !workspaces.length) {
+    /* Even without workspaces we must expose a data-field container so the
+     * save handler doesn't skip this row and preserves an empty array. */
+    const empty = h('span', {
+      class: 'muted', style: { fontSize: '.75rem' },
+      'data-id': rowId, 'data-field': 'workspace_ids', 'data-value': '[]'
+    }, '🌐 Global (no workspaces defined)');
+    return empty;
+  }
+  const wrap = h('div', {
+    'data-id': rowId, 'data-field': 'workspace_ids',
+    style: { display: 'flex', flexDirection: 'column', gap: '.15rem',
+             minWidth: '150px', maxWidth: '220px', fontSize: '.82rem' }
+  });
+  const globalCb = h('input', {
+    type: 'checkbox', 'data-ws-role': 'global',
+    checked: cur.length === 0 ? 'checked' : null,
+    title: 'Available in every workspace (default). Untick to restrict.'
+  });
+  const globalRow = h('label', {
+    style: { display: 'flex', alignItems: 'center', gap: '.35rem', cursor: 'pointer',
+             padding: '.15rem .3rem', background: '#eff6ff', borderRadius: '4px', fontWeight: '600' }
+  }, globalCb, h('span', {}, '🌐 Global'));
+  wrap.appendChild(globalRow);
+  const specificCbs = workspaces.map(w => {
+    const cb = h('input', {
+      type: 'checkbox', 'data-ws-id': w.id,
+      checked: cur.includes(Number(w.id)) ? 'checked' : null
+    });
+    return { cb, row: h('label', {
+      style: { display: 'flex', alignItems: 'center', gap: '.35rem', cursor: 'pointer',
+               padding: '.1rem .3rem' }
+    }, cb, h('span', {}, w.name)) };
+  });
+  specificCbs.forEach(x => wrap.appendChild(x.row));
+  /* Mutual-exclusion logic */
+  globalCb.addEventListener('change', () => {
+    if (globalCb.checked) specificCbs.forEach(x => { x.cb.checked = false; });
+  });
+  specificCbs.forEach(x => {
+    x.cb.addEventListener('change', () => {
+      if (x.cb.checked) globalCb.checked = false;
+      else if (specificCbs.every(y => !y.cb.checked)) globalCb.checked = true;
+    });
+  });
+  return wrap;
+}
+_wsCheckboxPicker._toArr = (v) => {
+  if (Array.isArray(v)) return v.map(x => Number(x)).filter(x => Number.isInteger(x) && x > 0);
+  return [];
+};
+/* WORKSPACE_v1 P6 — helper to read what the picker selected. Empty array
+ * = Global = 'all workspaces'. Used by save handlers below. */
+function _wsCheckboxPickerRead(rowContainer) {
+  if (!rowContainer) return [];
+  const globalCb = rowContainer.querySelector('input[data-ws-role="global"]');
+  if (globalCb && globalCb.checked) return [];
+  const ids = [];
+  rowContainer.querySelectorAll('input[data-ws-id]').forEach(cb => {
+    if (cb.checked) ids.push(Number(cb.getAttribute('data-ws-id')));
+  });
+  return ids;
+}
+
 async function adminStatuses() {
   /* WORKSPACE_v1 P3 — also load campaigns (workspaces) so we can render
    * a multi-select column that scopes each status to specific workspaces. */
@@ -32668,32 +32743,23 @@ async function adminStatuses() {
           ...stages.map(st => h('option', { value: st.id, selected: String(s.stage || '') === st.id ? 'selected' : null }, st.label))
         )
       ),
-      /* WORKSPACE_v1 P3 — workspace scope multi-select. Ctrl/Cmd-click to select multiple. Empty=all */
-      h('td', {}, (() => {
-        const cur = _wsToArr(s.workspace_ids);
-        if (!workspaces.length) {
-          return h('span', { class: 'muted', style: { fontSize: '.75rem' } }, 'No workspaces yet');
-        }
-        const sel = h('select', {
-          multiple: 'multiple',
-          'data-id': s.id, 'data-field': 'workspace_ids',
-          size: Math.min(4, Math.max(2, workspaces.length)),
-          title: 'Ctrl/Cmd-click to select multiple. Leave nothing selected = available in ALL workspaces (default).',
-          style: { minWidth: '160px', maxWidth: '220px', fontSize: '.82rem' }
-        }, ...workspaces.map(w => h('option', {
-          value: w.id, selected: cur.includes(Number(w.id)) ? 'selected' : null
-        }, w.name)));
-        return sel;
-      })()),
+      /* WORKSPACE_v1 P6 — Global + checkbox picker.
+       * Global ticked = empty workspace_ids = 'all workspaces' (default).
+       * Ticking any specific workspace unticks Global. */
+      h('td', {}, _wsCheckboxPicker(s.workspace_ids, s.id, workspaces)),
       h('td', {}, h('input', { type: 'number', value: s.sort_order, style: { width: '70px' }, 'data-id': s.id, 'data-field': 'sort_order' })),
       h('td', {}, h('input', { type: 'checkbox', checked: Number(s.is_final) ? 'checked' : null, 'data-id': s.id, 'data-field': 'is_final' })),
       h('td', {},
         h('button', { class: 'btn sm', onclick: async () => {
           const patch = { id: s.id };
+          /* WORKSPACE_v1 P6 — read the checkbox picker first (its container
+           * carries data-field='workspace_ids'). Then walk plain inputs. */
+          const wsWrap = tbl.querySelector(`[data-id="${s.id}"][data-field="workspace_ids"]`);
+          patch.workspace_ids = _wsCheckboxPickerRead(wsWrap);
           $$(`[data-id="${s.id}"]`, tbl).forEach(inp => {
             const f = inp.dataset.field;
+            if (f === 'workspace_ids') return;    /* handled above */
             if (inp.type === 'checkbox') patch[f] = inp.checked ? 1 : 0;
-            /* WORKSPACE_v1 P3 — multi-select stores an array */
             else if (inp.tagName === 'SELECT' && inp.multiple) {
               patch[f] = [...inp.selectedOptions].map(o => Number(o.value)).filter(Boolean);
             }
@@ -32701,8 +32767,6 @@ async function adminStatuses() {
           });
           try {
             await api('api_statuses_save', patch);
-            /* WORKSPACE_v1 P5 — refresh cache so lead modal picks up new
-             * workspace_ids without needing a page reload. */
             try { await warmCache(); } catch(_){}
             toast('Saved · ' + _wsLabelFor(patch.workspace_ids || []));
           } catch (e) { toast(e.message, 'err'); }
@@ -33057,32 +33121,19 @@ async function adminProducts() {
           h("td", {}, h("input", { value: p.description || "", "data-id": p.id, "data-field": "description", placeholder: "Optional description", style: { width: "100%" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", step: "0.01", value: Number(p.price) || 0, "data-id": p.id, "data-field": "price", style: { width: "100%", textAlign: "right" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", max: "100", step: "0.01", value: Number(p.gst_pct) || 0, "data-id": p.id, "data-field": "gst_pct", title: "GST percentage applied when this product is added to a quotation", style: { width: "100%", textAlign: "right" } })),
-          /* WORKSPACE_v1 P3 — workspace scope multi-select */
-          h("td", {}, (() => {
-            const cur = _wsToArr(p.workspace_ids);
-            if (!workspaces.length) return h("span", { class: "muted", style: { fontSize: ".75rem" } }, "No workspaces yet");
-            return h("select", {
-              multiple: "multiple",
-              "data-id": p.id, "data-field": "workspace_ids",
-              size: Math.min(4, Math.max(2, workspaces.length)),
-              title: "Ctrl/Cmd-click to select multiple. Empty = available in all workspaces.",
-              style: { width: "100%", fontSize: ".8rem" }
-            }, ...workspaces.map(w => h("option", {
-              value: w.id, selected: cur.includes(Number(w.id)) ? "selected" : null
-            }, w.name)));
-          })()),
+          /* WORKSPACE_v1 P6 — Global + checkbox picker (same as statuses) */
+          h("td", {}, _wsCheckboxPicker(p.workspace_ids, p.id, workspaces)),
           h("td", { style: { whiteSpace: "nowrap" } },
             h("button", { class: "btn sm primary", title: "Save changes to this row",
               onclick: async () => {
                 const patch = { id: p.id };
+                /* WORKSPACE_v1 P6 — read checkbox picker first */
+                const wsWrap = tbl.querySelector(`[data-id="${p.id}"][data-field="workspace_ids"]`);
+                patch.workspace_ids = _wsCheckboxPickerRead(wsWrap);
                 $$(`[data-id="${p.id}"]`, tbl).forEach(inp => {
                   const f = inp.dataset.field;
-                  if (inp.tagName === "SELECT" && inp.multiple) {
-                    /* WORKSPACE_v1 P3 — multi-select stores an array */
-                    patch[f] = [...inp.selectedOptions].map(o => Number(o.value)).filter(Boolean);
-                  } else {
-                    patch[f] = inp.type === "number" ? Number(inp.value) || 0 : inp.value;
-                  }
+                  if (f === "workspace_ids") return;    /* handled above */
+                  patch[f] = inp.type === "number" ? Number(inp.value) || 0 : inp.value;
                 });
                 if (!patch.name || !String(patch.name).trim()) { toast("Name is required", "err"); return; }
                 try {
