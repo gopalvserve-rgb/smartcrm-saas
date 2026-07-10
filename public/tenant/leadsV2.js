@@ -607,6 +607,16 @@ tr:hover .lv2-actions { opacity: 1; }
         const dTo = new Date(S.fDateTo); dTo.setHours(23, 59, 59);
         if (new Date(l.created_at) > dTo) return false;
       }
+      /* LEADS_FUFILTER_v1 (2026-07-09) — follow-up range */
+      if (S.fFollowupFrom) {
+        if (!l.next_followup_at) return false;
+        if (new Date(l.next_followup_at) < new Date(S.fFollowupFrom + 'T00:00:00')) return false;
+      }
+      if (S.fFollowupTo) {
+        if (!l.next_followup_at) return false;
+        const fuTo = new Date(S.fFollowupTo + 'T23:59:59');
+        if (new Date(l.next_followup_at) > fuTo) return false;
+      }
       // Search — LEADS_SEARCH_WIDEN_v1 (2026-06-21): widened to remark,
       // city, state, company, address, source, campaign and description.
       if (q) {
@@ -962,6 +972,7 @@ tr:hover .lv2-actions { opacity: 1; }
     let n = 0;
     if (S.search) n++;
     if (S.fDatePreset || S.fDateFrom || S.fDateTo) n++;
+      if (S.fFollowupFrom || S.fFollowupTo) n++;
     ['fStatus','fSource','fOwner','fScore','fTag','fCampaign'].forEach(k => { if (Array.isArray(S[k]) && S[k].length) n++; });
     if (S.fFollowup) n++;
     if (S.fQualified) n++;
@@ -1032,6 +1043,25 @@ tr:hover .lv2-actions { opacity: 1; }
     row1.appendChild(h('input', { type: 'date', value: S.fDateTo, title: 'To date',
       style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
       onchange: (e) => { S.fDateTo = e.target.value; S.fDatePreset = ''; _reloadAndRender(onChange); } }));
+
+    /* LEADS_FUFILTER_v1 (2026-07-09) — Follow-up date-range filter next to
+     * Created date. Client-side only. */
+    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b', margin: '0 4px 0 12px', fontWeight: 600 } }, '⏰ F-up'));
+    row1.appendChild(h('input', { type: 'date', value: S.fFollowupFrom || '', title: 'Follow-up from',
+      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
+      onchange: (e) => { S.fFollowupFrom = e.target.value; _reloadAndRender(onChange); } }));
+    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b', margin: '0 2px' } }, '→'));
+    row1.appendChild(h('input', { type: 'date', value: S.fFollowupTo || '', title: 'Follow-up to',
+      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
+      onchange: (e) => { S.fFollowupTo = e.target.value; _reloadAndRender(onChange); } }));
+    if (S.fFollowupFrom || S.fFollowupTo) {
+      row1.appendChild(h('button', {
+        title: 'Clear follow-up date range',
+        style: { padding: '2px 8px', background: 'transparent', border: '1px solid #cbd5e1',
+                 borderRadius: '10px', fontSize: '11px', cursor: 'pointer', color: '#dc2626' },
+        onclick: () => { S.fFollowupFrom = ''; S.fFollowupTo = ''; _reloadAndRender(onChange); }
+      }, '✕ clear'));
+    }
     wrap.appendChild(row1);
 
     // Row 2: multi-select filter chips (only the ones in visibleFilters)
