@@ -2014,6 +2014,48 @@ function canSeePoolNav() {
   } catch (e) { return false; }
 }
 
+// PERM_NAV_GATE_v1 — hide a nav module/option when the user's role explicitly
+// lacks the corresponding permission. Maps nav id -> permission key. SAFE: only
+// hides on an EXPLICIT deny (perm present + falsy in the role's matrix). Admin
+// always sees everything; unknown roles/perms stay visible so nothing breaks.
+const NAV_PERM = {
+  leads: 'leads.view',
+  reports: 'reports.view', reportbuilder: 'reports.builder',
+  activityreport: 'reports.view', whatsappreport: 'reports.view', campaignreport: 'reports.view',
+  tatreport: 'tat.view',
+  tasks: 'tasks.view',
+  quotations: 'quotations.view',
+  invDashboard: 'invoicing.view', invList: 'invoicing.view',
+  invCompanies: 'invoicing.view', invCustomers: 'invoicing.view', invItems: 'invoicing.view',
+  invReports: 'invoicing.view', invSettings: 'invoicing.settings',
+  products: 'products.view',
+  customers: 'customers.view',
+  campaigns: 'campaigns.view',
+  leadpool: 'pool.view',
+  compliance: 'compliance.view',
+  nurture: 'nurture.view',
+  kb: 'kb.view', knowledge: 'kb.view',
+  recordings: 'recordings.view',
+  attendance: 'attendance.view_team',
+  salary: 'salary.view_team',
+  reimburse: 'reimburse.view_team',
+  tracking: 'tracking.view_team',
+  targets: 'targets.view',
+  socialinbox: 'social.view', socialcomments: 'social.view', socialpublish: 'social.view', socialads: 'social.view',
+  opportunities: 'opportunities.view',
+  users: 'users.view'
+};
+function _canNav(perm) {
+  if (!perm) return true;
+  if (!(window.CRM && CRM.user)) return true;
+  if (CRM.user.role === 'admin') return true;
+  const rm = CRM.permMatrix && CRM.permMatrix[CRM.user.role];
+  if (!rm || !(perm in rm)) return true;   // role/perm not configured → don't hide
+  const v = rm[perm];
+  return v === 1 || v === true || v === 'self' || v === 'team' || v === 'global';
+}
+function _navPermFor(item) { return item.perm || NAV_PERM[item.id] || null; }
+
 function renderShell() {
   const initials = (CRM.user.name || '?').split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase();
   $('#app').innerHTML = `
@@ -2079,6 +2121,7 @@ function renderShell() {
     /* LEAD_POOL_v1 — per-permission + per-tenant brand-flag gating */
     if (item.id === 'leadpool' && !canSeePoolNav()) return null;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return null;
+    if (!_canNav(_navPermFor(item))) return null;   // PERM_NAV_GATE_v1
     if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return null;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return null;
     // Industry-pack gate — only show pack-specific items when the pack
@@ -2239,6 +2282,7 @@ function renderShell() {
     if (hiddenNavIds.includes(item.id)) return;
     if (item.vserveOnly && String(window.TENANT_SLUG || '').toLowerCase() !== 'vserve') return;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return;
+    if (!_canNav(_navPermFor(item))) return;   // PERM_NAV_GATE_v1
     if (item.id === 'leadpool' && !canSeePoolNav()) return;
     if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return;
@@ -2396,6 +2440,7 @@ function showMobileMore() {
           if (item.roles && !item.roles.includes(CRM.user.role)) return false;
           if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return false;
           if (item.perm && !(CRM.can && CRM.can(item.perm))) return false;
+          if (!_canNav(_navPermFor(item))) return false;   // PERM_NAV_GATE_v1
           if (item.id === 'leadpool' && !canSeePoolNav()) return false;
           if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return false;
           // PACK_MENU_MOBILE_v1 (2026-05-29) — mirror the sidebar's
