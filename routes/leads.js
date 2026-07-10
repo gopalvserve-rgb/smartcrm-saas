@@ -466,6 +466,11 @@ async function api_leads_list(token, filters) {
   }
   if (filters.from)        rows = rows.filter(l => _istDate(l.created_at) >= filters.from);
   if (filters.to)          rows = rows.filter(l => _istDate(l.created_at) <= filters.to);
+  /* LEADS_FUFILTER_v1 (2026-07-09) — Follow-up date range. Applied on
+   * next_followup_at. Leads without a follow-up are excluded when either
+   * bound is set. */
+  if (filters.followup_from) rows = rows.filter(l => l.next_followup_at && _istDate(l.next_followup_at) >= filters.followup_from);
+  if (filters.followup_to)   rows = rows.filter(l => l.next_followup_at && _istDate(l.next_followup_at) <= filters.followup_to);
   if (filters.q) {
     // LEADS_SEARCH_WIDEN_v1 (2026-06-21) — user wanted search to also hit
     // remark, tag, description, city, campaign name and campaign id.
