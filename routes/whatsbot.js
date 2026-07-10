@@ -1214,6 +1214,11 @@ function _sanitizeTplParam(v) {
   s = s.trim();
   // Meta caps parameters at 1024 chars per Cloud API docs
   if (s.length > 1024) s = s.slice(0, 1021).replace(/\s+$/, '') + '...';
+  /* TPL_PARAM_SANITIZE_v2 (2026-07-09) — Meta also rejects EMPTY template
+   * body params with #132012. Very common cause on campaigns where a lead
+   * has no name/email/etc., so @{firstname} resolves to ''. Fall back to
+   * '-' (a single visible char) so the send always goes through. */
+  if (!s) s = '-';
   return s;
 }
 
