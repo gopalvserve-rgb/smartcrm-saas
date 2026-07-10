@@ -2151,6 +2151,22 @@ app.get('/api/sample.xls', async (req, res, next) => {
 // Set APK_DOWNLOAD_URL in Railway environment variables to a direct-
 // download link (Google Drive, S3, Cloudflare R2, etc.) and the button
 // works immediately.  Fallback: place LeadCRM.apk in public/ (Git LFS).
+/* APK_UPDATE_FIX_v2 (2026-07-10) — serve the version metadata JSON so the
+ * SPA _apkUpdateCheck() actually receives a response. Before this, the
+ * endpoint 404 silently for every client and the update banner NEVER
+ * appeared. Root cause of the update-doesnt-work bug. */
+app.get('/LeadCRM.apk.version.json', (req, res) => {
+  const filePath = path.join(__dirname, 'public', 'LeadCRM.apk.version.json');
+  res.type('application/json');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  fs.stat(filePath, (err) => {
+    if (err) return res.status(404).json({ error: 'version file missing' });
+    res.sendFile(filePath);
+  });
+});
+
 app.get('/LeadCRM.apk', (req, res) => {
   const cdnUrl = process.env.APK_DOWNLOAD_URL;
   if (cdnUrl) return res.redirect(302, cdnUrl);
