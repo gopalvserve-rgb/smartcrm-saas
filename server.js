@@ -2156,12 +2156,13 @@ app.get('/api/sample.xls', async (req, res, next) => {
  * endpoint 404 silently for every client and the update banner NEVER
  * appeared. Root cause of the update-doesnt-work bug. */
 app.get('/LeadCRM.apk.version.json', (req, res) => {
+  const _fs = require('fs');
   const filePath = path.join(__dirname, 'public', 'LeadCRM.apk.version.json');
   res.type('application/json');
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
-  fs.stat(filePath, (err) => {
+  _fs.stat(filePath, (err) => {
     if (err) return res.status(404).json({ error: 'version file missing' });
     res.sendFile(filePath);
   });
