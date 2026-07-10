@@ -9329,6 +9329,37 @@ async function openLeadModal(id) {
     form.appendChild(customFieldInput(cf, extra[cf.key]));
   });
 
+  /* LEAD_HIDDEN_FIELDS_v1 (2026-07-09) — hide any field whose key is listed
+   * in CRM.brand.LEAD_HIDDEN_FIELDS (CSV). Applies to inputs added by both
+   * the hardcoded block above AND the custom-fields loop. Never hides
+   * name/phone (required for a lead to exist). */
+  try {
+    const _hidCsv = (CRM.brand && CRM.brand.LEAD_HIDDEN_FIELDS) || '';
+    const _hidSet = new Set(String(_hidCsv).split(',').map(x => x.trim().toLowerCase()).filter(Boolean));
+    if (_hidSet.size) {
+      _hidSet.delete('name'); _hidSet.delete('phone');   /* safety: never hide */
+      form.querySelectorAll('[name]').forEach(inp => {
+        const k = String(inp.name || '').toLowerCase();
+        /* Handle both plain fields and cf_<key> custom fields */
+        const bare = k.startsWith('cf_') ? k.slice(3) : k;
+        if (_hidSet.has(k) || _hidSet.has(bare)) {
+          const wrap = inp.closest('.f-row, .f-cell, .field-wrap, div');
+          if (wrap && wrap !== form) wrap.style.display = 'none';
+          else inp.style.display = 'none';
+        }
+      });
+      /* Qualified-lead toggle uses a custom checkbox — hide by label text */
+      if (_hidSet.has('qualified')) {
+        [...form.querySelectorAll('.qual-toggle, label')].forEach(el => {
+          if (/mark as qualified/i.test(el.textContent || '')) {
+            const wrap = el.closest('.f-row') || el;
+            wrap.style.display = 'none';
+          }
+        });
+      }
+    }
+  } catch (_) {}
+
   // ORPHAN_CF_v1 — render fallback inputs for any extra_json key that
   // (a) isn't a built-in reserved field, (b) isn't already covered by a
   // registered active custom_fields row, and (c) doesn't start with '_'
@@ -29799,6 +29830,68 @@ async function adminMenuVisibility() {
         toast('Saved — reload the page to see the change');
       } catch (e) { toast(e.message, 'err'); }
     } }, 'Save')
+  ));
+  return wrap;
+}
+
+/**
+ * LEAD_HIDDEN_FIELDS_v1 (2026-07-09) — Admin toggle to hide optional
+ * fields from the lead-edit modal for the whole team. Saves CSV of
+ * hidden field keys to config.LEAD_HIDDEN_FIELDS.
+ */
+async function adminLeadFieldVisibility() {
+  const cfg = await api('api_admin_getConfig');
+  const hidden = new Set(String(cfg.LEAD_HIDDEN_FIELDS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
+  /* Fields that CAN be hidden (name+phone stay required always). Add both
+   * a checkbox label and the key that matches the DOM input name. */
+  const TOGGLABLE = [
+    { key: 'email',              label: '📧 Email' },
+    { key: 'whatsapp',           label: '📱 WhatsApp' },
+    { key: 'source',             label: '📥 Source' },
+    { key: 'product_id',         label: '📦 Product' },
+    { key: 'assigned_to',        label: '👤 Assigned To' },
+    { key: 'campaign_id',        label: '🎯 Campaign' },
+    { key: 'tags',               label: '🏷 Tags' },
+    { key: 'city',               label: '📍 City' },
+    { key: 'qualified',          label: '✅ Qualified lead toggle' },
+    { key: 'budget_max',         label: '💰 Budget (max ₹)' },
+    { key: 'requirement_type',   label: '📋 Requirement type' },
+    { key: 'requirement_notes',  label: '📝 Requirement notes' },
+    { key: 'notes',              label: '🗒 Notes (general)' },
+    { key: 'next_followup_at',   label: '⏰ Next follow-up' },
+    { key: 'inline_remark',      label: '💬 Remark — what happened?' }
+  ];
+  const wrap = h('div', {});
+  wrap.appendChild(h('h4', { style: { margin: '0 0 .5rem' } }, '🙈 Hide lead fields from your team'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Untick a field to remove it from the Edit Lead form for every user in this tenant. ' +
+    'Name and Phone are always shown — they are required to create a lead. Custom fields you created in Admin → Custom fields can also be hidden by adding their key to this list; add "cf_<key>" or just "<key>" — both work.'));
+  const card = h('div', { class: 'card', style: { padding: '1rem', maxWidth: '560px' } });
+  TOGGLABLE.forEach(f => {
+    const cb = h('input', {
+      type: 'checkbox', 'data-lhf': f.key,
+      checked: hidden.has(f.key) ? null : 'checked',
+      style: { marginRight: '.5rem' }
+    });
+    card.appendChild(h('label', {
+      class: 'qual-toggle',
+      style: { display: 'flex', alignItems: 'center', padding: '.4rem 0', cursor: 'pointer' }
+    }, cb, h('span', { style: { fontWeight: 500 } }, f.label)));
+  });
+  wrap.appendChild(card);
+  wrap.appendChild(h('div', { class: 'actions', style: { marginTop: '1rem' } },
+    h('button', { class: 'btn primary', onclick: async () => {
+      const hide = [];
+      $$('[data-lhf]', card).forEach(cb => {
+        if (!cb.checked) hide.push(cb.getAttribute('data-lhf'));
+      });
+      try {
+        await api('api_admin_setConfig', { LEAD_HIDDEN_FIELDS: hide.join(',') });
+        /* Update in-memory brand cache so change reflects without full reload */
+        if (window.CRM && CRM.brand) CRM.brand.LEAD_HIDDEN_FIELDS = hide.join(',');
+        toast('Saved — new lead-form layout takes effect immediately for everyone', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save')
   ));
   return wrap;
 }
