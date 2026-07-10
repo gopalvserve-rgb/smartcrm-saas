@@ -1,6 +1,35 @@
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
+// INVENTORY_STOCK_v1 — model-wise stock ledger. Each inventory row carries a
+// manually-entered received/opening qty; SOLD qty is derived live from invoice
+// line items (matched by model name, case-insensitive) on non-cancelled invoices;
+// balance = received - sold.
+let _stockColEnsured = false;
+async function _ensureStockCol() {
+  if (_stockColEnsured) return;
+  try { await db.query(`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS received_qty NUMERIC(14,2) NOT NULL DEFAULT 0`); } catch (_) {}
+  _stockColEnsured = true;
+}
+async function _soldByModel() {
+  try {
+    const r = await db.query(`
+      SELECT LOWER(TRIM(l.description)) AS nm, COALESCE(SUM(l.qty),0) AS sold
+        FROM invoice_lines_inv l
+        JOIN invoices_inv i ON i.id = l.invoice_id
+       WHERE COALESCE(i.status,'') <> 'cancelled'
+       GROUP BY LOWER(TRIM(l.description))`);
+    const m = {};
+    (r.rows || []).forEach(x => { m[x.nm] = Number(x.sold) || 0; });
+    return m;
+  } catch (_) { return {}; }
+}
+function _stock(r, soldMap) {
+  const received = Number(r.received_qty) || 0;
+  const sold = soldMap[String(r.name || '').trim().toLowerCase()] || 0;
+  return { received_qty: received, sold_qty: sold, balance_qty: Math.round((received - sold) * 100) / 100 };
+}
+
 /**
  * Inventory module — saleable stock the org has on hand: flats / plots /
  * subscription plans / products. The admin maintains this list under
@@ -20,6 +49,8 @@ const { authUser } = require('../utils/auth');
  */
 async function api_inventory_list(token, filters) {
   await authUser(token);
+  await _ensureStockCol();
+  const soldMap = await _soldByModel();
   const f = filters || {};
   const all = await db.getAll('inventory');
   let rows = all.filter(r => true);
@@ -42,24 +73,26 @@ async function api_inventory_list(token, filters) {
     if (sA !== sB) return sA - sB;
     return new Date(b.created_at || 0) - new Date(a.created_at || 0);
   });
-  return rows.map(r => ({
+  return rows.map(r => Object.assign({
     id: r.id, name: r.name, item_type: r.item_type, price: Number(r.price) || 0,
     status: r.status, location: r.location, description: r.description,
     attributes: r.attributes || {},
     created_at: r.created_at, updated_at: r.updated_at
-  }));
+  }, _stock(r, soldMap)));
 }
 
 async function api_inventory_get(token, id) {
   await authUser(token);
+  await _ensureStockCol();
   const r = await db.findOneBy('inventory', 'id', id);
   if (!r) throw new Error('Inventory item not found');
-  return {
+  const soldMap = await _soldByModel();
+  return Object.assign({
     id: r.id, name: r.name, item_type: r.item_type, price: Number(r.price) || 0,
     status: r.status, location: r.location, description: r.description,
     attributes: r.attributes || {},
     created_at: r.created_at, updated_at: r.updated_at
-  };
+  }, _stock(r, soldMap));
 }
 
 async function api_inventory_save(token, payload) {
@@ -67,10 +100,12 @@ async function api_inventory_save(token, payload) {
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
   const p = payload || {};
   if (!p.name) throw new Error('Name is required');
+  await _ensureStockCol();
   const data = {
     name:        String(p.name).trim(),
     item_type:   p.item_type || '',
     price:       Number(p.price) || 0,
+    received_qty: Number(p.received_qty) || 0,
     status:      p.status || 'available',
     location:    p.location || '',
     description: p.description || '',

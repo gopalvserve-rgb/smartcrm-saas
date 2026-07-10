@@ -878,6 +878,8 @@ CREATE TABLE IF NOT EXISTS inventory (
 CREATE INDEX IF NOT EXISTS idx_inventory_status ON inventory(status);
 CREATE INDEX IF NOT EXISTS idx_inventory_type   ON inventory(item_type);
 CREATE INDEX IF NOT EXISTS idx_inventory_price  ON inventory(price);
+-- INVENTORY_STOCK_v1 — manual received/opening stock (sold is derived from invoices).
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS received_qty NUMERIC(14,2) NOT NULL DEFAULT 0;
 
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS budget_max        NUMERIC(14,2);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS requirement_type  TEXT;

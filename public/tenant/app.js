@@ -21590,6 +21590,15 @@ function inventoryCard(r, refresh, isAdminMgr) {
     ),
     r.item_type ? h('div', { class: 'muted', style: { fontSize: '.85rem' } }, '📁 ' + r.item_type) : null,
     h('div', { style: { fontSize: '1.1rem', fontWeight: 600 } }, '₹ ' + Number(r.price).toLocaleString('en-IN')),
+    // INVENTORY_STOCK_v1 — model-wise stock: received (manual) − sold (from invoices) = balance
+    (function(){
+      const rec = Number(r.received_qty)||0, sold = Number(r.sold_qty)||0, bal = (r.balance_qty!=null?Number(r.balance_qty):rec-sold);
+      const pill = (label, val, col) => h('span', { style:{ fontSize:'.72rem', fontWeight:700, color:col, background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'8px', padding:'2px 8px' } }, label+': '+val);
+      return h('div', { style:{ display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'center' } },
+        pill('Received', rec, '#334155'),
+        pill('Sold', sold, '#7c3aed'),
+        pill('Balance', bal, bal<=0 ? '#dc2626' : '#059669'));
+    })(),
     r.location ? h('div', { class: 'muted', style: { fontSize: '.85rem' } }, '📍 ' + r.location) : null,
     r.description ? h('div', { class: 'muted', style: { fontSize: '.8rem' } },
       String(r.description).slice(0, 140) + (String(r.description).length > 140 ? '…' : '')
@@ -21625,6 +21634,7 @@ function openInventoryEditModal(r, onSaved) {
       f('name', 'Name *', r.name, { attrs: { type: 'text', required: 'required' } }),
       f('item_type', 'Type (Flat / Plot / Plan / Product)', r.item_type),
       f('price', 'Price (₹)', r.price, { attrs: { type: 'number', min: 0, step: 1 } }),
+      f('received_qty', 'Received / opening stock (qty)', r.received_qty, { attrs: { type: 'number', min: 0, step: 1 } }),
       h('div', { class: 'f-row' },
         h('label', {}, 'Status'),
         h('select', { name: 'status' },
@@ -21649,6 +21659,7 @@ function openInventoryEditModal(r, onSaved) {
           name:        fd.get('name'),
           item_type:   fd.get('item_type'),
           price:       Number(fd.get('price')) || 0,
+          received_qty: Number(fd.get('received_qty')) || 0,
           status:      fd.get('status') || 'available',
           location:    fd.get('location'),
           description: fd.get('description')
