@@ -5193,11 +5193,12 @@ VIEWS.leads = async (view) => {
   // Date-range filter — filters.from / filters.to are honoured by
   // api_leads_list (compared against the created_at date prefix), so
   // these two inputs are all we need on the SPA side.
-  /* LEADS_DATEFIELD_v1 (2026-07-09) — Classic view: pill toggle to switch
-   * the date range between Created (created_at) and Follow-up
-   * (next_followup_at). State: CRM.prefs.filters.dateField. Values written
-   * to filters.from/to when 'created' is active, filters.followup_from/to
-   * when 'followup' is active. */
+  /* LEADS_DATEFIELD_v2 (2026-07-09) — Classic view: pill toggle switches
+   * date range between Created (created_at) and Follow-up (next_followup_at).
+   * v2 fixes: (a) OBJECT style form for h() compat, (b) manual pill repaint
+   * on click so visual state updates immediately (loadLeads doesn't re-render
+   * the toolbar), (c) explicit dispatchEvent so _attachDatePresets sees the
+   * input change and updates its active-chip highlight. */
   if (!CRM.prefs.filters.dateField) CRM.prefs.filters.dateField = 'created';
   function _lfCurFrom() { return CRM.prefs.filters.dateField === 'followup' ? (CRM.prefs.filters.followup_from || '') : (CRM.prefs.filters.from || ''); }
   function _lfCurTo()   { return CRM.prefs.filters.dateField === 'followup' ? (CRM.prefs.filters.followup_to   || '') : (CRM.prefs.filters.to   || ''); }
@@ -5214,23 +5215,50 @@ VIEWS.leads = async (view) => {
   fromInput.addEventListener('change', () => { _lfSaveFrom(fromInput.value); applyFilters(); });
   toInput.addEventListener('change',   () => { _lfSaveTo(toInput.value);     applyFilters(); });
   setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInput, toInput, { key: 'leads', apply: () => { _lfSaveFrom(fromInput.value); _lfSaveTo(toInput.value); applyFilters(); } }); } catch (_) {} }, 0);
-  /* Pill toggle: 📅 Created ↔ ⏰ Follow-up */
-  const _mkDfPill = (k, lab) => {
-    const active = CRM.prefs.filters.dateField === k;
-    return h('button', {
-      title: k === 'followup' ? 'Filter by next follow-up date' : 'Filter by lead created date',
-      style: 'padding:.28rem .6rem;background:' + (active ? '#0369a1' : '#fff') + ';color:' + (active ? '#fff' : '#334155') + ';border:1px solid ' + (active ? '#0369a1' : '#cbd5e1') + ';border-radius:14px;font-size:.75rem;cursor:pointer;font-weight:' + (active ? 700 : 500),
-      onclick: () => {
-        CRM.prefs.filters.dateField = k;
-        fromInput.value = _lfCurFrom();
-        toInput.value   = _lfCurTo();
-        applyFilters();
-      }
-    }, lab);
-  };
-  const dateWrap = h('div', { class: 'date-range', title: 'Filter by date', style: { display: 'inline-flex', alignItems: 'center', gap: '.3rem', flexWrap: 'wrap' } },
-    _mkDfPill('created', '📅 Created'),
-    _mkDfPill('followup', '⏰ Follow-up'),
+
+  /* Pill styles — OBJECT form so h()'s Object.assign path is used. */
+  function _lfPillStyle(active) {
+    return {
+      padding: '4px 12px',
+      background: active ? '#0369a1' : '#ffffff',
+      color: active ? '#ffffff' : '#334155',
+      border: '1px solid ' + (active ? '#0369a1' : '#cbd5e1'),
+      borderRadius: '14px',
+      fontSize: '12px',
+      cursor: 'pointer',
+      fontWeight: active ? '700' : '500',
+      boxShadow: active ? '0 1px 3px rgba(3,105,161,.3)' : 'none',
+      whiteSpace: 'nowrap'
+    };
+  }
+  /* Refs so we can repaint on click without re-rendering the toolbar. */
+  const _lfCreatedPill = h('button', {
+    type: 'button',
+    title: 'Filter by lead created date',
+    style: _lfPillStyle(CRM.prefs.filters.dateField === 'created')
+  }, '📅 Created');
+  const _lfFollowupPill = h('button', {
+    type: 'button',
+    title: 'Filter by next follow-up date',
+    style: _lfPillStyle(CRM.prefs.filters.dateField === 'followup')
+  }, '⏰ Follow-up');
+  function _lfSetField(k) {
+    CRM.prefs.filters.dateField = k;
+    Object.assign(_lfCreatedPill.style,  _lfPillStyle(k === 'created'));
+    Object.assign(_lfFollowupPill.style, _lfPillStyle(k === 'followup'));
+    fromInput.value = _lfCurFrom();
+    toInput.value   = _lfCurTo();
+    /* Poke the change event so the preset chip bar repaints its active state */
+    try { fromInput.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    try { toInput.dispatchEvent(new Event('change',   { bubbles: true })); } catch (_) {}
+    applyFilters();
+  }
+  _lfCreatedPill.addEventListener('click',  () => _lfSetField('created'));
+  _lfFollowupPill.addEventListener('click', () => _lfSetField('followup'));
+
+  const dateWrap = h('div', { class: 'date-range', title: 'Filter by date', style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', flexWrap: 'wrap' } },
+    _lfCreatedPill,
+    _lfFollowupPill,
     h('span', { class: 'muted', style: { fontSize: '.78rem', marginLeft: '.2rem' } }, 'From'),
     fromInput,
     h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),
