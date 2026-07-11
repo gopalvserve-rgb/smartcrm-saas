@@ -206,8 +206,85 @@ async function api_saas_ai_costing_recent(token, opts) {
   }));
 }
 
+
+/* ── AI_DIAG_v1 (2026-07-11) ──────────────────────────────────────────────
+ * "AI is busy right now (Gemini high-demand)" is a CATCH-ALL: geminiClient
+ * raises it for 503 (Google overloaded) AND 429 / RESOURCE_EXHAUSTED (YOUR key
+ * is out of quota / rate-limited). Those need opposite fixes, so this endpoint
+ * pings Gemini directly and hands back the RAW status + reason.
+ *   api_saas_ai_diag(token)  -> { ok, http_status, gemini_status, raw_error, model, key_source }
+ * Plus api_saas_ai_recentErrors(token) -> the last failures from ai_usage_log.
+ */
+async function api_saas_ai_diag(token) {
+  await requireSuperAdmin(token);
+  const gemini = require('../../utils/geminiClient');
+  let settings = null;
+  try { settings = await gemini.loadSettings(true); } catch (e) {
+    return { ok: false, stage: 'load_settings', raw_error: e.message };
+  }
+  if (!settings || !settings.apiKey) {
+    return { ok: false, stage: 'no_key', raw_error: 'No Gemini API key configured (ai_settings.gemini_api_key_enc / GEMINI_API_KEY env).' };
+  }
+  const model = settings.model || 'gemini-3.1-flash-lite';
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+              encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(settings.apiKey);
+  let resp, json;
+  try {
+    resp = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+                             generationConfig: { maxOutputTokens: 5 } })
+    });
+    json = await resp.json();
+  } catch (e) {
+    return { ok: false, stage: 'network', model, raw_error: 'Network error: ' + e.message };
+  }
+  const err = json && json.error;
+  return {
+    ok: !!(resp.ok && !err),
+    stage: 'gemini_call',
+    model,
+    http_status: resp.status,
+    gemini_status: err ? (err.status || '') : '',
+    gemini_code: err ? (err.code || '') : '',
+    raw_error: err ? String(err.message || '').slice(0, 600) : '',
+    key_tail: '…' + String(settings.apiKey).slice(-4),
+    hint: !err ? 'Gemini answered fine — the key + model are healthy right now.'
+        : /RESOURCE_EXHAUSTED|quota|rate/i.test(String(err.status) + String(err.message))
+          ? 'QUOTA / RATE LIMIT on your API key — not Google being busy. Raise the quota or switch to a paid key.'
+        : /UNAVAILABLE|overloaded/i.test(String(err.status) + String(err.message))
+          ? 'Google-side overload (503). Transient — retries/fallback should absorb it.'
+        : /API_KEY_INVALID|PERMISSION_DENIED/i.test(String(err.status) + String(err.message))
+          ? 'The API key is invalid or lacks permission for this model.'
+        : /NOT_FOUND/i.test(String(err.status) + String(err.message))
+          ? 'The configured model name does not exist / was retired.'
+          : 'See raw_error.'
+  };
+}
+
+async function api_saas_ai_recentErrors(token, opts) {
+  await requireSuperAdmin(token);
+  const o = opts || {};
+  const lim = Math.min(200, Math.max(1, Number(o.limit) || 50));
+  const r = await control.query(
+    `SELECT created_at, tenant_slug, call_kind, model, error_text
+       FROM ai_usage_log
+      WHERE error_text IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT ${lim}`
+  );
+  const byReason = {};
+  r.rows.forEach(x => {
+    const k = String(x.error_text || '').split(' :: ')[0];
+    byReason[k] = (byReason[k] || 0) + 1;
+  });
+  return { rows: r.rows, by_reason: byReason, count: r.rows.length };
+}
+
 module.exports = {
   api_saas_ai_costing_summary,
   api_saas_ai_costing_daily,
   api_saas_ai_costing_recent,
+  api_saas_ai_diag,
+  api_saas_ai_recentErrors
 };

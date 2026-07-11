@@ -288,9 +288,16 @@ async function generate(args) {
     const userMsg = isOverloaded
       ? 'AI is busy right now (Gemini high-demand). Please try again in a moment.'
       : (errMsg || ('HTTP ' + resp.status));
+    // AI_DIAG_v1 — keep the RAW Gemini reason + status. Previously only the friendly
+    // message was stored, so 429 "quota exceeded" was indistinguishable from a real
+    // 503 overload and nobody could tell WHY the Copilot failed.
+    const rawReason = (json && json.error && (json.error.status || '')) + (errMsg ? (' | ' + errMsg) : '');
+    console.error('[gemini] FAILED status=' + resp.status + ' model=' + currentModel +
+                  ' attempts=' + attempt + ' raw=' + String(rawReason).slice(0, 400));
     return { ok: false, text: '', model: currentModel, input_tokens: 0, output_tokens: 0,
              cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-             finish_reason: null, error: userMsg, raw_status: resp.status };
+             finish_reason: null, error: userMsg, error_raw: String(rawReason).slice(0, 400),
+             raw_status: resp.status };
   }
   // currentModel may have been swapped if we fell back — reflect in returned record
   if (currentModel !== model) model = currentModel;
@@ -371,7 +378,10 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
         result.input_tokens || 0, result.output_tokens || 0,
         result.cost_usd || 0, result.cost_inr_real || 0, result.cost_inr_billed || 0,
         phone || null, lead_id || null, wa_message_id || null,
-        result.ok ? null : (result.error || 'failed').slice(0, 500)
+        result.ok ? null
+          : String((result.error || 'failed') +
+                   (result.raw_status ? ' :: HTTP ' + result.raw_status : '') +
+                   (result.error_raw ? ' :: ' + result.error_raw : '')).slice(0, 500)
       ]
     );
   } catch (e) {
