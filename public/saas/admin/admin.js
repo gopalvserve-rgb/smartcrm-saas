@@ -3741,7 +3741,8 @@ VIEWS.tickets = async (view) => {
     tableWrap.appendChild(tbl);
   }
   refreshBtn.onclick = load;
-  statusSel.onchange = load; prioSel.onchange = load; catSel.onchange = load;
+  // TKT_STATUS_MULTI_v1 — status is a multi-select menu now (its checkboxes call load() themselves).
+  prioSel.onchange = load; catSel.onchange = load;
   document.getElementById('tk-unassigned').onchange = load;
   searchIn.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
   await load();
