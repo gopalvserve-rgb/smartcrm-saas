@@ -140,7 +140,26 @@
       '.st-done p{color:var(--st-text-soft);font-size:12.5px;line-height:1.5;margin:0 0 16px}',
       '.st-done .row{display:flex;gap:6px;justify-content:center}',
       '.st-done .stbtn{padding:7px 14px;border-radius:8px;border:1px solid var(--st-border);background:#fff;cursor:pointer;font-size:12.5px}',
-      '.st-done .stbtn.primary{background:var(--st-brand);border-color:var(--st-brand);color:#fff;font-weight:600}'
+      '.st-done .stbtn.primary{background:var(--st-brand);border-color:var(--st-brand);color:#fff;font-weight:600}',
+      /* Header chip — mockup's topbar "🚀 Setup in progress", now stage-wise */
+      '.st-hchip{display:inline-flex;align-items:center;gap:6px;background:var(--st-brand-soft);border:1px solid rgba(99,102,241,.25);color:var(--st-brand-dark);font-weight:700;font-size:11.5px;padding:5px 10px;border-radius:99px;cursor:pointer;white-space:nowrap;position:relative}',
+      '.st-hchip:hover{background:#e0e7ff}',
+      '.st-hchip .dot{width:6px;height:6px;border-radius:50%;background:#f59e0b}',
+      '.st-hchip.allok .dot{background:var(--st-ok)}',
+      '.st-hmenu{position:fixed;background:#fff;border:1px solid var(--st-border);border-radius:12px;box-shadow:0 20px 50px rgba(15,23,42,.22);width:280px;z-index:9995;display:none;overflow:hidden}',
+      '.st-hmenu.show{display:block}',
+      '.st-hmenu .hd{padding:10px 12px;background:var(--st-brand-soft);font-size:11.5px;font-weight:700;color:var(--st-brand-dark);display:flex;justify-content:space-between;align-items:center}',
+      '.st-hrow{display:flex;align-items:center;gap:9px;padding:9px 12px;border-top:1px solid var(--st-border-light);cursor:pointer;font-size:12.5px}',
+      '.st-hrow:hover{background:#f8fafc}',
+      '.st-hrow .ic{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;background:var(--st-bg-alt);color:var(--st-muted)}',
+      '.st-hrow.done .ic{background:var(--st-ok);color:#fff}',
+      '.st-hrow .nm{flex:1;min-width:0}',
+      '.st-hrow .nm b{display:block;font-weight:600}',
+      '.st-hrow .nm span{font-size:10.5px;color:var(--st-text-soft)}',
+      '.st-hrow .tag{font-size:9.5px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:99px;background:var(--st-bg-alt);color:var(--st-muted)}',
+      '.st-hrow.done .tag{background:var(--st-ok-soft);color:#047857}',
+      '.st-hmenu .ft{padding:9px 12px;border-top:1px solid var(--st-border-light);text-align:center}',
+      '.st-hmenu .ft button{width:100%;padding:7px;border-radius:8px;border:0;background:var(--st-brand);color:#fff;font-weight:600;font-size:12px;cursor:pointer}'
     ].join('\n');
     document.head.appendChild(css);
   }
@@ -255,6 +274,66 @@
     document.getElementById('st-pct').textContent = pct + '% done';
     document.getElementById('st-badge-count').textContent = S.done + '/' + S.total;
     document.getElementById('st-days').textContent = S.daysLeft;
+    renderHeaderChip();
+  }
+
+  /* ── Header chip (mockup topbar "🚀 Setup in progress") — stage-wise ── */
+  function renderHeaderChip() {
+    var bar = document.querySelector('.topbar-right');
+    if (!bar) { setTimeout(renderHeaderChip, 800); return; }
+
+    var chip = document.getElementById('st-hchip');
+    if (!chip) {
+      chip = document.createElement('span');
+      chip.id = 'st-hchip';
+      chip.className = 'st-hchip';
+      bar.insertBefore(chip, bar.firstChild);
+      chip.onclick = function (e) { e.stopPropagation(); toggleHeaderMenu(); };
+    }
+    var allOk = S.done === S.total;
+    chip.className = 'st-hchip' + (allOk ? ' allok' : '');
+    chip.innerHTML = '<span class="dot"></span>🚀 Setup ' + S.done + '/' + S.total;
+    chip.title = 'Setup progress — click to see what is done and what is pending';
+
+    var menu = document.getElementById('st-hmenu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'st-hmenu';
+      menu.className = 'st-hmenu';
+      document.body.appendChild(menu);
+      document.addEventListener('click', function () { menu.classList.remove('show'); });
+    }
+    var pct = Math.round((S.done / Math.max(1, S.total)) * 100);
+    var rows = S.tasks.map(function (t, i) {
+      return '<div class="st-hrow ' + (t.done ? 'done' : '') + '" data-i="' + i + '">' +
+               '<div class="ic">' + (t.done ? '✓' : (i + 1)) + '</div>' +
+               '<div class="nm"><b>' + t.title + '</b><span>' + (t.detail || '') + '</span></div>' +
+               '<span class="tag">' + (t.done ? 'Done' : 'Pending') + '</span>' +
+             '</div>';
+    }).join('');
+    menu.innerHTML =
+      '<div class="hd"><span>🚀 Setup Guide</span><span>' + pct + '% done</span></div>' +
+      rows +
+      '<div class="ft"><button id="st-hopen">Open Setup Guide</button></div>';
+    menu.querySelectorAll('.st-hrow').forEach(function (r) {
+      r.onclick = function (e) {
+        e.stopPropagation();
+        menu.classList.remove('show');
+        startTask(Number(r.dataset.i));
+      };
+    });
+    menu.querySelector('#st-hopen').onclick = function (e) {
+      e.stopPropagation(); menu.classList.remove('show'); openPanel();
+    };
+  }
+  function toggleHeaderMenu() {
+    var chip = document.getElementById('st-hchip'), menu = document.getElementById('st-hmenu');
+    if (!chip || !menu) return;
+    if (menu.classList.contains('show')) { menu.classList.remove('show'); return; }
+    var r = chip.getBoundingClientRect();
+    menu.style.top = (r.bottom + 8) + 'px';
+    menu.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 292)) + 'px';
+    menu.classList.add('show');
   }
 
   /* ── Task actions (backed by the real API) ── */
@@ -447,7 +526,7 @@
     }).catch(function () { return null; });
   }
   function teardown() {
-    ['st-panel', 'st-badge', 'st-welcome', 'st-coach'].forEach(function (id) {
+    ['st-panel', 'st-badge', 'st-welcome', 'st-coach', 'st-hchip', 'st-hmenu'].forEach(function (id) {
       var e = document.getElementById(id); if (e) e.remove();
     });
   }
