@@ -2001,9 +2001,11 @@ tr:hover .lv2-actions { opacity: 1; }
     if (vc.has('aistep'))   tr.appendChild(h('td', null, h('div', { class: 'lv2-aisum' }, aiHint(l))));
     if (vc.has('followup')) {
       const overdue = l.next_followup_at && new Date(l.next_followup_at) < new Date();
+      /* LEADS_FU_LASTCHANGE_FMT (2026-07-10) — show "12 Jul, 5:30 pm (in 2d)"
+       * instead of just the absolute date. Matches Classic view. */
       tr.appendChild(h('td', null, l.next_followup_at
         ? h('span', { style: { fontSize: '11.5px', color: overdue ? '#b91c1c' : '#0f172a', fontWeight: overdue ? '600' : '500' } },
-            '📅 ' + new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))
+            '📅 ' + fmtDateTimeRel(l.next_followup_at))
         : h('span', { class: 'lv2-muted' }, '—')));
     }
     // v3.14 — broader filter: 'Auto Lead Capture' may have bullet/whitespace
