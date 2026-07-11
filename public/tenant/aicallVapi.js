@@ -139,11 +139,36 @@
     try {
       const list = await _api('api_aicall_phones_list');
       S.phones = Array.isArray(list) ? list : [];
-      const tw = S.phones.filter(p => String(p.provider || '').toLowerCase() === 'twilio').length;
-      toast(S.phones.length
-        ? ('Imported ' + S.phones.length + ' number(s) from VAPI' + (tw ? (' — ' + tw + ' Twilio') : ''))
-        : 'No numbers found in your VAPI account — attach one in VAPI first.', S.phones.length ? 'ok' : 'err');
+      if (S.phones.length) {
+        const tw = S.phones.filter(p => String(p.provider || '').toLowerCase() === 'twilio').length;
+        toast('Imported ' + S.phones.length + ' number(s) from VAPI' + (tw ? (' — ' + tw + ' Twilio') : ''), 'ok');
+        renderPhonesTab(host);
+        return;
+      }
+      // Nothing came back — ask VAPI what it actually answered so we can say WHY.
+      let d = null;
+      try { d = await _api('api_aicall_phones_diagnose'); } catch (_) {}
       renderPhonesTab(host);
+      if (d) {
+        const why = d.error
+          ? ('VAPI rejected the request: ' + d.error)
+          : (d.count === 0
+              ? 'VAPI returned 0 numbers for this API key. The key most likely belongs to a different VAPI account/org than the one holding your numbers.'
+              : 'VAPI returned data in an unexpected shape.');
+        toast('No numbers imported — ' + why, 'err');
+        setTimeout(() => {
+          try {
+            alert('VAPI import diagnostics\n\n' +
+              'API key used: ' + d.key_prefix + ' (length ' + d.key_len + ')\n' +
+              'Response type: ' + d.raw_type + (d.raw_keys && d.raw_keys.length ? (' { ' + d.raw_keys.join(', ') + ' }') : '') + '\n' +
+              'Numbers parsed: ' + d.count + '\n' +
+              (d.error ? ('Error: ' + d.error + '\n') : '') +
+              '\nRaw response (first 800 chars):\n' + (d.sample || '(empty)'));
+          } catch (_) {}
+        }, 300);
+      } else {
+        toast('No numbers found in your VAPI account.', 'err');
+      }
     } catch (e) { toast('VAPI: ' + e.message, 'err'); }
   }
   function _renderPhonesList(host) {

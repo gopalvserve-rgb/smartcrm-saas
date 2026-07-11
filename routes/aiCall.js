@@ -177,10 +177,45 @@ async function _vapi(method, path, body) {
 }
 
 // ─── Phone Numbers ─────────────────────────────────────────────────
+// VAPI_LIST_SHAPE_FIX_v1 — VAPI has returned both a bare array and a paginated
+// envelope ({results:[...]}) from GET /phone-number. We were doing
+// `Array.isArray(list) ? list : []`, which silently produced ZERO numbers when
+// the envelope form came back. Normalise every known shape.
+function _asArray(x) {
+  if (Array.isArray(x)) return x;
+  if (x && typeof x === 'object') {
+    for (const k of ['results', 'data', 'items', 'phoneNumbers', 'phone_numbers']) {
+      if (Array.isArray(x[k])) return x[k];
+    }
+  }
+  return [];
+}
 async function api_aicall_phones_list(token) {
   await _requireAdmin(token);
   const list = await _vapi('GET', '/phone-number');
-  return Array.isArray(list) ? list : [];
+  return _asArray(list);
+}
+// Tells us exactly what VAPI answered (shape + count + which key was used), so an
+// empty list can be diagnosed as "wrong key/org" vs "unexpected response shape".
+async function api_aicall_phones_diagnose(token) {
+  await _requireAdmin(token);
+  const key = await _cfg('VAPI_PRIVATE_API_KEY');
+  let raw = null, err = null;
+  try { raw = await _vapi('GET', '/phone-number'); }
+  catch (e) { err = e.message || String(e); }
+  const arr = _asArray(raw);
+  return {
+    ok: !err,
+    error: err,
+    key_present: !!key,
+    key_prefix: key ? (String(key).slice(0, 8) + '…' + String(key).slice(-4)) : '(none)',
+    key_len: key ? String(key).length : 0,
+    raw_type: Array.isArray(raw) ? 'array' : (raw === null ? 'null' : typeof raw),
+    raw_keys: (raw && !Array.isArray(raw) && typeof raw === 'object') ? Object.keys(raw).slice(0, 12) : [],
+    count: arr.length,
+    numbers: arr.map(p => ({ id: p && p.id, number: p && (p.number || p.sipUri), provider: p && p.provider })).slice(0, 10),
+    sample: (() => { try { return JSON.stringify(raw).slice(0, 800); } catch (_) { return String(raw).slice(0, 800); } })()
+  };
 }
 async function api_aicall_phones_get(token, id) {
   await _requireAdmin(token);
@@ -279,7 +314,8 @@ async function api_aicall_kb_delete(token, id) {
 
 // Export Phase 2 additions on the same module.exports object
 Object.assign(module.exports, {
-  api_aicall_phones_list, api_aicall_phones_get, api_aicall_phones_create,
+  api_aicall_phones_list,
+  api_aicall_phones_diagnose, api_aicall_phones_get, api_aicall_phones_create,
   api_aicall_phones_update, api_aicall_phones_delete,
   api_aicall_assistants_list, api_aicall_assistants_get, api_aicall_assistants_create,
   api_aicall_assistants_update, api_aicall_assistants_delete,
