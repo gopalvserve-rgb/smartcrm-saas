@@ -39884,6 +39884,58 @@ document.addEventListener('DOMContentLoaded', () => {
 // drawer that posts to api_copilot_ask. The answer text is rendered as
 // markdown-ish (basic newline + bullet handling). Daily quota is read
 // from the response and shown in the drawer header.
+/* CP_RICH_v1 (2026-07-11) — the Copilot answer was written with textContent, so
+ * markdown came out RAW: users literally saw "[Watch Guide](https://...)" and
+ * "**Bold**". Render a safe markdown-lite subset instead and turn every link
+ * into a clickable pill button. HTML is escaped FIRST, so nothing the model
+ * emits can inject markup. */
+function _copilotMd(raw) {
+  var esc = function (x) {
+    return String(x == null ? '' : x)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  var t = esc(raw);
+  var slots = [];
+  var stash = function (html) { slots.push(html); return '\u0000' + (slots.length - 1) + '\u0000'; };
+
+  // [label](url) -> pill button
+  t = t.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, function (m, label, url) {
+    return stash('<a class="cp-link" href="' + url + '" target="_blank" rel="noopener">' + label + ' \u2197</a>');
+  });
+  // bare URLs -> pill button (shortened label)
+  t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, function (m, pre, url) {
+    var nice = url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
+    if (nice.length > 38) nice = nice.slice(0, 38) + '\u2026';
+    return pre + stash('<a class="cp-link" href="' + url + '" target="_blank" rel="noopener">' + nice + ' \u2197</a>');
+  });
+
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  t = t.replace(/^\s*#{1,6}\s*(.+)$/gm, '<div class="cp-h">$1</div>');
+  t = t.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="cp-li num"><b>$1.</b> $2</div>');
+  t = t.replace(/^\s*[*\-\u2022]\s+(.+)$/gm, '<div class="cp-li">$1</div>');
+  t = t.replace(/\n{2,}/g, '<div class="cp-gap"></div>');
+  t = t.replace(/\n/g, '<br>');
+  t = t.replace(/\u0000(\d+)\u0000/g, function (m, i) { return slots[Number(i)]; });
+  return t;
+}
+function _copilotStyles() {
+  if (document.getElementById('cp-rich-css')) return;
+  var st = document.createElement('style');
+  st.id = 'cp-rich-css';
+  st.textContent = [
+    '.copilot-text .cp-link{display:inline-block;margin:3px 4px 3px 0;padding:4px 10px;border-radius:99px;',
+    'background:#eef2ff;border:1px solid #c7d2fe;color:#4338ca;font-weight:600;font-size:.78rem;',
+    'text-decoration:none;white-space:nowrap}',
+    '.copilot-text .cp-link:hover{background:#e0e7ff}',
+    '.copilot-text .cp-h{font-weight:700;margin:.5rem 0 .25rem;color:#1e293b}',
+    '.copilot-text .cp-li{margin:.15rem 0;padding-left:.9rem;position:relative}',
+    '.copilot-text .cp-li:before{content:"\u2022";position:absolute;left:0;color:#6366f1}',
+    '.copilot-text .cp-li.num:before{content:""}',
+    '.copilot-text .cp-gap{height:.45rem}'
+  ].join('');
+  document.head.appendChild(st);
+}
+
 function _initCrmCopilot() {
   if (document.getElementById('copilot-fab')) return;
   if (typeof CRM === 'undefined' || !CRM.user) return;
@@ -40328,7 +40380,8 @@ function _renderCopilotDrawer() {
     log.scrollTop = log.scrollHeight;
     try {
       const r = await api('api_copilot_ask', q, history.slice(0, -1));
-      thinking.querySelector('.copilot-text').textContent = r.text || '(no answer)';
+      _copilotStyles();
+      thinking.querySelector('.copilot-text').innerHTML = _copilotMd(r.text || '(no answer)');
       thinking.classList.remove('copilot-thinking');
       history.push({ role: 'model', text: r.text || '' });
       if (r.tools_called && r.tools_called.length) {
