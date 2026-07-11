@@ -454,8 +454,16 @@
 
   function boot() {
     if (S.booted) return;
-    if (!window.api || !window.CRM || !CRM.user) return setTimeout(boot, 500);
-    if (CRM.user.role !== 'admin') return;    // ADMIN ONLY
+    // Wait for the SPA's api() + a token. We do NOT gate on CRM.user here —
+    // it isn't reliably populated at this point. The BACKEND is the real gate:
+    // api_setup_status returns admin:false for every non-admin role, and
+    // refresh() tears the UI down in that case.
+    var tok = null;
+    try { tok = localStorage.getItem('crm_token_' + (window.TENANT_SLUG || '')) || localStorage.getItem('crm_token'); } catch (e) {}
+    if (typeof window.api !== 'function' || !tok) {
+      if ((boot._n = (boot._n || 0) + 1) > 40) return;   // give up after ~20s
+      return setTimeout(boot, 500);
+    }
     S.booted = true;
     refresh(false);
   }
