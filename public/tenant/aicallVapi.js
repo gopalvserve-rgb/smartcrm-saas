@@ -114,11 +114,11 @@
     host.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' } },
       h('div', null,
         h('h3', { style: { margin: 0 } }, '📞 Phone Numbers'),
-        h('p', { class: 'muted', style: { margin: '.25rem 0 0', fontSize: '12.5px' } }, 'Phone numbers VAPI can use for inbound and outbound calls')
+        h('p', { class: 'muted', style: { margin: '.25rem 0 0', fontSize: '12.5px' } }, 'Pulled live from your VAPI account — any number already attached there (including a Twilio BYO number) shows up here. No Twilio details needed in SmartCRM.')
       ),
       h('div', { style: { display: 'flex', gap: '.5rem' } },
-        h('button', { class: 'btn', style: _btnStyle('ghost'), onclick: () => loadPhones(host) }, '🔄 Refresh'),
-        h('button', { class: 'btn', style: _btnStyle('primary'), onclick: () => openAddPhoneModal(host) }, '+ Add Number')
+        h('button', { class: 'btn', style: _btnStyle('primary'), title: 'Fetch the numbers already attached in your VAPI account', onclick: () => importFromVapi(host) }, '⬇ Import from VAPI'),
+        h('button', { class: 'btn', style: _btnStyle('ghost'), onclick: () => openAddPhoneModal(host) }, '+ Add Number')
       )
     ));
     const listHost = h('div');
@@ -133,10 +133,24 @@
     }
   }
   async function loadPhones(host) { renderPhonesTab(host); }
+  // VAPI_IMPORT_NUMBERS_v1 — numbers already attached in VAPI (Twilio BYO, VAPI
+  // native, SIP) are fetched via VAPI's GET /phone-number. Nothing to re-enter.
+  async function importFromVapi(host) {
+    try {
+      const list = await _api('api_aicall_phones_list');
+      S.phones = Array.isArray(list) ? list : [];
+      const tw = S.phones.filter(p => String(p.provider || '').toLowerCase() === 'twilio').length;
+      toast(S.phones.length
+        ? ('Imported ' + S.phones.length + ' number(s) from VAPI' + (tw ? (' — ' + tw + ' Twilio') : ''))
+        : 'No numbers found in your VAPI account — attach one in VAPI first.', S.phones.length ? 'ok' : 'err');
+      renderPhonesTab(host);
+    } catch (e) { toast('VAPI: ' + e.message, 'err'); }
+  }
   function _renderPhonesList(host) {
     host.innerHTML = '';
     if (!S.phones.length) {
-      host.appendChild(_emptyBox('No phone numbers yet', 'Click "+ Add Number" to import a Twilio number, buy a VAPI free number, or configure SIP.'));
+      host.appendChild(_emptyBox('No numbers found in your VAPI account',
+        'Already attached a number in VAPI (e.g. your Twilio number)? Click "⬇ Import from VAPI" — you do NOT need to enter Twilio credentials here. Only use "+ Add Number" if the number is not in VAPI yet.'));
       return;
     }
     const grid = h('div', { style: { display: 'grid', gridTemplateColumns: '300px 1fr', gap: '1rem' } });
@@ -222,7 +236,11 @@
     const ov = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center' }, onclick: (e) => { if (e.target === ov) ov.remove(); } });
     const card = h('div', { style: { background: 'white', borderRadius: '12px', width: '460px', maxWidth: '90vw', padding: '1.5rem', boxShadow: '0 25px 60px rgba(0,0,0,.3)' } });
     card.appendChild(h('h3', { style: { margin: '0 0 .25rem' } }, '+ Add Phone Number'));
-    card.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: 0 } }, 'Pick a provider — most users start with Twilio import (BYO).'));
+    card.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: 0 } }, 'Only use this if the number is NOT in your VAPI account yet.'));
+    // VAPI_IMPORT_NUMBERS_v1 — stop people re-entering Twilio creds they already gave VAPI.
+    card.appendChild(h('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '.6rem .75rem', margin: '0 0 .9rem', fontSize: '12.5px', color: '#1e3a8a' } },
+      h('b', {}, 'Already attached this number inside VAPI?'),
+      h('div', { style: { marginTop: '2px' } }, 'Then you do NOT need to enter Twilio details again — close this and click ', h('b', {}, '⬇ Import from VAPI'), '. SmartCRM reads your numbers straight from your VAPI account.')));
 
     const provSel = h('select', { style: _inpStyle() },
       h('option', { value: 'twilio' }, '📞 Import Twilio Number (BYO)'),
