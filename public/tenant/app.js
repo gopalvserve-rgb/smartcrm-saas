@@ -18901,6 +18901,17 @@ function _waToastErr(e) {
   toast((x.code ? '#' + x.code + ' — ' : '') + x.title + (x.fix ? '  ·  ' + x.fix : ''), 'err');
 }
 
+// WA_CAMPAIGN_CHAT_v1 — open the WhatsApp chat for a number (same handoff the
+// WA-report drill uses: wbChat auto-reads window._wbPendingOpen on mount).
+function _openWaChatForPhone(phone, leadId) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits && !leadId) return;
+  window._wbPendingOpen = { phone: digits, lead_id: leadId || null, ts: Date.now() };
+  try { sessionStorage.setItem('wbPendingOpen', JSON.stringify(window._wbPendingOpen)); } catch (_) {}
+  try { location.hash = '#/whatsbot/chat'; } catch (_) {}
+  try { if (typeof navigateTo === 'function') navigateTo('whatsbot'); } catch (_) {}
+}
+
 function _viewCampaign(c) {
   const modal = h('div', { class: 'modal-backdrop' },
     h('div', { class: 'modal', style: { maxWidth: '760px', width: '96%', maxHeight: '88vh', overflow: 'auto' } },
@@ -18949,8 +18960,29 @@ function _viewCampaign(c) {
         Object.keys(_btnTally).map(k => k + ' — ' + _btnTally[k]).join('   ·   ')));
     }
     // Recipients table
-    body.appendChild(h('div', { style: { fontSize: '.8rem', fontWeight: 700, margin: '.2rem 0 .4rem' } },
-      '📇 Recipients (' + targets.length + ')'));
+    body.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.2rem 0 .4rem' } },
+      h('div', { style: { fontSize: '.8rem', fontWeight: 700, flex: 1 } }, '📇 Recipients (' + targets.length + ')'),
+      h('button', { class: 'btn sm ghost', title: 'Download this campaign report as Excel', onclick: async () => {
+        try {
+          const flat = targets.map((t, i) => ({
+            '#': i + 1,
+            Name: t.name || '',
+            Number: t.phone || '',
+            Status: t.status || '',
+            'Button clicked': t.clicked_button || '',
+            'Clicked at': t.clicked_at ? new Date(t.clicked_at).toLocaleString('en-IN') : '',
+            'Click count': Number(t.click_count) || 0,
+            'Sent at': t.sent_at ? new Date(t.sent_at).toLocaleString('en-IN') : '',
+            'Delivered at': t.delivered_at ? new Date(t.delivered_at).toLocaleString('en-IN') : '',
+            'Read at': t.read_at ? new Date(t.read_at).toLocaleString('en-IN') : '',
+            'Failure reason': (t.status === 'failed' && t.error) ? ((_waErrExplain(t.error).code ? '#' + _waErrExplain(t.error).code + ' — ' : '') + _waErrExplain(t.error).title) : '',
+            Message: t.rendered_message || ''
+          }));
+          const safe = String(c.name || 'campaign').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+          await downloadRowsAsXlsx(flat, 'campaign-' + safe + '-' + new Date().toISOString().slice(0, 10) + '.xlsx', 'Campaign');
+          toast('Exported', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '⬇ Export Excel')));
     // PAGINATION_HELPER_v1 — paginate the recipient list.
     const _tb = h('tbody', {});
     const _ph = h('div', {});
@@ -18963,10 +18995,12 @@ function _viewCampaign(c) {
       targets.slice(st, st + _cps).forEach((t, j) => {
         const i = st + j;
         const exp = t.status === 'failed' && t.error ? _waErrExplain(t.error) : null;
+        const _openChat = () => { modal.remove(); _openWaChatForPhone(t.phone, t.lead_id); };
         _tb.appendChild(h('tr', {},
           h('td', { class: 'muted', style: { fontSize: '.78rem' } }, String(i + 1)),
-          h('td', { style: { fontWeight: 600, fontSize: '.82rem' } }, t.name || '—'),
-          h('td', { style: { fontFamily: 'monospace', fontSize: '.82rem' } }, t.phone || '—'),
+          h('td', { style: { fontWeight: 600, fontSize: '.82rem', color: '#4f46e5', cursor: 'pointer' }, title: 'Open WhatsApp chat', onclick: _openChat }, t.name || '—'),
+          h('td', { style: { fontFamily: 'monospace', fontSize: '.82rem', color: '#4f46e5', cursor: 'pointer' }, title: 'Open WhatsApp chat', onclick: _openChat },
+            t.phone || '—', h('span', { style: { marginLeft: '6px' } }, '💬')),
           h('td', {}, stChip(t.status)),
           h('td', { style: { fontSize: '.78rem' } },
             t.clicked_button
