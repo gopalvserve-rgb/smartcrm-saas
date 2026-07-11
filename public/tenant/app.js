@@ -39909,6 +39909,11 @@ function _copilotMd(raw) {
     return pre + stash('<a class="cp-link" href="' + url + '" target="_blank" rel="noopener">' + nice + ' \u2197</a>');
   });
 
+  // CP_CHOICE_v1 — [choice: X] becomes a clickable button that sends "X" back.
+  t = t.replace(/^[\s>*\-\u2022]*\[choice:\s*([^\]\n]+)\]\s*$/gmi, function (m, label) {
+    var L = label.trim();
+    return stash('<button type="button" class="cp-choice" data-q="' + L + '">' + L + '</button>');
+  });
   t = t.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   t = t.replace(/^\s*#{1,6}\s*(.+)$/gm, '<div class="cp-h">$1</div>');
   t = t.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="cp-li num"><b>$1.</b> $2</div>');
@@ -39931,7 +39936,12 @@ function _copilotStyles() {
     '.copilot-text .cp-li{margin:.15rem 0;padding-left:.9rem;position:relative}',
     '.copilot-text .cp-li:before{content:"\u2022";position:absolute;left:0;color:#6366f1}',
     '.copilot-text .cp-li.num:before{content:""}',
-    '.copilot-text .cp-gap{height:.45rem}'
+    '.copilot-text .cp-gap{height:.45rem}',
+    '.copilot-text .cp-choice{display:block;width:100%;text-align:left;margin:4px 0;padding:8px 11px;border-radius:9px;',
+    'background:#fff;border:1px solid #c7d2fe;color:#3730a3;font-weight:600;font-size:.82rem;cursor:pointer;',
+    'transition:background .12s,border-color .12s}',
+    '.copilot-text .cp-choice:hover{background:#eef2ff;border-color:#818cf8}',
+    '.copilot-text .cp-choice:active{background:#e0e7ff}'
   ].join('');
   document.head.appendChild(st);
 }
@@ -40381,7 +40391,17 @@ function _renderCopilotDrawer() {
     try {
       const r = await api('api_copilot_ask', q, history.slice(0, -1));
       _copilotStyles();
-      thinking.querySelector('.copilot-text').innerHTML = _copilotMd(r.text || '(no answer)');
+      const _txtEl = thinking.querySelector('.copilot-text');
+      _txtEl.innerHTML = _copilotMd(r.text || '(no answer)');
+      // CP_CHOICE_v1 — make offered options one-tap: clicking sends that answer.
+      _txtEl.querySelectorAll('.cp-choice').forEach(function (b) {
+        b.onclick = function () {
+          if (sendBtn.disabled) return;
+          _txtEl.querySelectorAll('.cp-choice').forEach(function (o) { o.disabled = true; o.style.opacity = '.55'; });
+          inp.value = b.getAttribute('data-q') || b.textContent;
+          send();
+        };
+      });
       thinking.classList.remove('copilot-thinking');
       history.push({ role: 'model', text: r.text || '' });
       if (r.tools_called && r.tools_called.length) {
