@@ -1244,6 +1244,35 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+/* LEADS_FU_LASTCHANGE_FMT (2026-07-10) — combined absolute+relative
+ * timestamp used by Follow-up + Last change columns. Format:
+ *   "12 Jul, 5:30 pm (in 2d)"   for future
+ *   "12 Jul, 5:30 pm (2d ago)"   for past
+ * Two-line rendering isn't necessary — it fits comfortably on one line
+ * with a small muted parenthetical. */
+function _fmtDateTimeRel(s) {
+  if (!s) return '';
+  try {
+    const d = new Date(s); if (isNaN(d)) return String(s);
+    const abs = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+              + ', ' + d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const rel = (typeof fmtDate === 'function') ? fmtDate(s, 'relative') : '';
+    /* Use a fragment: two spans, so the relative can wrap to a second
+     * line on very narrow columns without breaking the layout. */
+    const wrap = document.createElement('span');
+    wrap.appendChild(document.createTextNode(abs));
+    if (rel) {
+      const rspan = document.createElement('span');
+      rspan.className = 'muted';
+      rspan.style.marginLeft = '.35rem';
+      rspan.style.fontSize = '.78rem';
+      rspan.textContent = '(' + rel + ')';
+      wrap.appendChild(rspan);
+    }
+    return wrap;
+  } catch (_) { return String(s); }
+}
+
 function fmtDate(s, opts) {
   if (!s) return '';
   try {
@@ -7683,9 +7712,13 @@ function renderCell(col, l, statuses) {
     case 'followup': {
       const due = l.next_followup_at ? new Date(l.next_followup_at) : null;
       const overdue = due && due < new Date();
-      return h('td', { class: overdue ? 'overdue' : '' }, due ? fmtDate(l.next_followup_at, 'relative') : '');
+      /* LEADS_FU_LASTCHANGE_FMT (2026-07-10) — show "12 Jul, 5:30 pm (in 2d)"
+       * instead of just "in 2d". _fmtDateTimeRel below combines both. */
+      return h('td', { class: overdue ? 'overdue' : '' },
+        due ? _fmtDateTimeRel(l.next_followup_at) : '');
     }
-    case 'last_change': return h('td', { class: 'muted' }, l.last_status_change_at ? fmtDate(l.last_status_change_at, 'relative') : '');
+    case 'last_change': return h('td', { class: 'muted' },
+      l.last_status_change_at ? _fmtDateTimeRel(l.last_status_change_at) : '');
     case 'remark': return h('td', { class: 'cell-remark' },
       h('span', { class: 'remark-text', title: l.recent_remark || '' }, (l.recent_remark || '').slice(0, 60)),
       h('button', { class: 'btn icon', title: 'Add remark', onclick: ev => { ev.stopPropagation(); openRemarkInline(l.id); } }, '💬+'),
