@@ -125,6 +125,7 @@ const ROUTE_FILES = [
   'fbQnaBackfill',      /* FB_META_QNA_BACKFILL_v1 — retroactively add Q&A remarks */
   'fbLeadDiag',         /* FB_LEAD_DIAG_v1 — inspector for why Q&A didn't show */
   'waCatalogue',        /* WA_CATALOGUE_v1 — WhatsApp Catalogue library (Vserve-gated) */
+  'setupTour',          /* SETUP_TOUR_v1 — first-run admin setup checklist */
 ];
 
 const API = {};

@@ -2974,6 +2974,89 @@ async function openChangelogModal() {
  *    fetch each one once and route the result into render funcs.
  * ============================================================ */
 
+/* SETUP_TOUR_v1 (2026-07-11) — first-run "Setup Guide" for a newly-joined tenant.
+ * ADMIN ONLY (api_setup_status returns show:false for every other role).
+ * Completion is DATA-DRIVEN: each stage auto-ticks once the admin actually does
+ * the work (company name+logo set, statuses built, WhatsApp connected, FB page
+ * monitored). A manual "Mark done" override persists per-tenant in config.
+ * Re-runs on every dashboard render, so coming back from a setup page updates it. */
+async function renderSetupGuide(host) {
+  if (!host) return;
+  let r;
+  try { r = await api('api_setup_status'); }
+  catch (_) { try { host.remove(); } catch (_) {} return; }
+  if (!r || !r.admin) { try { host.remove(); } catch (_) {} return; }
+
+  if (r.all_done) {
+    if (r.just_completed) {
+      host.innerHTML = '';
+      host.appendChild(h('div', { class: 'card', style: { padding: '1.1rem', textAlign: 'center', background: '#f0fdf4', border: '1px solid #86efac', marginBottom: '1rem' } },
+        h('div', { style: { fontSize: '2.1rem', lineHeight: 1 } }, '\uD83C\uDF89'),
+        h('h3', { style: { margin: '.35rem 0 .2rem' } }, 'You\u2019re all set!'),
+        h('p', { class: 'muted', style: { margin: 0, fontSize: '.86rem' } },
+          'Company, lead statuses, WhatsApp and Facebook Lead Ads are configured. This guide won\u2019t show again.')
+      ));
+      try { await api('api_setup_dismiss', { dismissed: 1 }); } catch (_) {}
+      setTimeout(function () { try { host.remove(); } catch (_) {} }, 9000);
+      return;
+    }
+    try { host.remove(); } catch (_) {}
+    return;
+  }
+  if (!r.show) { try { host.remove(); } catch (_) {} return; }
+
+  const pct = Math.round((r.done_count / Math.max(1, r.total)) * 100);
+  host.innerHTML = '';
+  const card = h('div', { class: 'card', style: { padding: 0, overflow: 'hidden', marginBottom: '1rem', border: '1px solid #c7d2fe' } });
+
+  const hd = h('div', { style: { background: 'linear-gradient(135deg,#4f46e5,#6366f1)', color: '#fff', padding: '.9rem 1rem' } });
+  hd.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' } },
+    h('h3', { style: { margin: 0, fontSize: '1.02rem', flex: 1, color: '#fff' } }, '\uD83D\uDE80 Finish setting up your CRM'),
+    h('span', { style: { background: 'rgba(255,255,255,.22)', padding: '.15rem .6rem', borderRadius: '99px', fontSize: '.76rem', fontWeight: 700 } }, r.done_count + '/' + r.total + ' done'),
+    h('button', { class: 'btn sm', style: { background: 'rgba(255,255,255,.18)', color: '#fff', border: '1px solid rgba(255,255,255,.35)' },
+      title: 'Hide this guide',
+      onclick: async function () {
+        if (!confirm('Hide the setup guide? Steps still pending will stay pending.')) return;
+        try { await api('api_setup_dismiss', { dismissed: 1 }); host.remove(); toast('Setup guide hidden', 'ok'); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, '\u2715 Hide')
+  ));
+  hd.appendChild(h('div', { style: { color: 'rgba(255,255,255,.85)', fontSize: '.79rem', margin: '.25rem 0 .55rem' } },
+    'Only you (admin) can see this \u2014 it disappears once every step is done.'));
+  hd.appendChild(h('div', { style: { height: '5px', background: 'rgba(255,255,255,.25)', borderRadius: '99px', overflow: 'hidden' } },
+    h('div', { style: { height: '100%', width: pct + '%', background: '#fff', borderRadius: '99px', transition: 'width .4s ease' } })));
+  hd.appendChild(h('div', { style: { fontSize: '.73rem', marginTop: '.3rem', color: 'rgba(255,255,255,.9)' } }, pct + '% complete'));
+  card.appendChild(hd);
+
+  const body = h('div', { style: { background: '#fff' } });
+  (r.tasks || []).forEach(function (t, i) {
+    const done = !!t.done;
+    const row = h('div', { style: { display: 'flex', gap: '.7rem', alignItems: 'flex-start', padding: '.75rem 1rem', borderTop: i ? '1px solid #f1f5f9' : 'none', background: done ? '#f8fefb' : '#fff' } });
+    row.appendChild(h('div', { style: { flex: '0 0 26px', height: '26px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '.78rem', fontWeight: 700, background: done ? '#16a34a' : '#e2e8f0', color: done ? '#fff' : '#475569' } }, done ? '\u2713' : String(i + 1)));
+    const mid = h('div', { style: { flex: 1, minWidth: 0 } });
+    mid.appendChild(h('div', { style: { fontWeight: 600, fontSize: '.92rem' } }, t.title,
+      h('span', { style: { marginLeft: '.5rem', fontSize: '.68rem', fontWeight: 700, padding: '.12rem .45rem', borderRadius: '99px', background: done ? '#dcfce7' : '#f1f5f9', color: done ? '#047857' : '#64748b' } },
+        done ? (t.manual ? '\u2713 Marked done' : '\u2713 Done') : 'Pending')));
+    mid.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.15rem' } }, t.desc));
+    mid.appendChild(h('div', { class: 'muted', style: { fontSize: '.73rem', marginTop: '.2rem' } }, '\uD83D\uDCCD ' + t.hint + (t.detail ? ' \u00b7 ' + t.detail : '')));
+    row.appendChild(mid);
+
+    const acts = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem', flex: '0 0 auto' } });
+    if (!done) {
+      acts.appendChild(h('button', { class: 'btn sm primary', onclick: function () { location.hash = t.hash; } }, 'Set up \u2192'));
+      acts.appendChild(h('button', { class: 'btn sm ghost', title: 'Already handled outside the CRM? Mark it complete.',
+        onclick: async function () { try { await api('api_setup_setState', { key: t.key, done: 1 }); renderSetupGuide(host); } catch (e) { toast(e.message, 'err'); } } }, '\u2713 Mark done'));
+    } else if (t.manual) {
+      acts.appendChild(h('button', { class: 'btn sm ghost', title: 'Reopen this step',
+        onclick: async function () { try { await api('api_setup_setState', { key: t.key, done: 'auto' }); renderSetupGuide(host); } catch (e) { toast(e.message, 'err'); } } }, '\u21a9 Reopen'));
+    }
+    row.appendChild(acts);
+    body.appendChild(row);
+  });
+  card.appendChild(body);
+  host.appendChild(card);
+}
+
 VIEWS.dashboard = async (view) => {
   // Concurrent-call guard — boot can race (navigateTo from boot + a
   // hashchange listener can both fire VIEWS.dashboard) and both calls
@@ -3160,6 +3243,13 @@ VIEWS.dashboard = async (view) => {
     )
   );
   view.appendChild(head);
+
+  // SETUP_TOUR_v1 — first-run admin setup checklist. Renders directly under the
+  // dashboard heading and stays until every stage is complete (or admin hides it).
+  // Admin-only: api_setup_status returns show:false for every other role.
+  const _setupHost = h('div', { id: 'setup-guide-host' });
+  view.appendChild(_setupHost);
+  renderSetupGuide(_setupHost);
 
   // TEAM_STATUS_TASKS_v1 — "I'm currently doing…" picker
   try {
