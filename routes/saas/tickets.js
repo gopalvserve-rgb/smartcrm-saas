@@ -914,10 +914,62 @@ async function sweepStaleTickets() {
   return { warned, closed };
 }
 
+// TKT_AI_DEFLECT_v1 — tenant-facing: try to resolve the issue with SmartCRM AI
+// BEFORE a ticket is created. Grounded in the platform Copilot KB (help articles)
+// so answers are real SmartCRM steps, not invented ones.
+async function api_saas_tk_aiHelp(token, payload) {
+  await _ensureSchema();
+  const { tenant, user } = await _authTenantUser(token);
+  const p = payload || {};
+  const subject = String(p.subject || '').trim().slice(0, 300);
+  const description = String(p.description || '').trim().slice(0, 5000);
+  const category = String(p.category || '').trim();
+  const question = (subject + ' ' + description).trim();
+  if (question.replace(/\s+/g, ' ').length < 10) throw new Error('Please describe the issue first (a sentence or two).');
+
+  let kb = [];
+  try { kb = await require('./copilotKb').lookupActive(question, 5); } catch (_) { kb = []; }
+  const kbText = kb.length
+    ? kb.map((k, i) => (i + 1) + '. ' + k.title + '\n' + k.body).join('\n\n')
+    : '(no matching help articles found)';
+
+  const system = 'You are SmartCRM\'s AI support assistant. SmartCRM is a CRM SaaS for sales teams '
+    + '(leads, WhatsApp Business, calling/recordings, invoicing, campaigns, automations, reports). '
+    + 'A customer is about to raise a support ticket. Try to solve their problem FIRST. '
+    + 'Rules: (1) Base your answer on the SmartCRM help knowledge provided; do NOT invent features or menus. '
+    + '(2) Give concrete numbered steps with the exact menu path where possible. '
+    + '(3) Be concise and friendly. '
+    + '(4) If the knowledge does not clearly cover the issue, or it looks like a bug/billing/account problem that needs a human, '
+    + 'reply with a short honest note that you could not resolve it and that they should submit the ticket. '
+    + 'Start that reply with the exact token NEEDS_HUMAN on its own first line. '
+    + 'Output only the answer text.';
+  const prompt = 'Category: ' + (category || '-') + '\nSubject: ' + subject
+    + '\n\nIssue described by the customer:\n' + description
+    + '\n\nSmartCRM help knowledge (use this):\n' + kbText
+    + '\n\nNow answer the customer.';
+
+  let text = '';
+  try {
+    const gemini = require('../../utils/geminiClient');
+    const r = await gemini.generate({ system, prompt, maxOutputTokens: 650, temperature: 0.3 });
+    text = String((r && r.text) || '').trim();
+  } catch (e) {
+    throw new Error('AI help is unavailable right now — please submit the ticket. (' + (e.message || e) + ')');
+  }
+  if (!text) throw new Error('AI could not find an answer — please submit the ticket.');
+  let needsHuman = false;
+  if (/^NEEDS_HUMAN/i.test(text)) { needsHuman = true; text = text.replace(/^NEEDS_HUMAN\s*/i, '').trim(); }
+  return {
+    ok: true, answer: text, needs_human: needsHuman,
+    sources: kb.map(k => ({ title: k.title, url: k.url || '' })).filter(x => x.title)
+  };
+}
+
 module.exports = {
   // Tenant-side
   api_saas_tk_categories,
   api_saas_tk_submit,
+  api_saas_tk_aiHelp,
   api_saas_tk_listMine,
   api_saas_tk_getMine,
   api_saas_tk_replyTenant,

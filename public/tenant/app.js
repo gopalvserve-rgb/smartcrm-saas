@@ -52276,6 +52276,48 @@ VIEWS.ticketnew = async (view) => {
     fileIn
   ));
 
+  // TKT_AI_DEFLECT_v1 — try to solve it with SmartCRM AI BEFORE raising a ticket.
+  const aiPanel = h('div', { style: { display: 'none', marginTop: '.6rem', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '.85rem 1rem' } });
+  const aiBtn = h('button', { class: 'btn', style: { background: '#7c3aed', color: '#fff', padding: '.6rem 1.1rem' } }, '✨ Try SmartCRM AI first');
+  const aiHint = h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.35rem' } },
+    'Describe the issue above, then let our AI check it against SmartCRM\'s help knowledge — most issues are solved instantly, no ticket needed.');
+  aiBtn.onclick = async () => {
+    if (!subjIn.value.trim() && !descIn.value.trim()) { errBox.textContent = 'Write the subject / description first.'; return; }
+    errBox.textContent = '';
+    aiBtn.disabled = true; aiBtn.textContent = '✨ Checking…';
+    aiPanel.style.display = 'block';
+    aiPanel.innerHTML = '';
+    aiPanel.appendChild(h('div', { class: 'muted', style: { fontSize: '.88rem' } }, 'Checking your issue against SmartCRM knowledge…'));
+    try {
+      const r = await sapi('api_saas_tk_aiHelp', {
+        category: catSel.value || '', subject: subjIn.value.trim(), description: descIn.value.trim()
+      });
+      aiPanel.innerHTML = '';
+      aiPanel.appendChild(h('div', { style: { fontWeight: 700, color: '#0369a1', marginBottom: '.4rem' } },
+        r.needs_human ? '🤔 We could not resolve this automatically' : '✨ SmartCRM AI suggests'));
+      aiPanel.appendChild(h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '.9rem', color: '#0f172a', background: '#fff', border: '1px solid #e0f2fe', borderRadius: '8px', padding: '.7rem .8rem' } }, r.answer || ''));
+      if (r.sources && r.sources.length) {
+        aiPanel.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem', marginTop: '.45rem' } },
+          '📚 Based on: ' + r.sources.map(x => x.title).join(' · ')));
+      }
+      if (!r.needs_human) {
+        aiPanel.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.7rem' } },
+          h('button', { class: 'btn', style: { background: '#16a34a', color: '#fff' }, onclick: () => {
+            toast('Great — glad that solved it! No ticket was created.', 'ok');
+            aiPanel.style.display = 'none';
+            catSel.value = ''; subjIn.value = ''; descIn.value = '';
+            try { showTicketsTab && showTicketsTab('mine'); } catch (_) {}
+          } }, '✅ This solved it — no ticket needed'),
+          h('button', { class: 'btn ghost' , onclick: () => { aiPanel.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.4rem' } }, 'No problem — submit the ticket below and our team will take it from here.')); } }, '🙋 Still need help')));
+      }
+    } catch (e) {
+      aiPanel.innerHTML = '';
+      aiPanel.appendChild(h('div', { style: { color: '#b45309', fontSize: '.86rem' } }, '⚠ ' + (e.message || 'AI help unavailable') + ' — please submit the ticket below.'));
+    }
+    aiBtn.disabled = false; aiBtn.textContent = '✨ Try SmartCRM AI first';
+  };
+  form.appendChild(h('div', { style: { marginTop: '.8rem', paddingTop: '.8rem', borderTop: '1px dashed #cbd5e1' } }, aiBtn, aiHint, aiPanel));
+
   // Submit
   const errBox = h('div', { style: { color: '#dc2626', fontSize: '.85rem', minHeight: '1.2rem' } });
   const submitBtn = h('button', { class: 'btn primary', style: { padding: '.65rem 1.5rem' } }, '🚀 Submit Ticket');
