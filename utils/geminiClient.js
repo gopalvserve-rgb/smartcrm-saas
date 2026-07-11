@@ -336,6 +336,15 @@ async function generate(args) {
  * have error_text set + cost = 0 so they aren't billed.
  */
 async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_message_id, result }) {
+  // AI_DIAG_v1 — some callers invoke logUsage without a result (or with an
+  // undefined one) and this blew up 33x with
+  // "logUsage_insert_failed: Cannot read properties of undefined (reading 'model')".
+  // Never let logging crash the caller; degrade to an empty record instead.
+  if (!result || typeof result !== 'object') {
+    result = { ok: false, model: '', input_tokens: 0, output_tokens: 0,
+               cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+               error: 'logUsage called without a result object' };
+  }
   // Defensive slug capture - if the caller passed an empty slug (e.g. because
   // they read it from tenantStorage too early, or were called from a path
   // where tenantStorage wasn't set), try to recover the slug from the
