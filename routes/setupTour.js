@@ -110,6 +110,11 @@ async function api_setup_status(token) {
   const allDone   = doneCount === tasks.length;
   const dismissed = Number(st.dismissed) === 1;
 
+  // 10-day onboarding countdown, anchored on the first time the admin saw the guide.
+  if (!st.started_at) { st.started_at = new Date().toISOString(); await _writeState(st); }
+  const daysUsed = Math.floor((Date.now() - new Date(st.started_at).getTime()) / 86400000);
+  const daysLeft = Math.max(0, 10 - daysUsed);
+
   return {
     admin: true,
     tasks,
@@ -118,8 +123,20 @@ async function api_setup_status(token) {
     all_done: allDone,
     dismissed,
     show: !allDone && !dismissed,
-    just_completed: allDone && !st.completed_at
+    just_completed: allDone && !st.completed_at,
+    welcome_seen: Number(st.welcome_seen) === 1,
+    days_left: daysLeft
   };
+}
+
+/** Day-0 welcome modal shown once. */
+async function api_setup_seenWelcome(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const st = await _readState();
+  st.welcome_seen = 1;
+  await _writeState(st);
+  return { ok: true };
 }
 
 async function api_setup_setState(token, payload) {
@@ -148,4 +165,4 @@ async function api_setup_dismiss(token, payload) {
   return { ok: true, dismissed: st.dismissed };
 }
 
-module.exports = { api_setup_status, api_setup_setState, api_setup_dismiss };
+module.exports = { api_setup_status, api_setup_setState, api_setup_dismiss, api_setup_seenWelcome };
