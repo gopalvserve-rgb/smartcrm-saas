@@ -62,7 +62,7 @@
     }
   };
 
-  var S = { tasks: [], done: 0, total: 4, daysLeft: 10, curTask: null, curStep: 0, booted: false };
+  var S = { tasks: [], done: 0, total: 4, daysLeft: 10, sessionsLeft: 10, curTask: null, curStep: 0, booted: false };
 
   /* ── Styles (ported verbatim from the mockup) ── */
   function injectCss() {
@@ -190,7 +190,7 @@
           '<div class="st-progress"><div class="bar" id="st-bar" style="width:0%"></div></div>',
         '</div>',
         '<div class="st-tasks" id="st-tasksBox"></div>',
-        '<div class="st-foot" id="st-foot"><span>⏱ <b id="st-days">10</b> days left</span><span class="chip" id="st-pct">0% done</span></div>',
+        '<div class="st-foot" id="st-foot"><span>⏱ <b id="st-days">10</b> logins left</span><span class="chip" id="st-pct">0% done</span></div>',
       '</div>',
       '<div class="coach-overlay" id="st-coach">',
         '<div class="coach-cut" id="st-cut"></div>',
@@ -226,7 +226,6 @@
   function showWelcome() { document.getElementById('st-welcome').classList.add('show'); }
   function hideWelcome() {
     document.getElementById('st-welcome').classList.remove('show');
-    try { api('api_setup_seenWelcome'); } catch (e) {}
   }
 
   /* ── Render the task list ── */
@@ -273,7 +272,7 @@
     document.getElementById('st-bar').style.width = pct + '%';
     document.getElementById('st-pct').textContent = pct + '% done';
     document.getElementById('st-badge-count').textContent = S.done + '/' + S.total;
-    document.getElementById('st-days').textContent = S.daysLeft;
+    document.getElementById('st-days').textContent = S.sessionsLeft;
     renderHeaderChip();
   }
 
@@ -506,11 +505,12 @@
   }
 
   /* ── Boot / refresh from the real backend ── */
-  function refresh(keepOpen) {
-    return api('api_setup_status').then(function (r) {
+  function refresh(keepOpen, newSession) {
+    return api('api_setup_status', { new_session: newSession ? 1 : 0 }).then(function (r) {
       if (!r || !r.admin) { teardown(); return r; }
       S.tasks = r.tasks || []; S.done = r.done_count; S.total = r.total;
       S.daysLeft = r.days_left == null ? 10 : r.days_left;
+      S.sessionsLeft = r.sessions_left == null ? 10 : r.sessions_left;
 
       if (r.all_done) {
         injectCss(); buildDom();
@@ -520,7 +520,9 @@
       if (r.dismissed) { teardown(); return r; }
 
       injectCss(); buildDom(); renderTasks();
-      if (!r.welcome_seen) { setTimeout(showWelcome, 350); }
+      // SETUP_TOUR_v4 — the welcome pop-up shows on EVERY login (once per browser
+      // session), not just the first time, until setup is done / hidden / 10 logins.
+      if (newSession) { setTimeout(showWelcome, 350); }
       else if (!keepOpen && !document.getElementById('st-panel').classList.contains('show')) collapse();
       return r;
     }).catch(function () { return null; });
@@ -544,7 +546,13 @@
       return setTimeout(boot, 500);
     }
     S.booted = true;
-    refresh(false);
+    // One "login session" = one fresh browser session for this workspace.
+    var newSession = false;
+    try {
+      var k = 'st_sess_' + (window.TENANT_SLUG || '');
+      if (!sessionStorage.getItem(k)) { sessionStorage.setItem(k, '1'); newSession = true; }
+    } catch (e) { newSession = true; }
+    refresh(false, newSession);
   }
   if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(boot, 1200);
   else window.addEventListener('DOMContentLoaded', function () { setTimeout(boot, 1200); });

@@ -17,9 +17,31 @@
 'use strict';
 
 const db = require('../db/pg');
+const control = require('../control/db');
 const { authUser } = require('../utils/auth');
 
 const STATE_KEY = 'SETUP_TOUR_STATE';
+
+// SETUP_TOUR_v4 — the guide is for NEW clients only. Tenants created before this
+// date (e.g. vserve and every other existing account) never see it.
+const ELIGIBLE_FROM = '2026-07-08T00:00:00Z';
+// ...and only for their first N login sessions.
+const MAX_SESSIONS = 10;
+
+/** Is this tenant new enough to get the setup guide? */
+async function _eligible() {
+  try {
+    var store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    var slug = store && store.slug;
+    if (!slug) return false;
+    const r = await control.query('SELECT created_at FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
+    if (!r.rows.length || !r.rows[0].created_at) return false;
+    return new Date(r.rows[0].created_at).getTime() >= new Date(ELIGIBLE_FROM).getTime();
+  } catch (e) {
+    console.warn('[setupTour] eligibility check failed:', e.message);
+    return false;   // fail closed — never show it to an existing customer
+  }
+}
 
 const TASKS = [
   { key: 'company',  title: 'Company Setup',
@@ -86,12 +108,25 @@ async function _detect() {
   return out;
 }
 
-async function api_setup_status(token) {
+async function api_setup_status(token, opts) {
   const me = await authUser(token);
   // Non-admins never see the guide.
   if (me.role !== 'admin') return { admin: false, show: false, tasks: [], done_count: 0, total: TASKS.length, all_done: true, dismissed: true };
 
+  // Only tenants created on/after ELIGIBLE_FROM get the guide at all.
+  const eligible = await _eligible();
+  if (!eligible) {
+    return { admin: true, eligible: false, show: false, tasks: [], done_count: 0,
+             total: TASKS.length, all_done: true, dismissed: true };
+  }
+
   const st  = await _readState();
+  // Count login sessions — the SPA passes new_session:1 once per browser session.
+  if (opts && Number(opts.new_session) === 1) {
+    st.sessions = (Number(st.sessions) || 0) + 1;
+    await _writeState(st);
+  }
+  const sessions = Number(st.sessions) || 0;
   const det = await _detect();
   const overrides = st.overrides || {};
 
@@ -115,17 +150,23 @@ async function api_setup_status(token) {
   const daysUsed = Math.floor((Date.now() - new Date(st.started_at).getTime()) / 86400000);
   const daysLeft = Math.max(0, 10 - daysUsed);
 
+  const overSessions = sessions > MAX_SESSIONS;
+
   return {
     admin: true,
+    eligible: true,
     tasks,
     done_count: doneCount,
     total: tasks.length,
     all_done: allDone,
     dismissed,
-    show: !allDone && !dismissed,
+    // Show only while: incomplete, not hidden, and within the first 10 logins.
+    show: !allDone && !dismissed && !overSessions,
     just_completed: allDone && !st.completed_at,
-    welcome_seen: Number(st.welcome_seen) === 1,
-    days_left: daysLeft
+    days_left: daysLeft,
+    sessions_used: sessions,
+    sessions_left: Math.max(0, MAX_SESSIONS - sessions),
+    max_sessions: MAX_SESSIONS
   };
 }
 
