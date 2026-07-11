@@ -283,8 +283,37 @@
     (document.head || document.documentElement).appendChild(st);
   }
 
+  // ---- APK_UPDATE_SUPPRESS_v1 ---------------------------------------------
+  // The "Update Available" modal re-appears on EVERY app launch and every
+  // return-from-background (app.js runs _apkUpdateCheck on resume, and "Later"
+  // is only remembered in sessionStorage, which is wiped each session).
+  // Per request: suppress it completely. Done from here because app.js must not
+  // be touched (local copy has diverged from main).
+  function suppressApkUpdatePrompt() {
+    // 1) Neutralise the checker itself. The resume re-check reads
+    //    window._apkUpdateCheck at call time, so this override wins.
+    try { window._apkUpdateCheck = function () {}; } catch (e) {}
+    // 2) Hide + remove anything the very first check (which runs before this
+    //    bolt-on loads) may already have rendered.
+    if (!document.getElementById('cls-noupdate-css')) {
+      var st = document.createElement('style');
+      st.id = 'cls-noupdate-css';
+      st.textContent = '#apk-update-modal{display:none !important;}';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    var kill = function () {
+      var m = document.getElementById('apk-update-modal');
+      if (m) { try { m.remove(); } catch (e) {} }
+    };
+    kill();
+    try {
+      new MutationObserver(kill).observe(document.body || document.documentElement, { childList: true });
+    } catch (e) {}
+  }
+
   var mo = new MutationObserver(function () { try { injectButton(); injectFab(); } catch (e) {} });
   function start() {
+    try { suppressApkUpdatePrompt(); } catch (e) {}
     try { injectMobileCss(); } catch (e) {}
     try { mo.observe(document.getElementById('app') || document.body, { childList: true, subtree: true }); } catch (e) {}
     window.addEventListener('hashchange', function () { setTimeout(function () { injectButton(); injectFab(); }, 200); });
