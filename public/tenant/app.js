@@ -2114,8 +2114,6 @@ function renderShell() {
           <button class="btn icon topbar-mobile-menu" id="btn-more" title="Menu">☰</button>
           <h2 id="page-title">Dashboard</h2>
           <div class="topbar-right">
-            <!-- TOPBAR_MOBILE_v1 — WhatsApp icon as first item, green background, mobile only -->
-            <a class="btn ghost topbar-chip topbar-wa-first" href="#/whatsbot" title="WhatsApp Inbox" style="background:#25D366;color:#fff;padding:.35rem .7rem;border-radius:999px;text-decoration:none;font-weight:700;"><span style="font-size:16px;">💚</span><span class="topbar-chip-label">WhatsApp</span></a>
             <a class="btn ghost topbar-chip" href="#/newleads" title="New leads"><span>✨</span><span class="topbar-chip-label">New</span><span class="nav-count" data-count-key="new_today" hidden>0</span></a>
             <a class="btn ghost topbar-chip" href="#/overdue"  title="Overdue follow-ups"><span>⚠️</span><span class="topbar-chip-label">Overdue</span><span class="nav-count" data-count-key="overdue" hidden>0</span></a>
             <a class="btn ghost topbar-chip" href="#/duetoday" title="Follow-ups due today"><span>📅</span><span class="topbar-chip-label">Due today</span><span class="nav-count" data-count-key="due_today" hidden>0</span></a>
