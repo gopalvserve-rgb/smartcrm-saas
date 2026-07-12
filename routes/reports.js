@@ -1002,6 +1002,28 @@ async function api_reports_callActivity(token, filters) {
             -- as ON CALL and the live call_ended row to detect the HANG-UP, and the
             -- recording upload gate reads the raw table too. Neither filters on src.
             AND COALESCE(ce.src,'') <> 'live-dup'
+            -- CALLLOG_ONLY_v1 (2026-07-12) — the phone's call log is the ONLY source of calls.
+            --
+            -- A live-receiver row can never be trusted as a call record:
+            --   * created_at is when the SERVER got the POST, not when the phone rang. Doze froze
+            --     the app and delivered one RINGING broadcast 24 MINUTES late, so a call answered at
+            --     8:04pm appeared as a brand-new "Missed" call at 8:28pm that never happened.
+            --     (82 seconds the day before — the delay is unbounded.)
+            --   * it has no SIM, often no number, and on Android 10+ cannot reliably tell inbound
+            --     from outbound.
+            -- The call log always has the same call with the correct time, direction, duration and
+            -- SIM. So live rows are no longer shown as calls.
+            --
+            -- They are NOT deleted and the receiver still writes them, because:
+            --   * routes/team.js (Live Team Status) reads call_events RAW — zero src references —
+            --     and needs the live ring/dial row to show a rep ON CALL (with the number) and the
+            --     live call_ended row to detect the HANG-UP.
+            --   * the recording upload gate (api_call_hasRecentEvent) also reads it raw.
+            -- Neither filters on src, so both are completely unaffected.
+            --
+            -- Rows written BEFORE the cutoff still show, so no history is lost.
+            AND ( COALESCE(ce.src,'') IN ('calllog', 'calllog-fix')
+                  OR ce.created_at < '2026-07-12T00:00:00Z'::timestamptz )
             ${leadOnlyClause}
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
@@ -1313,6 +1335,28 @@ async function api_reports_callActivity(token, filters) {
            -- as ON CALL and the live call_ended row to detect the HANG-UP, and the
            -- recording upload gate reads the raw table too. Neither filters on src.
            AND COALESCE(ce.src,'') <> 'live-dup'
+           -- CALLLOG_ONLY_v1 (2026-07-12) — the phone's call log is the ONLY source of calls.
+           --
+           -- A live-receiver row can never be trusted as a call record:
+           --   * created_at is when the SERVER got the POST, not when the phone rang. Doze froze
+           --     the app and delivered one RINGING broadcast 24 MINUTES late, so a call answered at
+           --     8:04pm appeared as a brand-new "Missed" call at 8:28pm that never happened.
+           --     (82 seconds the day before — the delay is unbounded.)
+           --   * it has no SIM, often no number, and on Android 10+ cannot reliably tell inbound
+           --     from outbound.
+           -- The call log always has the same call with the correct time, direction, duration and
+           -- SIM. So live rows are no longer shown as calls.
+           --
+           -- They are NOT deleted and the receiver still writes them, because:
+           --   * routes/team.js (Live Team Status) reads call_events RAW — zero src references —
+           --     and needs the live ring/dial row to show a rep ON CALL (with the number) and the
+           --     live call_ended row to detect the HANG-UP.
+           --   * the recording upload gate (api_call_hasRecentEvent) also reads it raw.
+           -- Neither filters on src, so both are completely unaffected.
+           --
+           -- Rows written BEFORE the cutoff still show, so no history is lost.
+           AND ( COALESCE(ce.src,'') IN ('calllog', 'calllog-fix')
+                 OR ce.created_at < '2026-07-12T00:00:00Z'::timestamptz )
            ${leadOnlyClause}
            -- CALL_RECENT_DEDUP_v2 (2026-06-03) — hide 'incoming_ringing' rows
            -- that have a paired 'call_ended' OR 'recording_saved' for the

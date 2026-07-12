@@ -406,6 +406,20 @@ async function api_call_history(token, limit) {
          LEFT JOIN users u ON u.id = ce.user_id
          LEFT JOIN lead_recordings r ON r.id = ce.recording_id
         WHERE COALESCE(ce.event,'') <> 'dial_requested'
+          -- CALLLOG_ONLY_v1 (2026-07-12) — the phone's call log is the ONLY source of
+          -- calls. A live-receiver row is stamped when the SERVER got the POST, not when
+          -- the phone rang: Doze delivered one RINGING broadcast 24 MINUTES late, so a call
+          -- answered at 8:04pm showed up as a brand-new "Missed" call at 8:28pm that never
+          -- happened. It also has no SIM, often no number, and on Android 10+ cannot tell
+          -- inbound from outbound. The call log always has the same call, correct.
+          --
+          -- The rows are NOT deleted and the receiver still writes them: routes/team.js
+          -- (Live Team Status) and api_call_hasRecentEvent (the recording upload gate) both
+          -- read call_events RAW with zero src references, so they are unaffected.
+          -- Rows before the cutoff still show, so no history is lost.
+          AND COALESCE(ce.src,'') <> 'live-dup'
+          AND ( COALESCE(ce.src,'') IN ('calllog', 'calllog-fix')
+                OR ce.created_at < '2026-07-12T00:00:00Z'::timestamptz )
         ORDER BY ce.created_at DESC
         LIMIT $1`,
       [lim]
@@ -423,6 +437,20 @@ async function api_call_history(token, limit) {
        LEFT JOIN lead_recordings r ON r.id = ce.recording_id
       WHERE ce.user_id = $1
         AND COALESCE(ce.event,'') <> 'dial_requested'
+        -- CALLLOG_ONLY_v1 (2026-07-12) — the phone's call log is the ONLY source of
+        -- calls. A live-receiver row is stamped when the SERVER got the POST, not when
+        -- the phone rang: Doze delivered one RINGING broadcast 24 MINUTES late, so a call
+        -- answered at 8:04pm showed up as a brand-new "Missed" call at 8:28pm that never
+        -- happened. It also has no SIM, often no number, and on Android 10+ cannot tell
+        -- inbound from outbound. The call log always has the same call, correct.
+        --
+        -- The rows are NOT deleted and the receiver still writes them: routes/team.js
+        -- (Live Team Status) and api_call_hasRecentEvent (the recording upload gate) both
+        -- read call_events RAW with zero src references, so they are unaffected.
+        -- Rows before the cutoff still show, so no history is lost.
+        AND COALESCE(ce.src,'') <> 'live-dup'
+        AND ( COALESCE(ce.src,'') IN ('calllog', 'calllog-fix')
+              OR ce.created_at < '2026-07-12T00:00:00Z'::timestamptz )
       ORDER BY ce.created_at DESC
       LIMIT $2`,
     [me.id, lim]
