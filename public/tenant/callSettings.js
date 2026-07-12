@@ -60,9 +60,17 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-  function isAdmin() {
-    try { return !!(window.CRM && CRM.user && CRM.user.role === 'admin'); } catch (e) { return false; }
+  // app.js keeps `CRM` module-scoped -- it is NOT on window -- so we cannot read
+  // the role from there. The JWT already carries it, so decode that instead.
+  function jwtRole() {
+    try {
+      var t = token();
+      if (!t || t.split('.').length < 2) return '';
+      var p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      return String(p.role || '').toLowerCase();
+    } catch (e) { return ''; }
   }
+  function isAdmin() { return jwtRole() === 'admin'; }
   function inApp() {
     return !!(window.LeadCRMNative) || /Capacitor|LeadCRM/i.test(navigator.userAgent || '');
   }
@@ -137,7 +145,7 @@
     body.appendChild(wrap);
 
     // ============ 1. THIS PHONE (every rep) ============
-    var c1 = card('📶 This phone — SIM &amp; sync',
+    var c1 = card('📶 This phone — SIM & sync',
       'Set once. Your phone remembers it. Only calls on the SIM(s) you tick are copied into the CRM.');
 
     if (!inApp()) {
@@ -316,12 +324,8 @@
           CALLS_AUTOLEAD_STATUS_ID:   stSel.value || '0',
           CALLS_AUTOLEAD_ON_DUPLICATE: dupSel.value
         });
-        try {
-          window.CRM.brand = Object.assign(window.CRM.brand || {}, {
-            CALL_CAPTURE_LEAD_ONLY:  capCb.checked ? '1' : '0',
-            CALL_ACTIVITY_LEAD_ONLY: actCb.checked ? '1' : '0'
-          });
-        } catch (e) {}
+        // (No CRM.brand write -- that object is module-scoped in app.js, not global.
+        //  A page refresh picks the new values up from the server.)
         toast('✅ Saved — applies to the whole team', 'ok');
       } catch (e) {
         toast('Could not save: ' + e.message, 'err');
