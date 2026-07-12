@@ -4348,7 +4348,6 @@ body.focus-mode table.leads-tbl {
   .topbar-chip[href="#/duetoday"],
   .topbar-chip[href="#/upcoming"] { display: inline-flex !important; }
   /* WhatsApp first-chip stays green even when scrolling */
-  .topbar-wa-first { background: #25D366 !important; }
 }
 /* Fade edge to indicate more content on right */
 @media (max-width: 780px) {
@@ -4358,4 +4357,44 @@ body.focus-mode table.leads-tbl {
     width: 24px; pointer-events: none;
     background: linear-gradient(to right, rgba(255,255,255,0), var(--topbar-bg, #fff) 90%);
   }
+}
+
+
+/* TOPBAR_MOBILE_v2 (2026-07-12) — move the green WhatsApp button to
+ * the FIRST position on mobile, +20% larger icons overall, give it a
+ * cleaner WA look. */
+@media (max-width: 780px) {
+  /* Move the existing green WA chat button to be the FIRST item */
+  #btn-wa-notif {
+    order: -1 !important;
+    margin-right: 6px !important;
+    background: #25D366 !important;
+    color: #fff !important;
+    border-radius: 10px !important;
+    padding: 6px 10px !important;
+    font-size: 18px !important;
+    box-shadow: 0 2px 6px rgba(37,211,102,0.35) !important;
+    position: relative;
+    min-width: 44px;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    text-decoration: none !important;
+  }
+  #btn-wa-notif::before {
+    content: '';
+    /* Use a WhatsApp-style icon via CSS bg — kept as emoji fallback if fails */
+  }
+  /* Bump icon (first span) sizes by 20% on mobile */
+  .topbar-right .btn > span:first-child,
+  .topbar-chip > span:first-child {
+    font-size: 17px !important;
+  }
+  /* Counter badges stay small */
+  .topbar-right .badge,
+  .topbar-right .nav-count { font-size: 10px !important; }
+  /* Keep it tight so multiple chips fit */
+  .topbar-right { gap: 3px !important; }
+  .topbar-chip { padding: .25rem .5rem !important; }
 }
