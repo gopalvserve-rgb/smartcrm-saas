@@ -423,31 +423,13 @@
       S._newSince = newSince;
     } catch (_) {}
   }
-  async function loadThreads(loadMoreOpts) {
+  async function loadThreads() {
     try {
       const tenantBrand = (window.CRM && CRM.brand) || {};
-      /* WA_MOBILE_V1_3 (2026-07-12) — desktop pagination + search */
-      if (!S.dPage) S.dPage = 1;
-      if (!S.dPageSize) S.dPageSize = 100;
-      const opts = { scanLimit: 10000, show_all: true,
-                     page: (loadMoreOpts && loadMoreOpts.page) || S.dPage,
-                     page_size: S.dPageSize };
-      if (S.dSearch) opts.q = String(S.dSearch).trim();
+      const opts = { scanLimit: 10000, show_all: true };
       const list = await api('api_wb_chat_threads', opts);
-      /* Compute hasMore + append/replace based on page */
-      const incoming = Array.isArray(list) ? list : [];
-      S.dHasMore = incoming.length === S.dPageSize;
-      if (loadMoreOpts && loadMoreOpts.page && loadMoreOpts.page > 1) {
-        const combined = ((S.threadsRaw || []).concat(incoming));
-        S.threadsRaw = combined;
-      } else {
-        S.threadsRaw = incoming;
-      }
-      /* Skip the old raw assignment below via the guard flag: */
-      S._skipRawAssign = true;
       const _prev = S.threadsRaw || [];
-      if (!S._skipRawAssign) S.threadsRaw = Array.isArray(list) ? list : [];
-      S._skipRawAssign = false;
+      S.threadsRaw = Array.isArray(list) ? list : [];
       _wbv2DiffNew(_prev, S.threadsRaw);
       // v2.0 — install silent auto-poll once. Refreshes thread list +
       // active chat every 20s so reps don't need to click Refresh.
@@ -541,18 +523,7 @@
         h('span', { style: { color: '#54656f' } }, '🔍'),
         h('input', { placeholder: 'Search by name, phone, or message',
           value: S.search,
-          oninput: (e) => {
-            S.search = e.target.value;
-            /* WA_MOBILE_V1_3 — debounced database-wide search */
-            try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
-            S.dSrchT = setTimeout(async () => {
-              S.dSearch = S.search;
-              S.dPage = 1;
-              await loadThreads();
-              renderThreads();
-            }, 350);
-            renderThreadList();
-          } }))));
+          oninput: (e) => { S.search = e.target.value; renderThreadList(); } }))));
 
     // Filter pills + assignee + phone selectors
     const unreadCount = (S.threadsRaw || []).filter(t => Number(t.unread || t.unread_count || 0) > 0).length;
@@ -1623,23 +1594,6 @@
    * Data loading happens asynchronously after the element is returned.
    */
   function render() {
-    /* WA_MOBILE_UI_v1 (2026-07-12) — on narrow viewports delegate to the
-     * mobile module so mobile users get the redesigned WhatsApp UI while
-     * desktop keeps the existing 3-column layout. Guarded so it degrades
-     * back to desktop if the mobile bundle didn't load. */
-    try {
-      var _isMobile = false;
-      try {
-        _isMobile = (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 768px)').matches)
-                 || (window.innerWidth && window.innerWidth <= 768);
-      } catch (_) {}
-      if (_isMobile && window.WB_CHAT_V2_MOBILE && typeof window.WB_CHAT_V2_MOBILE.render === 'function') {
-        var _view = document.createElement('div');
-        _view.style.cssText = 'width:100%;height:100%;';
-        window.WB_CHAT_V2_MOBILE.render(_view);
-        return _view;
-      }
-    } catch (_) { /* silent fall-through to desktop */ }
     injectStyles();
     const root = shell();
     // Defer data loads so the shell mounts first (caller does replaceChildren).

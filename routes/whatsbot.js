@@ -1834,65 +1834,6 @@ async function _canSeeThread(me, visibleSet, ownerId) {
  *     return { threads, unread_by_phone, all_unread } instead of a bare
  *     array — the caller (SPA) handles both shapes for back-compat.
  */
-/* WA_MOBILE_V1_2 (2026-07-12) — server-side search + pagination for
- * api_wb_chat_threads. Backward-compatible: with no opts.q/page it
- * returns the same array as before. Filters are done AFTER thread
- * grouping so all enriched fields are available for matching. */
-function _wbApplyThreadFilters(list, opts) {
-  if (!Array.isArray(list)) return list || [];
-  var q = String((opts && opts.q) || '').trim().toLowerCase();
-  var digits = q.replace(/\D/g, '');
-  var statusFilter = String((opts && opts.status_filter) || '').toLowerCase();
-  var page = Math.max(1, Number((opts && opts.page) || 0));
-  var pageSize = Math.max(1, Math.min(200, Number((opts && opts.page_size) || 0)));
-  var out = list;
-  if (q) {
-    out = out.filter(function (t) {
-      try {
-        if (String(t.lead_name || '').toLowerCase().indexOf(q) !== -1) return true;
-        if (String(t.company || '').toLowerCase().indexOf(q) !== -1) return true;
-        if (String(t.assigned_name || '').toLowerCase().indexOf(q) !== -1) return true;
-        if (String(t.status_name || '').toLowerCase().indexOf(q) !== -1) return true;
-        if (String(t.last_message || '').toLowerCase().indexOf(q) !== -1) return true;
-        if (digits && String(t.phone || '').replace(/\D/g, '').indexOf(digits) !== -1) return true;
-      } catch (_) {}
-      return false;
-    });
-  }
-  if (statusFilter && statusFilter !== 'all') {
-    out = out.filter(function (t) {
-      if (statusFilter === 'unread') return Number(t.unread || t.unread_count || 0) > 0;
-      if (statusFilter === 'open')     return String(t.status_name || '').toLowerCase().indexOf('resolv') === -1
-                                          && String(t.status_name || '').toLowerCase().indexOf('closed') === -1
-                                          && String(t.status_name || '').toLowerCase().indexOf('won')    === -1;
-      if (statusFilter === 'resolved') return /resolv|closed|won|complete/i.test(String(t.status_name || ''));
-      return true;
-    });
-  }
-  var total = out.length;
-  if (page && pageSize) {
-    var start = (page - 1) * pageSize;
-    var sliced = out.slice(start, start + pageSize);
-    /* Return page as array (unchanged contract) but stash meta on the
-     * array itself via a non-enumerable property so paginated callers
-     * can read it. Old callers ignore it. */
-    try {
-      Object.defineProperty(sliced, '_meta', {
-        value: { page: page, page_size: pageSize, total: total, has_more: (start + pageSize) < total },
-        enumerable: false
-      });
-    } catch (_) {}
-    /* Also inject as a fake trailing element that clients can check via
-     * .find(x=>x && x.__meta) if defineProperty isn't preserved by JSON.
-     * Actually JSON drops _meta AND fake elements. So we send meta as a
-     * sibling by wrapping. But that breaks old callers.
-     * Simplest: keep old contract (array of threads) and let the SPA
-     * infer has_more from (sliced.length === pageSize). */
-    return sliced;
-  }
-  return out;
-}
-
 async function api_wb_chat_threads(token, opts) {
   const me = await authUser(token);
   const visible = new Set((await getVisibleUserIds(me)).map(Number));
@@ -2062,22 +2003,13 @@ async function api_wb_chat_threads(token, opts) {
   // are present as own properties for callers that ask for them.
   outThreads.unread_by_phone = unreadByPhone;
   outThreads.filter_phone_number_id = filterPhoneId;
-  /* WA_MOBILE_V1_2 (2026-07-12) — apply optional search + pagination */
-  return _wbApplyThreadFilters(outThreads, opts);
+  return outThreads;
 }
 
-async function api_wb_chat_messages(token, phone, opts) {
-  /* WA_MOBILE_V1_3 (2026-07-12) — message pagination. Backward compat:
-   * old callers pass (token, phone) with no opts and behave exactly as
-   * before (last 500 messages, ASC).
-   * New signature: opts = { before_ts, limit }
-   *   before_ts — ISO timestamp; return only messages with created_at < before_ts
-   *   limit     — cap; default 500 for legacy, 100 for paginated calls */
+async function api_wb_chat_messages(token, phone) {
   const me = await authUser(token);
   if (!phone) return [];
   const p = String(phone).replace(/\D/g, '');
-  const beforeTs = (opts && opts.before_ts) ? String(opts.before_ts) : null;
-  const limit    = Math.max(1, Math.min(1000, Number((opts && opts.limit) || 0))) || 500;
   // Reading a thread is permissive — any authenticated user can fetch
   // messages by phone (e.g. when opening a chat from the lead modal or
   // from the WhatsApp icon on the leads list). The threads-LIST is the
@@ -2089,31 +2021,18 @@ async function api_wb_chat_messages(token, phone, opts) {
    * with the actual sender's name. LEFT JOIN — messages sent from the
    * WA mobile app have user_id NULL and get no join match (renders as
    * '📱 Mobile' in the SPA). */
-  /* v1_3 — when before_ts is set, page BACKWARD: DESC by created_at,
-   * grab `limit` rows, then reverse to ASC before returning. */
-  const sqlArgs = [p];
-  let sqlWhere = '(w.from_number = $1 OR w.to_number = $1)';
-  let sqlOrder = 'ORDER BY w.created_at ASC';
-  let sqlLimit = 'LIMIT 500';
-  if (beforeTs) {
-    sqlArgs.push(beforeTs);
-    sqlWhere += ' AND w.created_at < $2';
-    sqlOrder = 'ORDER BY w.created_at DESC';
-    sqlLimit = 'LIMIT ' + limit;
-  }
-  const { rows: rawRows } = await db.query(
+  const { rows } = await db.query(
     `SELECT w.id, w.direction, w.body, w.message_type, w.media_url, w.media_id,
             w.status, w.reply_to, w.created_at, w.read_at, w.delivered_at,
             w.error_text, w.template_name, w.phone_number_id,
             w.user_id, u.name AS user_name
        FROM whatsapp_messages w
        LEFT JOIN users u ON u.id = w.user_id
-       WHERE ` + sqlWhere + `
-       ` + sqlOrder + `
-       ` + sqlLimit,
-    sqlArgs
+       WHERE w.from_number = $1 OR w.to_number = $1
+       ORDER BY w.created_at ASC
+       LIMIT 500`,
+    [p]
   );
-  const rows = beforeTs ? rawRows.slice().reverse() : rawRows;
   // Mark inbound messages as read
   try {
     await db.query(
