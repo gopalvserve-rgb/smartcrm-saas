@@ -1611,6 +1611,45 @@
       try { await loadThreads(); } catch (_) {}
       // Re-render pills row now that users + phones are in
       try { renderThreads(); } catch (_) {}
+      /* WA_REPORT_CHAT_OPEN_v1 (2026-07-10) — the WhatsApp Report Chat button
+       * sets window._wbPendingOpen (and mirrors to sessionStorage) then hard-
+       * navigates here. Classic wbChat honoured this; v2 was ignoring it, so
+       * the target thread never auto-selected. Consume it once now. */
+      try {
+        var pend = window._wbPendingOpen;
+        if (!pend) {
+          try {
+            var raw = sessionStorage.getItem('wbPendingOpen');
+            if (raw) pend = JSON.parse(raw);
+          } catch (_) {}
+        }
+        if (pend && (pend.phone || pend.lead_id) && (!pend.ts || (Date.now() - pend.ts) < 60000)) {
+          var pDigits = String(pend.phone || '').replace(/\D/g, '');
+          var pLid = Number(pend.lead_id || 0);
+          var match = (S.threadsRaw || []).find(function (t) {
+            var td = String(t.phone || '').replace(/\D/g, '');
+            if (pDigits && td && (td === pDigits || td.slice(-10) === pDigits.slice(-10))) return true;
+            if (pLid && Number(t.lead_id) === pLid) return true;
+            return false;
+          });
+          if (match) { try { activateThread(match); } catch (_) {} }
+          else if (pend.phone) {
+            /* Not in threads list (rep never chatted before) — synthesize a
+             * stub thread so the composer opens on the number. */
+            try {
+              activateThread({
+                phone: pend.phone,
+                lead_id: pLid || null,
+                lead_name: '',
+                unread: 0
+              });
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      /* Always clear the pending hand-off so back-nav doesn't re-consume it. */
+      try { delete window._wbPendingOpen; } catch (_) { window._wbPendingOpen = null; }
+      try { sessionStorage.removeItem('wbPendingOpen'); } catch (_) {}
     }, 0);
     return root;
   }
