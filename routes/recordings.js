@@ -220,9 +220,24 @@ async function maybeAutoCreateLeadFromCall(me, opts) {
   // instead of having leads appear on their own.
   if (String(cfg.mode || 'auto').toLowerCase() !== 'auto') return null;
 
-  const isInbound  = direction === 'in'  || direction === 'missed';
-  const isOutbound = direction === 'out' || direction === 'outgoing';
-  if (!((isInbound && cfg.inbound) || (isOutbound && cfg.outbound))) return null;
+  // DIRECTION_SETS_v1 — one explicit list: which call types become leads.
+  // [] = none. This replaces the old inbound/outbound pair, which lumped MISSED in
+  // with INCOMING and gave no way to say "missed calls only".
+  let allowDirs = null;
+  try {
+    const pref = await require('./userCallPrefs').resolveCallPrefs(me.id);
+    if (Array.isArray(pref.autolead_directions)) allowDirs = pref.autolead_directions;
+  } catch (_) { allowDirs = null; }
+
+  const dir = (direction === 'outgoing') ? 'out' : direction;
+  if (allowDirs) {
+    if (allowDirs.indexOf(dir) < 0) return null;
+  } else {
+    // Fallback for a tenant whose prefs are unavailable.
+    const isInbound  = dir === 'in' || dir === 'missed';
+    const isOutbound = dir === 'out';
+    if (!((isInbound && cfg.inbound) || (isOutbound && cfg.outbound))) return null;
+  }
 
   // A missed call has no talk time, so the minimum-duration rule can't apply to it.
   const passesMinDur = (direction === 'missed') || duration >= (Number(cfg.minSec) || 0);

@@ -32,7 +32,13 @@ const BOOL_COLS = [
   'autosync_on_open'     // sync the phone call log on every app open
 ];
 const INT_COLS  = ['autolead_min_seconds', 'autolead_status_id'];
-const TEXT_COLS = ['autolead_mode', 'autolead_on_duplicate', 'sim_slots'];
+// DIRECTION_SETS_v1 (2026-07-12) — the two settings people actually think in:
+//   sync_directions     — which calls appear in Call Activity
+//   autolead_directions — which calls become leads
+// Each is a CSV subset of 'in','missed','out'. '' (empty string) = NONE, and that
+// is a REAL value, distinct from NULL (= inherit the company default).
+const TEXT_COLS = ['autolead_mode', 'autolead_on_duplicate', 'sim_slots',
+                   'sync_directions', 'autolead_directions'];
 const ALL_COLS  = BOOL_COLS.concat(INT_COLS, TEXT_COLS);
 
 let _ready = false;
@@ -53,16 +59,37 @@ async function _ensure() {
          autolead_on_duplicate TEXT,
          autosync_on_open      INTEGER,
          sim_slots             TEXT,
+         sync_directions       TEXT,
+         autolead_directions   TEXT,
          updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
        )`
     );
   } catch (e) { /* best-effort; a concurrent boot may have created it */ }
+  // DIRECTION_SETS_v1 — added after the table shipped, so ALTER it in.
+  try {
+    await db.query(`ALTER TABLE user_call_prefs
+      ADD COLUMN IF NOT EXISTS sync_directions     TEXT,
+      ADD COLUMN IF NOT EXISTS autolead_directions TEXT`);
+  } catch (e) { /* best-effort */ }
   _ready = true;
+}
+
+/** Normalise a CSV / array of directions to a clean sorted array of in|missed|out. */
+function _dirs(v) {
+  if (v === null || v === undefined) return null;          // null = inherit
+  const raw = Array.isArray(v) ? v : String(v).split(',');
+  const ok  = ['in', 'missed', 'out'];
+  const out = [];
+  raw.forEach(x => {
+    const k = String(x || '').trim().toLowerCase();
+    if (ok.indexOf(k) >= 0 && out.indexOf(k) < 0) out.push(k);
+  });
+  return out;                                              // [] = explicitly NONE
 }
 
 /** The company-wide defaults (tenant config), with safe fallbacks. */
 async function _companyDefaults() {
-  const [syncLO, actLO, capLO, mode, inb, outb, minS, stId, dup, autoSync] = await Promise.all([
+  const [syncLO, actLO, capLO, mode, inb, outb, minS, stId, dup, autoSync, syncDirs, alDirs] = await Promise.all([
     db.getConfig('CALLS_SYNC_LEAD_ONLY',      '0'),
     db.getConfig('CALL_ACTIVITY_LEAD_ONLY',   '0'),
     db.getConfig('CALL_CAPTURE_LEAD_ONLY',    '0'),
@@ -72,7 +99,9 @@ async function _companyDefaults() {
     db.getConfig('CALLS_AUTOLEAD_MIN_SECONDS','5'),
     db.getConfig('CALLS_AUTOLEAD_STATUS_ID',  '0'),
     db.getConfig('CALLS_AUTOLEAD_ON_DUPLICATE','attach'),
-    db.getConfig('CALLS_AUTOSYNC_ON_OPEN',    '1')
+    db.getConfig('CALLS_AUTOSYNC_ON_OPEN',    '1'),
+    db.getConfig('CALLS_SYNC_DIRECTIONS',     'in,missed,out'),
+    db.getConfig('CALLS_AUTOLEAD_DIRECTIONS', null)
   ]);
   // CONFIG_EMPTYSTRING_TRAP — a config row can be '' (not just missing), and
   // String('' || 'x') === 'x' would silently flip the meaning. Compare explicitly.
@@ -93,7 +122,18 @@ async function _companyDefaults() {
     autolead_status_id:    n(stId,   0),
     autolead_on_duplicate: t(dup,    'attach'),
     autosync_on_open:      b(autoSync, true),
-    sim_slots:             ''     // no company-wide SIM default: it's per phone
+    sim_slots:             '',    // no company-wide SIM default: it's per phone
+
+    // DIRECTION_SETS_v1. Default: save everything, create nothing.
+    sync_directions: (syncDirs === null || syncDirs === undefined)
+      ? ['in', 'missed', 'out']
+      : _dirs(syncDirs),
+    // Legacy bridge: if the company never set CALLS_AUTOLEAD_DIRECTIONS, derive it
+    // from the old inbound/outbound flags so nobody's existing behaviour changes.
+    autolead_directions: (alDirs === null || alDirs === undefined)
+      ? [].concat(b(inb, false) ? ['in', 'missed'] : [])
+           .concat(b(outb, false) ? ['out'] : [])
+      : _dirs(alDirs)
   };
 }
 
@@ -140,6 +180,21 @@ async function resolveCallPrefs(userId) {
   TEXT_COLS.forEach(k => { if (mine[k] !== null && mine[k] !== undefined && mine[k] !== '') out[k] = String(mine[k]); });
   // sim_slots '' legitimately means "all SIMs", so honour an explicit empty string.
   if (mine.sim_slots !== null && mine.sim_slots !== undefined) out.sim_slots = String(mine.sim_slots);
+
+  // DIRECTION_SETS_v1 — an empty string is an explicit "NONE" and must beat the
+  // company default. Only NULL means "inherit".
+  if (mine.sync_directions !== null && mine.sync_directions !== undefined) {
+    out.sync_directions = _dirs(mine.sync_directions);
+  }
+  if (mine.autolead_directions !== null && mine.autolead_directions !== undefined) {
+    out.autolead_directions = _dirs(mine.autolead_directions);
+  } else if (mine.autolead_inbound !== null && mine.autolead_inbound !== undefined ||
+             mine.autolead_outbound !== null && mine.autolead_outbound !== undefined) {
+    // Legacy per-user flags, set before this screen existed.
+    out.autolead_directions = []
+      .concat(Number(mine.autolead_inbound)  === 1 ? ['in', 'missed'] : [])
+      .concat(Number(mine.autolead_outbound) === 1 ? ['out'] : []);
+  }
   return out;
 }
 
@@ -181,6 +236,10 @@ async function api_userCallPrefs_save(token, payload) {
     if (v === null || v === undefined || v === '__inherit__') { v = null; }
     else if (BOOL_COLS.indexOf(k) >= 0) v = (v === true || v === 1 || v === '1') ? 1 : 0;
     else if (INT_COLS.indexOf(k) >= 0)  v = Number(v) || 0;
+    else if (k === 'sync_directions' || k === 'autolead_directions') {
+      // Array or CSV in; clean CSV out. '' is stored and MEANS "none" — not "inherit".
+      v = (_dirs(v) || []).join(',');
+    }
     else v = String(v);
     cols.push(k); vals.push(v);
   });

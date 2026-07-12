@@ -55,9 +55,13 @@ async function api_call_logSyncBatch(token, payload) {
   // rep's own choice, falling back to the company default if they haven't set one.
   // Default OFF → sync every call (TeleCRM "Work" behaviour).
   let leadOnlyCfg = false;
+  // DIRECTION_SETS_v1 — which call types this rep wants in Call Activity.
+  // [] means NONE (save nothing); the default is everything.
+  let syncDirs = ['in', 'missed', 'out'];
   try {
     const pref = await require('./userCallPrefs').resolveCallPrefs(me.id);
     leadOnlyCfg = !!pref.sync_lead_only;
+    if (Array.isArray(pref.sync_directions)) syncDirs = pref.sync_directions;
   } catch (e) {
     leadOnlyCfg = String(await db.getConfig('CALLS_SYNC_LEAD_ONLY', '0')) === '1';
   }
@@ -88,6 +92,9 @@ async function api_call_logSyncBatch(token, payload) {
     // A live row's created_at is ~the call END. CallLog gives START, so END =
     // START + DURATION. Used to line a CallLog row up with its broken live twin.
     const endIso   = new Date(startMs + duration * 1000).toISOString();
+
+    // DIRECTION_SETS_v1 — the rep unticked this call type, so it never enters the CRM.
+    if (syncDirs.indexOf(direction) < 0) { skipped++; continue; }
 
     let lead = null;
     try { lead = await _findLeadByPhone(phone); } catch (_) { lead = null; }
