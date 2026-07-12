@@ -445,7 +445,15 @@
     if (loadMoreOpts && loadMoreOpts.page) opts.page = loadMoreOpts.page;
     return api('api_wb_chat_threads', opts)
       .then(function (list) {
-        S.threads = Array.isArray(list) ? list : [];
+        /* v1_3 — track hasMore for Load More button. */
+        var incoming = Array.isArray(list) ? list : [];
+        var isPageAppend = !!(loadMoreOpts && loadMoreOpts.page && loadMoreOpts.page > 1);
+        if (isPageAppend) {
+          S.threads = (S.threads || []).concat(incoming);
+        } else {
+          S.threads = incoming;
+        }
+        S.hasMore = incoming.length === (S.pageSize || 50);
         S.threads.sort(function (a, b) {
           var ta = new Date(a.last_msg_at || 0).getTime();
           var tb = new Date(b.last_msg_at || 0).getTime();
