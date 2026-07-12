@@ -570,13 +570,14 @@
    * ============================================================= */
   function renderList() {
     var stats = computeStats();
+    /* v2_0 — compact stat tiles */
     var stat = function (num, label, color) {
       return h('div', { style: {
-        background:'rgba(255,255,255,0.08)', borderRadius:'10px',
-        padding:'8px 10px', flex:'1', textAlign:'center'
+        background:'rgba(255,255,255,0.08)', borderRadius:'8px',
+        padding:'5px 6px', flex:'1', textAlign:'center'
       }},
-        h('div', { style: { color: color, fontSize:'18px', fontWeight:'700', lineHeight:'1' } }, String(num || 0)),
-        h('div', { style: { color: C.textDarkMeta, fontSize:'10px', marginTop:'2px', fontWeight:'500' } }, label)
+        h('div', { style: { color: color, fontSize:'15px', fontWeight:'700', lineHeight:'1' } }, String(num || 0)),
+        h('div', { style: { color: C.textDarkMeta, fontSize:'9px', marginTop:'1px', fontWeight:'500' } }, label)
       );
     };
     var chip = function (id, label) {
@@ -595,19 +596,19 @@
       }, label);
     };
     var stripHeader = h('div', { style: {
-      background: C.headerDark, padding: '14px 16px 12px', flexShrink: '0'
+      background: C.headerDark, padding: '8px 12px 10px', flexShrink: '0'
     }},
       h('div', { style: {
         display:'flex', alignItems:'center', justifyContent:'space-between',
-        marginBottom:'12px'
+        marginBottom:'6px'
       }},
         h('div', { style: { display:'flex', alignItems:'center', gap:'8px' }},
-          /* v1_9 — bigger, more obvious WhatsApp logo */
+          /* v2_0 — compact logo */
           h('div', { style: {
-            width:'40px', height:'40px', background:C.green, borderRadius:'10px',
+            width:'32px', height:'32px', background:C.green, borderRadius:'8px',
             display:'flex', alignItems:'center', justifyContent:'center',
-            boxShadow:'0 2px 6px rgba(37,211,102,0.35)'
-          }}, ICON.waLogo('white', 24)),
+            boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
+          }}, ICON.waLogo('white', 18)),
           h('div', null,
             h('div', { style: { color:'#fff', fontSize:'16px', fontWeight:'700', lineHeight:'1.1', display:'flex', alignItems:'center', gap:'6px' } },
               'SmartCRM',
@@ -615,29 +616,13 @@
               h('span', { style: {
                 fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
                 color: C.green, padding:'2px 6px', borderRadius:'4px'
-              }}, 'v1.9')
+              }}, 'v2.0')
             ),
             h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
           )
         ),
-        /* v1_6 — replaced tiny icon buttons with a BIG obvious Full View pill */
-        h('button', {
-          style: {
-            background: S.fullscreen ? '#DC2626' : C.green,
-            color: '#fff', border:'none', borderRadius:'20px',
-            padding:'8px 14px', fontSize:'13px', fontWeight:'700',
-            cursor:'pointer', display:'flex', alignItems:'center', gap:'6px',
-            boxShadow:'0 2px 8px rgba(0,0,0,0.25)'
-          },
-          onclick: function () {
-            S.fullscreen = !S.fullscreen;
-            try {
-              if (S.fullscreen) document.body.classList.add('wa-mobile-fullscreen');
-              else document.body.classList.remove('wa-mobile-fullscreen');
-            } catch (_) {}
-            rerender();
-          }
-        }, S.fullscreen ? '⤢ Exit Full View' : '🖥 FULL VIEW')
+        /* v2_0 — FULL VIEW button removed per user request */
+        null
       ),
       h('div', { style: { display:'flex', gap:'8px' }},
         stat(stats.unread,   'Unread',   C.green),
@@ -649,9 +634,9 @@
       (function () {
         var searchWrap = h('div', {
           style: {
-            marginTop:'12px', display:'flex', alignItems:'center', gap:'8px',
-            background:'#fff', borderRadius:'12px', padding:'10px 12px',
-            border:'2px solid rgba(255,255,255,0.35)'
+            marginTop:'6px', display:'flex', alignItems:'center', gap:'6px',
+            background:'#fff', borderRadius:'10px', padding:'6px 10px',
+            border:'1px solid rgba(255,255,255,0.35)'
           }
         });
         searchWrap.appendChild(h('span', { style: { fontSize:'16px', flexShrink:'0' }}, '🔍'));
@@ -662,7 +647,7 @@
           /* Explicit dark-on-white for guaranteed visibility */
           style: {
             flex:'1', border:'none', outline:'none', background:'transparent',
-            fontSize:'16px', color:'#111827', minWidth:'0', padding:'2px 0'
+            fontSize:'14px', color:'#111827', minWidth:'0', padding:'1px 0'
           },
           oninput: function (e) {
             S.search = e.target.value;
@@ -2208,32 +2193,8 @@ api('api_leads_update', lid, { status_id: opt.id })
     else if (S.overlay === 'remarks')  wrap.appendChild(overlayRemarks());
 
     S.view.replaceChildren(wrap);
-    /* v1_8 — floating always-visible EXIT button when fullscreen is on.
-     * Attached to body (not view) with z-index 100000 so it survives no
-     * matter what happens with layout. Impossible to get stuck. */
-    try {
-      var oldExitBtn = document.getElementById('wbv2m-force-exit-fs');
-      if (oldExitBtn) oldExitBtn.remove();
-      if (S.fullscreen) {
-        var forceExit = document.createElement('button');
-        forceExit.id = 'wbv2m-force-exit-fs';
-        forceExit.textContent = '✕ Exit Full View';
-        forceExit.style.cssText = [
-          'position:fixed', 'top:10px', 'right:10px', 'z-index:100000',
-          'background:#DC2626', 'color:#fff', 'border:none',
-          'padding:10px 14px', 'border-radius:22px', 'font-size:13px',
-          'font-weight:700', 'cursor:pointer', 'box-shadow:0 4px 12px rgba(0,0,0,0.4)',
-          'font-family:-apple-system,BlinkMacSystemFont,sans-serif'
-        ].join(';');
-        forceExit.onclick = function () {
-          S.fullscreen = false;
-          try { document.body.classList.remove('wa-mobile-fullscreen'); } catch (_) {}
-          try { forceExit.remove(); } catch (_) {}
-          rerender();
-        };
-        document.body.appendChild(forceExit);
-      }
-    } catch (_) {}
+    /* v2_0 — force-exit button removed with FULL VIEW feature */
+    try { var oldBtn = document.getElementById('wbv2m-force-exit-fs'); if (oldBtn) oldBtn.remove(); } catch (_) {}
   }
 
   /* =============================================================
