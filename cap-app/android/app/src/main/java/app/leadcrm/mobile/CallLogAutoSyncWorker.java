@@ -61,10 +61,23 @@ public class CallLogAutoSyncWorker extends Worker {
         }
 
         long now = System.currentTimeMillis();
-        long lastSince = prefs.getLong("calllog_autosync_since", 0);
-        long since = (lastSince > 0) ? (lastSince - 15L * 60 * 1000) : (now - 24L * 60 * 60 * 1000);
-        long minSince = now - 7L * 24 * 60 * 60 * 1000;   // never look back more than 7 days
-        if (since < minSince) since = minSince;
+        // CALLLOG_REPAIR_v1 (2026-07-12) — the very first run after upgrading does a
+        // ONE-TIME deep pass over the last 7 days. The server side (callLogSync.js)
+        // repairs broken live rows in place: blank-number "-" rows and phantom
+        // 0-second "Outgoing" rows that were really incoming/missed calls. After that
+        // single pass we drop back to the cheap hourly incremental window, so this
+        // costs one heavy sync per device, not one per hour.
+        boolean repairDone = prefs.getBoolean("calllog_repair_v1_done", false);
+        long since;
+        if (!repairDone) {
+            since = now - 7L * 24 * 60 * 60 * 1000;
+            Log.i(TAG, "one-time repair pass: scanning last 7 days");
+        } else {
+            long lastSince = prefs.getLong("calllog_autosync_since", 0);
+            since = (lastSince > 0) ? (lastSince - 15L * 60 * 1000) : (now - 24L * 60 * 60 * 1000);
+            long minSince = now - 7L * 24 * 60 * 60 * 1000;   // never look back more than 7 days
+            if (since < minSince) since = minSince;
+        }
 
         JSONArray rows;
         try {
@@ -74,7 +87,8 @@ public class CallLogAutoSyncWorker extends Worker {
             return Result.success();
         }
         if (rows.length() == 0) {
-            prefs.edit().putLong("calllog_autosync_since", now).apply();
+            prefs.edit().putLong("calllog_autosync_since", now)
+                        .putBoolean("calllog_repair_v1_done", true).apply();
             Log.i(TAG, "no new calls in window");
             return Result.success();
         }
@@ -109,8 +123,10 @@ public class CallLogAutoSyncWorker extends Worker {
             conn.disconnect();
 
             if (code >= 200 && code < 300) {
-                prefs.edit().putLong("calllog_autosync_since", now).apply();
-                Log.i(TAG, "synced " + rows.length() + " call(s), http " + code);
+                prefs.edit().putLong("calllog_autosync_since", now)
+                            .putBoolean("calllog_repair_v1_done", true).apply();
+                Log.i(TAG, "synced " + rows.length() + " call(s), http " + code
+                           + (repairDone ? "" : " [one-time repair pass]"));
                 return Result.success();
             }
             Log.w(TAG, "server http " + code + " — will retry");

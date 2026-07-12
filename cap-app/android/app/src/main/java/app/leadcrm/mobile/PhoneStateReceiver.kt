@@ -71,6 +71,9 @@ class PhoneStateReceiver : BroadcastReceiver() {
         private const val LASTNUM_TTL_MS = 30_000L
         private var ringStartMs: Long = 0
         private var offhookStartMs: Long = 0
+        // CALL_DIRECTION_TRUTH_v1: DATE of the last CallLog row we already
+        // reported, so a replayed burst of queued broadcasts can't double-post.
+        private var lastReportedLogDate: Long = 0L
     }
 
     override fun onReceive(ctx: Context, intent: Intent) {
@@ -212,36 +215,67 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 }
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
-                // Call has ended — the call log entry is now (or about to be)
-                // written. Give it ~700 ms then re-resolve if we still
-                // don't have a number.
-                if (lastState == TelephonyManager.EXTRA_STATE_RINGING) {
-                    // RINGING → IDLE without OFFHOOK = missed call
-                    val n0 = lastNumber
-                    fireWithDelayedLookup(ctx, n0, now) { resolved ->
-                        val finalNumber = if (resolved.isNotEmpty()) resolved else n0
-                        Log.i(TAG, "MISSED call from $finalNumber → fire call_ended (missed)")
-                        safeCapacitor { CallerIdPlugin.instance?.emitEnded(finalNumber, 0, missed = true) }
-                        sendCallEvent(ctx, "call_ended", finalNumber, missed = true, durationSec = 0)
-                        postNativeAsync(ctx, "call_ended", finalNumber, direction = "missed", missed = true, durationSec = 0)
-                        // REC_AUTOSYNC_KILL_v1 — disabled post-call recording auto-sync per user request
-                        // enqueueRecordingBgSync(ctx, "post-missed-call")
-                    }
-                } else if (lastState == TelephonyManager.EXTRA_STATE_OFFHOOK) {
-                    val dur = (now - offhookStartMs) / 1000
-                    val n0 = lastNumber
+                // CALL_DIRECTION_TRUTH_v1 (2026-07-12)
+                // ------------------------------------
+                // The call has ended, so CallLog.Calls now holds the truth for it:
+                // NUMBER, TYPE (1=in 2=out 3=missed 5=rejected) and DURATION.
+                // We take all three from there.
+                //
+                // Why: direction used to be inferred from the in-memory flag
+                // `ringStartMs > 0`, defaulting to "out". That flag is cleared on
+                // every IDLE and is lost whenever the OEM battery optimiser freezes
+                // the receiver (an 82-second broadcast delay was measured on a real
+                // device). Any stray OFFHOOK/IDLE pair -- a rejected call, the dialer
+                // opening, a replayed burst of queued broadcasts -- therefore
+                // manufactured a phantom 0-second OUTGOING row for what was really an
+                // incoming or missed call. CallLog cannot lie about direction; the
+                // in-memory flag can.
+                val wasRinging = lastState == TelephonyManager.EXTRA_STATE_RINGING
+                val wasOffhook = lastState == TelephonyManager.EXTRA_STATE_OFFHOOK
+                if (wasRinging || wasOffhook) {
+                    val n0           = lastNumber
                     val ringHappened = ringStartMs > 0
-                    fireWithDelayedLookup(ctx, n0, now) { resolved ->
-                        val finalNumber = if (resolved.isNotEmpty()) resolved else n0
-                        Log.i(TAG, "ENDED call with $finalNumber after ${dur}s → fire call_ended")
-                        safeCapacitor { CallerIdPlugin.instance?.emitEnded(finalNumber, dur, missed = false) }
-                        sendCallEvent(ctx, "call_ended", finalNumber, missed = false, durationSec = dur)
-                        // Direction: if we saw RINGING before OFFHOOK it was inbound.
-                        // Otherwise the call started via OFFHOOK directly — outbound.
-                        val dir = if (ringHappened) "in" else "out"
-                        postNativeAsync(ctx, "call_ended", finalNumber, direction = dir, missed = false, durationSec = dur)
-                        // REC_AUTOSYNC_KILL_v1 — disabled post-call recording auto-sync per user request
-                        // enqueueRecordingBgSync(ctx, "post-ended-call")
+                    val fallbackDur  = if (wasOffhook) (now - offhookStartMs) / 1000 else 0L
+                    resolveFromCallLog(ctx, now) { entry ->
+                        if (entry != null && entry.dateMs > 0L && entry.dateMs == lastReportedLogDate) {
+                            Log.i(TAG, "CallLog entry ${entry.dateMs} already reported - suppressing duplicate")
+                        } else {
+                            var dir = if (entry != null) typeToDirection(entry.type) else ""
+                            var dur = entry?.durationS ?: fallbackDur
+                            val finalNumber =
+                                if (entry != null && entry.number.isNotEmpty()) entry.number else n0
+                            var emit = true
+
+                            if (dir.isEmpty()) {
+                                // CallLog gave us nothing usable. Fall back to the old
+                                // in-memory inference -- but NEVER invent an outgoing
+                                // call out of a 0-second OFFHOOK blip with no number.
+                                // That was the phantom-row bug.
+                                dur = fallbackDur
+                                when {
+                                    wasRinging   -> dir = "missed"
+                                    ringHappened -> dir = "in"
+                                    finalNumber.isEmpty() && fallbackDur <= 1L -> {
+                                        Log.w(TAG, "IDLE: no CallLog match, no number, 0s - suppressing phantom event")
+                                        emit = false
+                                    }
+                                    else -> dir = "out"
+                                }
+                            }
+
+                            if (emit) {
+                                val missed = dir == "missed"
+                                if (missed) dur = 0L
+                                if (entry != null && entry.dateMs > 0L) lastReportedLogDate = entry.dateMs
+
+                                Log.i(TAG, "CALL END -> dir=$dir num=$finalNumber dur=${dur}s (callLogType=${entry?.type ?: -1})")
+                                safeCapacitor { CallerIdPlugin.instance?.emitEnded(finalNumber, dur, missed = missed) }
+                                sendCallEvent(ctx, "call_ended", finalNumber, missed = missed, durationSec = dur)
+                                postNativeAsync(ctx, "call_ended", finalNumber, direction = dir, missed = missed, durationSec = dur)
+                                // REC_AUTOSYNC_KILL_v1 -- post-call recording auto-sync stays DISABLED.
+                                // enqueueRecordingBgSync(ctx, "post-call")
+                            }
+                        }
                     }
                 }
                 ringStartMs = 0
@@ -263,46 +297,88 @@ class PhoneStateReceiver : BroadcastReceiver() {
         lastState = state
     }
 
+    /** One row of CallLog.Calls -- the authoritative record of a finished call. */
+    private data class LogEntry(
+        val number: String,
+        val type: Int,
+        val durationS: Long,
+        val dateMs: Long
+    )
+
+    /** CallLog.Calls.TYPE -> CRM direction. "" when the type is one we don't map
+     *  (voicemail, blocked, answered-externally...) so the caller can decide. */
+    private fun typeToDirection(type: Int): String = when (type) {
+        1 -> "in"        // INCOMING_TYPE
+        2 -> "out"       // OUTGOING_TYPE
+        3 -> "missed"    // MISSED_TYPE
+        5 -> "missed"    // REJECTED_TYPE
+        else -> ""
+    }
+
     /**
-     * Helper: if we already have a non-empty number, fire the callback
-     * immediately. Otherwise wait ~700 ms (so Android can flush the
-     * call log entry) on a worker thread, then query CallLog and
-     * invoke the callback with whatever we found.
+     * CALL_DIRECTION_TRUTH_v1 -- resolve the call that just ended from CallLog.
+     *
+     * Replaces fireWithDelayedLookup(), which only ever fetched the NUMBER and
+     * left direction/duration to be guessed from volatile in-memory state.
+     *
+     * The row isn't written until the call ends and some OEMs are slow to flush
+     * it, so we retry with backoff (~11s total) before giving up. Runs on a
+     * worker thread; the callback gets the entry, or null if nothing landed.
      */
-    private fun fireWithDelayedLookup(
-        ctx: Context,
-        existingNumber: String,
-        eventTimeMs: Long,
-        cb: (String) -> Unit
-    ) {
-        if (existingNumber.isNotEmpty()) {
-            cb(existingNumber)
-            return
-        }
+    private fun resolveFromCallLog(ctx: Context, eventTimeMs: Long, cb: (LogEntry?) -> Unit) {
         Thread {
-            // CALL_NUMBER_FIX_v1 (2026-07-12) — two bugs fixed here:
-            //  (1) The old window was `eventTimeMs - 30_000`, where eventTimeMs is the
-            //      call END. But CallLog.Calls.DATE is the call START, so ANY call
-            //      longer than 30s was excluded by its own WHERE clause and the number
-            //      came back empty. We now look back far enough to cover any realistic
-            //      call; ORDER BY DATE DESC LIMIT 1 still picks the call that just ended.
-            //  (2) A single 700ms attempt gave up before slow OEMs had flushed the row.
-            //      We now retry with backoff (~11s total).
             val backoff = longArrayOf(700L, 1_500L, 3_000L, 6_000L)
-            var n = ""
+            var entry: LogEntry? = null
             for (waitMs in backoff) {
                 try { Thread.sleep(waitMs) } catch (_: Throwable) {}
-                n = readLastCallLogNumber(ctx, sinceMs = eventTimeMs - 21_600_000L)
-                if (n.isNotEmpty()) break
+                // Look back far enough to cover any realistic call. CallLog.DATE is
+                // the call START while eventTimeMs is the call END, so a narrow
+                // window would exclude long calls by its own WHERE clause -- that was
+                // the original blank-number bug. ORDER BY DATE DESC LIMIT 1 still
+                // picks the call that just ended.
+                entry = readLastCallLogEntry(ctx, sinceMs = eventTimeMs - 21_600_000L)
+                if (entry != null && entry.number.isNotEmpty()) break
             }
-            if (n.isNotEmpty()) {
-                Log.i(TAG, "CallLog fallback resolved number: $n")
-                lastNumber = n
-            } else {
-                Log.w(TAG, "CallLog fallback found no entry after retries — phone will be empty")
-            }
-            cb(n)
+            if (entry == null) Log.w(TAG, "CallLog: no entry after retries - falling back to in-memory state")
+            cb(entry)
         }.start()
+    }
+
+    /** Read NUMBER + TYPE + DURATION + DATE of the newest CallLog row >= sinceMs. */
+    private fun readLastCallLogEntry(ctx: Context, sinceMs: Long): LogEntry? {
+        return try {
+            val proj = arrayOf(
+                CallLog.Calls.NUMBER,
+                CallLog.Calls.TYPE,
+                CallLog.Calls.DURATION,
+                CallLog.Calls.DATE
+            )
+            val sel   = "${CallLog.Calls.DATE} >= ?"
+            val args  = arrayOf(sinceMs.toString())
+            val order = "${CallLog.Calls.DATE} DESC LIMIT 1"
+            ctx.contentResolver.query(
+                CallLog.Calls.CONTENT_URI, proj, sel, args, order
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val iN = c.getColumnIndex(CallLog.Calls.NUMBER)
+                    val iT = c.getColumnIndex(CallLog.Calls.TYPE)
+                    val iD = c.getColumnIndex(CallLog.Calls.DURATION)
+                    val iX = c.getColumnIndex(CallLog.Calls.DATE)
+                    LogEntry(
+                        number    = if (iN >= 0) (c.getString(iN) ?: "") else "",
+                        type      = if (iT >= 0) c.getInt(iT) else 0,
+                        durationS = if (iD >= 0) c.getLong(iD) else 0L,
+                        dateMs    = if (iX >= 0) c.getLong(iX) else 0L
+                    )
+                } else null
+            }
+        } catch (se: SecurityException) {
+            Log.w(TAG, "CallLog read denied - READ_CALL_LOG not granted: ${se.message}")
+            null
+        } catch (e: Throwable) {
+            Log.w(TAG, "CallLog read failed: ${e.message}")
+            null
+        }
     }
 
     /**
