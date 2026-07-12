@@ -51,9 +51,16 @@ async function api_call_logSyncBatch(token, payload) {
   const rows = Array.isArray(p.rows) ? p.rows : [];
   await _ensureCols();
 
-  // Default OFF → sync every call (TeleCRM "Work" behaviour). Set
-  // CALLS_SYNC_LEAD_ONLY='1' to keep only calls that match a lead.
-  const leadOnlyCfg = String(await db.getConfig('CALLS_SYNC_LEAD_ONLY', '0')) === '1';
+  // USER_CALL_PREFS_v1 (2026-07-12) — PER USER, not per company. Resolves this
+  // rep's own choice, falling back to the company default if they haven't set one.
+  // Default OFF → sync every call (TeleCRM "Work" behaviour).
+  let leadOnlyCfg = false;
+  try {
+    const pref = await require('./userCallPrefs').resolveCallPrefs(me.id);
+    leadOnlyCfg = !!pref.sync_lead_only;
+  } catch (e) {
+    leadOnlyCfg = String(await db.getConfig('CALLS_SYNC_LEAD_ONLY', '0')) === '1';
+  }
   const leadOnly = (typeof p.leadOnly === 'boolean') ? p.leadOnly : leadOnlyCfg;
 
   const W  = 90;   // de-dup window, seconds

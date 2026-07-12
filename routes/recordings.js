@@ -26,7 +26,31 @@ const { authUser } = require('../utils/auth');
  * The SPA on first load also heals NULL → '0' (see
  * adminMobileApp() in public/tenant/app.js).
  */
-async function _getAutoleadCfg() {
+/**
+ * USER_CALL_PREFS_v1 (2026-07-12) — this is now PER USER.
+ *
+ * Pass the acting user's id and you get THEIR settings, falling back to the
+ * company default for anything they haven't personally chosen. Call it with no
+ * id and you get the company default only (kept for any legacy caller).
+ *
+ * Each rep has their own phone and their own way of working, so "auto-create a
+ * lead from an unknown caller" can't sensibly be one switch for the whole
+ * company — which is what it used to be.
+ */
+async function _getAutoleadCfg(userId) {
+  if (userId) {
+    try {
+      const pref = await require('./userCallPrefs').resolveCallPrefs(Number(userId));
+      return {
+        inbound:   !!pref.autolead_inbound,
+        outbound:  !!pref.autolead_outbound,
+        minSec:    Number(pref.autolead_min_seconds) || 0,
+        statusId:  Number(pref.autolead_status_id)   || 0,
+        duplicate: String(pref.autolead_on_duplicate || 'attach'),
+        mode:      String(pref.autolead_mode || 'auto')
+      };
+    } catch (e) { /* fall through to the company default below */ }
+  }
   const [inb, out, min, stId, dup] = await Promise.all([
     db.getConfig('CALLS_AUTOLEAD_INBOUND',     '0'),
     db.getConfig('CALLS_AUTOLEAD_OUTBOUND',    '0'),
@@ -39,7 +63,8 @@ async function _getAutoleadCfg() {
     outbound:  String(out) === '1',
     minSec:    Number(min)  || 0,
     statusId:  Number(stId) || 0,
-    duplicate: String(dup || 'attach')
+    duplicate: String(dup || 'attach'),
+    mode:      'auto'
   };
 }
 
@@ -390,7 +415,7 @@ async function api_call_lookup(token, phone) {
     try {
       // CALL_LEAD_DEFAULT_OFF_v1 — go through the shared helper so all
       // three call → lead paths agree. Defaults to OFF when DB is NULL.
-      const cfg = await _getAutoleadCfg();
+      const cfg = await _getAutoleadCfg(me.id);   // USER_CALL_PREFS_v1 — this rep's settings
       // We don't know the call direction at lookup time (this is fired on ring),
       // so 'will auto-create' = either inbound OR outbound is enabled.
       willAutoCreate = cfg.inbound || cfg.outbound;
@@ -494,7 +519,7 @@ async function api_call_handleEnded(token, payload) {
   // The mobile app sends direction = 'in' | 'out' | 'missed'. We treat
   // 'missed' as inbound for the YES/NO setting so YES catches missed too.
   // CALL_LEAD_DEFAULT_OFF_v1 — single source of truth + fail-safe defaults.
-  const _alCfg = await _getAutoleadCfg();
+  const _alCfg = await _getAutoleadCfg(me.id);   // USER_CALL_PREFS_v1 — this rep's settings
   const cfgMin = _alCfg.minSec;
 
   const isInbound  = direction === 'in' || direction === 'missed';
