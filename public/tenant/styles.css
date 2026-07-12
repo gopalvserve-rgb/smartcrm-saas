@@ -4322,3 +4322,40 @@ body.focus-mode table.leads-tbl {
 .lead-card .lc-assigned-date {
   font-size: .74rem; color: #64748b; text-decoration: underline; white-space: nowrap;
 }
+
+
+/* TOPBAR_MOBILE_v1 (2026-07-12) — mobile topbar UX: horizontal scroll,
+ * smaller chips, prominent green WhatsApp chip as first item. */
+@media (max-width: 780px) {
+  .topbar-right {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    max-width: calc(100vw - 80px);
+    padding-bottom: 2px;
+  }
+  .topbar-right::-webkit-scrollbar { display: none; height: 0; }
+  .topbar-right > * {
+    flex-shrink: 0 !important;
+  }
+  /* Shrink chips */
+  .topbar-chip { padding: .25rem .5rem !important; font-size: .78rem !important; }
+  .topbar-chip .nav-count { padding: 1px 5px !important; font-size: .62rem !important; min-width: 14px !important; }
+  .topbar-right .btn { padding: .3rem .5rem !important; font-size: .8rem !important; min-height: 30px !important; }
+  /* Bring back the ⏰ + 📅 chips that were hidden — they fit on scroll */
+  .topbar-chip[href="#/duetoday"],
+  .topbar-chip[href="#/upcoming"] { display: inline-flex !important; }
+  /* WhatsApp first-chip stays green even when scrolling */
+  .topbar-wa-first { background: #25D366 !important; }
+}
+/* Fade edge to indicate more content on right */
+@media (max-width: 780px) {
+  .topbar { position: relative; }
+  .topbar::after {
+    content: ''; position: absolute; right: 0; top: 0; bottom: 0;
+    width: 24px; pointer-events: none;
+    background: linear-gradient(to right, rgba(255,255,255,0), var(--topbar-bg, #fff) 90%);
+  }
+}
