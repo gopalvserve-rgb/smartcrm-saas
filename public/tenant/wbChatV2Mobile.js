@@ -978,7 +978,16 @@
       placeholder: 'Type a message…',
       style: {
         flex:'1', background:'none', border:'none', outline:'none',
-        fontSize:'15px', color: C.textPri, minWidth:'0'
+        fontSize:'16px', color: C.textPri, minWidth:'0'
+      },
+      /* v1_4 — on focus, scroll the composer into view so the mobile keyboard
+       * doesn't cover it. Also fontSize:16px prevents iOS zoom-on-focus. */
+      onfocus: function (e) {
+        try {
+          setTimeout(function () {
+            e.target.scrollIntoView({ block: 'end', behavior: 'smooth' });
+          }, 300);
+        } catch (_) {}
       },
       oninput: function (e) {
         S.inputText = e.target.value;
@@ -1045,8 +1054,12 @@
     );
 
     return h('div', { style: {
-      background:'#fff', padding:'8px 10px', flexShrink:'0',
-      borderTop:'1px solid ' + C.listBg
+      background:'#fff', padding:'8px 10px 10px', flexShrink:'0',
+      /* v1_4 — safe-area padding so it clears iOS home indicator + Android nav bar */
+      paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0))',
+      borderTop:'1px solid ' + C.listBg,
+      /* Make sure it stays above absolute-positioned parents */
+      position:'relative', zIndex:'2'
     }}, quickRow, inputRow);
   }
 
@@ -1081,9 +1094,31 @@
       .then(function () { return loadMessages(t.phone); })
       .then(rerender)
       .catch(function (err) {
-        toast('Send failed: ' + (err.message || 'unknown'), 'err');
+        /* v1_4 — persistent, VERY visible error dialog with exact server msg. */
+        var errMsg = (err && err.message) || 'unknown';
+        try { console.error('[WA_MOBILE] send failed', err, 'payload:', primary); } catch (_) {}
+        /* Remove the optimistic bubble */
         S.messages = S.messages.filter(function (m) { return !m.__optimistic; });
+        /* Put text back into composer so user doesn't retype */
+        S.inputText = wasText;
         rerender();
+        /* Show a modal alert that requires acknowledgement */
+        try {
+          var backdrop = document.createElement('div');
+          backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+          var box = document.createElement('div');
+          box.style.cssText = 'background:#fff;border-radius:16px;padding:20px;max-width:340px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
+          box.innerHTML = '<div style="font-size:28px;text-align:center;margin-bottom:8px;">⚠️</div>' +
+            '<div style="font-weight:700;color:#B91C1C;font-size:16px;margin-bottom:10px;text-align:center;">Send failed</div>' +
+            '<div style="background:#FEF2F2;border:1px solid #FCA5A5;color:#7F1D1D;padding:10px;border-radius:8px;font-size:13px;margin-bottom:14px;word-break:break-word;">' +
+            (errMsg || 'unknown') + '</div>' +
+            '<div style="color:#6B7280;font-size:12px;margin-bottom:14px;">The message text is back in the composer so you can retry.</div>' +
+            '<button style="width:100%;padding:12px;background:#00A884;color:#fff;border:none;border-radius:10px;font-weight:600;font-size:15px;cursor:pointer;">OK</button>';
+          backdrop.appendChild(box);
+          box.querySelector('button').onclick = function () { try { backdrop.remove(); } catch (_) {} };
+          backdrop.onclick = function (e) { if (e.target === backdrop) backdrop.remove(); };
+          document.body.appendChild(backdrop);
+        } catch (_) { toast('Send failed: ' + errMsg, 'err'); }
       });
   }
 
@@ -1144,7 +1179,22 @@
             }
           } catch (_) {}
         }
-        })
+        }),
+        /* v1_4 — clear-search X button */
+        S.search ? h('button', {
+          style: {
+            background: 'rgba(255,255,255,0.20)', border:'none', color:'#fff',
+            width:'26px', height:'26px', borderRadius:'50%', cursor:'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:'14px', flexShrink:'0'
+          },
+          onclick: function () {
+            S.search = '';
+            S.dSearch = '';
+            S.page = 1;
+            loadThreads().then(rerender);
+          }
+        }, '✕') : null
       )
     );
 
@@ -1931,8 +1981,8 @@ api('api_leads_update', lid, { status_id: opt.id })
         background: active ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.28)',
         color:'#fff',
         border:'none',
-        borderRadius:'50%',
-        width:'34px', height:'34px',
+        borderRadius:'20px',
+        width:'auto', height:'34px', padding:'0 10px',
         display:'flex', alignItems:'center', justifyContent:'center',
         fontSize:'16px', cursor:'pointer',
         boxShadow:'0 2px 6px rgba(0,0,0,0.25)',
@@ -1946,7 +1996,9 @@ api('api_leads_update', lid, { status_id: opt.id })
         } catch (_) {}
         rerender();
       }
-    }, active ? '⤢' : '⛶');
+    },
+    /* v1_4 — bigger, clearer icon + label */
+    h('span', { style: { fontSize:'15px', lineHeight:'1' } }, active ? '⤢ Exit' : '⛶ Full'));
   }
 
   /* v1.1 — install fullscreen CSS once (idempotent). Hides SPA
@@ -2010,6 +2062,28 @@ api('api_leads_update', lid, { status_id: opt.id })
     else if (S.screen === 'timeline') screenNode = renderTimeline();
     else                              screenNode = renderList();
     wrap.appendChild(screenNode);
+
+    /* WA_MOBILE_V1_4 — floating pagination footer for list view */
+    if (S.screen === 'list' && S.hasMore) {
+      var pgBar = document.createElement('div');
+      pgBar.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#00A884;color:#fff;padding:12px 20px;border-radius:100px;box-shadow:0 4px 16px rgba(0,168,132,0.4);font-weight:600;font-size:13px;cursor:pointer;z-index:9997;display:flex;align-items:center;gap:8px;';
+      pgBar.innerHTML = '<span>Page ' + (S.page || 1) + '</span><span>→ Load next 50</span>';
+      pgBar.onclick = function () {
+        if (S.loadingMore) return;
+        S.loadingMore = true;
+        pgBar.innerHTML = '<span>Loading…</span>';
+        var nextPage = (S.page || 1) + 1;
+        loadThreads({ page: nextPage }).then(function () {
+          S.page = nextPage;
+          S.loadingMore = false;
+          rerender();
+        }).catch(function () {
+          S.loadingMore = false;
+          rerender();
+        });
+      };
+      wrap.appendChild(pgBar);
+    }
     /* v1.1 — floating fullscreen toggle in top-right corner. Hides
      * the SPA sidebar + topbar + FAB by adding class wa-mobile-fullscreen
      * on <body>. Small ⤢ / ⤡ button so it stays visible on every screen. */
@@ -2030,19 +2104,31 @@ api('api_leads_update', lid, { status_id: opt.id })
    * ============================================================= */
   function installPoller() {
     if (S.poller) return;
+    /* WA_MOBILE_V1_4 — silent poll: only rerender when count changes,
+     * never rerender if user is typing in the composer (prevents the
+     * "screen jumps every 5-10 sec" bug). Rerenders are also gated to
+     * not fire when an overlay is open (would close the sheet). */
     S.poller = setInterval(function () {
-      // pause when tab is off-screen or user is typing
       if (document.hidden) return;
+      /* Guard: don't disturb user while composing */
+      try {
+        var active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+      } catch (_) {}
+      if (S.overlay) return;                    /* don't close overlays */
+      if (S.loadingMore) return;                /* don't fight Load More */
+      var prevListLen = (S.threads || []).length;
+      var prevMsgLen = (S.messages || []).length;
       loadThreads().then(function () {
-        // refresh active thread messages if open
+        var newListLen = (S.threads || []).length;
         if (S.screen === 'chat' && S.activePhone) {
-          var prevLen = S.messages.length;
           return loadMessages(S.activePhone).then(function () {
-            if (S.messages.length !== prevLen) rerender();
-            else if (S.screen === 'list') rerender();
+            var newMsgLen = (S.messages || []).length;
+            /* Rerender ONLY when something actually changed. */
+            if (newMsgLen !== prevMsgLen || newListLen !== prevListLen) rerender();
           });
         }
-        if (S.screen === 'list') rerender();
+        if (S.screen === 'list' && newListLen !== prevListLen) rerender();
       }).catch(function () {});
     }, 20000);
     // clear on nav away
