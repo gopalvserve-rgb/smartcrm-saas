@@ -1054,23 +1054,17 @@
     };
     S.messages.push(opt);
     rerender();
-    api('api_wb_send', payload)
-      .then(function () {
-        return loadMessages(t.phone);
-      })
+    /* v1.1 (2026-07-12) — primary uses api_wb_chat_send with the shape
+     * proven to work in the desktop module. Prior primary api_wb_send
+     * doesn't exist on the server and returned "No Api Found". */
+    var primary = { phone: t.phone, text: wasText, from_phone_number_id: pid || undefined };
+    api('api_wb_chat_send', primary)
+      .then(function () { return loadMessages(t.phone); })
       .then(rerender)
       .catch(function (err) {
-        // Fallback to legacy signature used in wbChatV2.js (chat_send)
-        var alt = { phone: t.phone, text: wasText, from_phone_number_id: pid || undefined };
-        api('api_wb_chat_send', alt)
-          .then(function () { return loadMessages(t.phone); })
-          .then(rerender)
-          .catch(function (e2) {
-            toast('Send failed: ' + (err.message || e2.message || 'unknown'), 'err');
-            // remove optimistic
-            S.messages = S.messages.filter(function (m) { return !m.__optimistic; });
-            rerender();
-          });
+        toast('Send failed: ' + (err.message || 'unknown'), 'err');
+        S.messages = S.messages.filter(function (m) { return !m.__optimistic; });
+        rerender();
       });
   }
 
@@ -1103,23 +1097,42 @@
             color:'#fff', fontSize:'15px', flex:'1', minWidth:'0'
           },
           oninput: function (e) {
-            S.search = e.target.value;
-            // partial re-render: repaint results only
-            try { rerender(); focusSearchInput(); } catch (_) {}
-          }
+          /* v1.1 — patch only the results DIV, keep input focused. */
+          S.search = e.target.value;
+          try {
+            var listEl = document.querySelector('.wbv2m-search-results');
+            if (listEl) {
+              listEl.innerHTML = '';
+              var rows2 = filteredThreads();
+              var hasQ2 = !!String(S.search || '').trim();
+              if (!rows2.length) {
+                listEl.appendChild(h('div', { style: { padding:'48px 24px', textAlign:'center' }},
+                  h('div', { style: { fontSize:'36px', marginBottom:'12px' }}, '🔍'),
+                  h('div', { style: { fontSize:'15px', fontWeight:'600', color:'#374151', marginBottom:'6px' }},
+                    hasQ2 ? 'No results' : 'Start typing to search')
+                ));
+              } else {
+                rows2.forEach(function (t) { listEl.appendChild(searchRow(t)); });
+              }
+              /* also update the results count line */
+              var meta = document.querySelector('.wbv2m-search-meta');
+              if (meta) {
+                meta.textContent = hasQ2 ? (rows2.length + ' results for "' + S.search + '"') : 'Recent Conversations';
+              }
+            }
+          } catch (_) {}
+        }
         })
       )
     );
 
     var meta = hasQ
-      ? h('div', { style: { padding:'12px 16px 8px', flexShrink:'0' }},
-          h('span', { style: { fontSize:'11px', color:'#6B7280', fontWeight:'500' }},
-            rows.length + ' results for "' + S.search + '"'))
-      : h('div', { style: { padding:'12px 16px 8px', flexShrink:'0' }},
-          h('span', { style: { fontSize:'11px', color:'#9CA3AF', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px' }},
-            'Recent Conversations'));
+      ? h('div', { class:'wbv2m-search-meta', style: { padding:'12px 16px 8px', flexShrink:'0', fontSize:'11px', color:'#6B7280', fontWeight:'500' }},
+          rows.length + ' results for "' + S.search + '"')
+      : h('div', { class:'wbv2m-search-meta', style: { padding:'12px 16px 8px', flexShrink:'0', fontSize:'11px', color:'#9CA3AF', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px' }},
+          'Recent Conversations');
 
-    var list = h('div', { style: { flex:'1', overflowY:'auto' }});
+    var list = h('div', { class:'wbv2m-search-results', style: { flex:'1', overflowY:'auto' }});
     if (!rows.length) {
       list.appendChild(h('div', { style: { padding:'48px 24px', textAlign:'center' }},
         h('div', { style: { fontSize:'36px', marginBottom:'12px' }}, '🔍'),
@@ -1380,7 +1393,14 @@
     };
     var pid = S.sendFromId || t.phone_number_id;
     if (pid) payload.phone_id = pid;
-    api('api_wb_sendTemplate', payload)
+    /* v1.1 — chat_send is the real endpoint; pass templateName +
+     * templateLanguage per the desktop module. */
+    api('api_wb_chat_send', {
+      phone: t.phone,
+      templateName: tpl.name || tpl.template_name,
+      templateLanguage: tpl.language || 'en_US',
+      from_phone_number_id: pid || undefined
+    })
       .then(function () {
         toast('Template sent', 'ok');
         closeOverlay();
@@ -1388,19 +1408,7 @@
       })
       .then(rerender)
       .catch(function (err) {
-        // fallback: chat_send with templateName
-        api('api_wb_chat_send', {
-          phone: t.phone,
-          templateName: tpl.name || tpl.template_name,
-          templateLanguage: tpl.language,
-          from_phone_number_id: pid || undefined
-        }).then(function () {
-          toast('Template sent', 'ok');
-          closeOverlay();
-          return loadMessages(t.phone);
-        }).then(rerender).catch(function (e2) {
-          toast('Send failed: ' + (err.message || e2.message || 'unknown'), 'err');
-        });
+        toast('Send failed: ' + (err.message || 'unknown'), 'err');
       });
   }
 
@@ -1467,7 +1475,7 @@
           function () { markResolved(); }),
         row(C.optAssign.bg, ICON.user(C.optAssign.fg),
           'Assign to Agent', 'Currently: ' + agent, false,
-          function () { closeOverlay(); toast('Assign panel opens on desktop', 'info'); }),
+          function () { S.overlay = 'assign'; rerender(); }),
         row(C.optNote.bg, ICON.pencil(C.optNote.fg),
           'Add Internal Note', 'Visible only to your team', false,
           function () {
@@ -1496,7 +1504,8 @@
       if (/resolv|closed|won|complete/.test(n)) { closer = s; break; }
     }
     if (!closer) { closeOverlay(); return toast('No Resolved status configured in this account', 'err'); }
-    api('api_leads_update', { id: lid, status_id: closer.id })
+    /* v1.1 — api_leads_update takes positional args: (lead_id, patch). */
+    api('api_leads_update', lid, { status_id: closer.id })
       .then(function () {
         toast('Conversation marked resolved', 'ok');
         if (S.activeThread) {
@@ -1571,7 +1580,7 @@
   function changeStatus(opt) {
     var lid = S.activeLeadId;
     if (!lid) return toast('No lead attached', 'err');
-    api('api_leads_update', { id: lid, status_id: opt.id })
+api('api_leads_update', lid, { status_id: opt.id })
       .then(function () {
         toast('Status updated', 'ok');
         if (S.activeThread) {
@@ -1747,24 +1756,99 @@
     if (!body) return toast('Type something first', 'err');
     var lid = S.activeLeadId;
     if (!lid) return toast('No lead linked to this chat', 'err');
-    api('api_leads_addRemark', { lead_id: lid, body: body })
+    /* v1.1 — desktop's proven signature: positional (lead_id, {remark}). */
+    api('api_leads_addRemark', lid, { remark: body })
       .then(function () {
         S.newRemark = '';
         toast('Remark saved', 'ok');
         return loadRemarks(lid);
       })
       .then(rerender)
-      .catch(function (err) {
-        // fallback signature used by wbChatV2.js
-        api('api_leads_addRemark', lid, { remark: body })
-          .then(function () {
-            S.newRemark = '';
-            toast('Remark saved', 'ok');
-            return loadRemarks(lid);
-          })
-          .then(rerender)
-          .catch(function (e2) { toast('Failed: ' + (err.message || e2.message), 'err'); });
-      });
+      .catch(function (err) { toast('Failed: ' + (err.message || 'unknown'), 'err'); });
+  }
+
+  /* =============================================================
+   * 20b. OVERLAY: ASSIGN AGENT (v1.1)
+   * Real dropdown of team users. Admin/manager can reassign; picks
+   * a user or Unassigned. Uses api_leads_update(lid, {assigned_to}).
+   * ============================================================= */
+  function overlayAssignPicker() {
+    var t = S.activeThread || {};
+    var lid = S.activeLeadId;
+    var currentId = null;
+    if (S.lead && S.lead.assigned_to != null) currentId = Number(S.lead.assigned_to);
+    var users = (S.users || []).slice().sort(function (a, b) {
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    var rows = [];
+    // Unassigned row
+    rows.push(agentRow({ id: null, name: 'Unassigned', is_null: true }, currentId));
+    users.forEach(function (u) { rows.push(agentRow(u, currentId)); });
+
+    var sheet = h('div', {
+      class: 'wbv2m-sheet',
+      style: {
+        position:'absolute', bottom:'0', left:'0', right:'0', maxHeight:'70vh',
+        background:'#fff', borderRadius:'20px 20px 0 0', paddingBottom:'16px',
+        display:'flex', flexDirection:'column'
+      }
+    },
+      h('div', { style: { width:'36px', height:'4px', background:'#E5E7EB', borderRadius:'100px', margin:'10px auto 0' }}),
+      h('div', { style: { padding:'14px 16px 10px', borderBottom:'1px solid ' + C.divider,
+                          display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:'0' }},
+        h('div', null,
+          h('h3', { style: { margin:'0 0 2px', fontSize:'16px', fontWeight:'700', color:'#111' }}, 'Assign to Agent'),
+          h('p', { style: { margin:'0', fontSize:'12px', color:'#6B7280' }},
+            'Current: ' + (t.assigned_name || 'Unassigned'))
+        ),
+        h('button', {
+          class:'wbv2m-btn-tap',
+          style: { background:'#F3F4F6', border:'none', cursor:'pointer', width:'28px', height:'28px',
+                   borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+                   fontSize:'14px', color:'#6B7280' },
+          onclick: closeOverlay
+        }, '✕')
+      ),
+      h('div', { style: { flex:'1', overflowY:'auto' }}, rows)
+    );
+    return overlayBackdrop(sheet);
+  }
+  function agentRow(u, currentId) {
+    var active = (u.id === currentId) || (u.is_null && (currentId == null || currentId === ''));
+    var initial = String(u.name || '?').trim().charAt(0).toUpperCase() || '?';
+    return h('button', {
+      class:'wbv2m-row-tap',
+      style: {
+        width:'100%', background:'none', border:'none', padding:'11px 16px',
+        display:'flex', alignItems:'center', gap:'12px', cursor:'pointer',
+        textAlign:'left', borderBottom:'1px solid ' + C.dividerLight
+      },
+      onclick: function () { assignTo(u.id || null, u.name); }
+    },
+      h('div', { style: {
+        width:'34px', height:'34px', borderRadius:'50%',
+        background: u.is_null ? '#E5E7EB' : '#DBEAFE',
+        color: u.is_null ? '#6B7280' : '#1E40AF',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        fontSize:'14px', fontWeight:'700', flexShrink:'0'
+      }}, u.is_null ? '–' : initial),
+      h('span', { style: { fontSize:'14.5px', fontWeight:'500', color:'#111', flex:'1' }}, u.name || '–'),
+      active ? ICON.checkThick(C.greenDark) : null
+    );
+  }
+  function assignTo(uid, uname) {
+    var lid = S.activeLeadId;
+    if (!lid) return toast('No lead attached', 'err');
+    api('api_leads_update', lid, { assigned_to: uid })
+      .then(function () {
+        toast('Reassigned to ' + (uname || 'Unassigned'), 'ok');
+        if (S.activeThread) S.activeThread.assigned_name = uid ? uname : null;
+        if (S.lead) S.lead.assigned_to = uid;
+        closeOverlay();
+        return loadThreads();
+      })
+      .then(rerender)
+      .catch(function (err) { toast('Failed: ' + (err.message || 'unknown'), 'err'); });
   }
 
   /* =============================================================
@@ -1806,21 +1890,95 @@
   }
 
   /* =============================================================
+   * 21b. FULLSCREEN TOGGLE (v1.1)
+   * Adds a floating button that toggles S.fullscreen. When ON, we
+   * add body class 'wa-mobile-fullscreen' which the stylesheet uses
+   * to hide the SPA sidebar / topbar / any FABs, giving a pure
+   * WhatsApp mobile experience. Click again to exit.
+   * ============================================================= */
+  function fullscreenToggleBtn() {
+    var active = !!S.fullscreen;
+    return h('button', {
+      class: 'wbv2m-fs-toggle',
+      title: active ? 'Exit full view' : 'Full view (hide app header)',
+      style: {
+        position:'fixed',
+        top: '10px',
+        right: '10px',
+        zIndex: '9999',
+        background: active ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.28)',
+        color:'#fff',
+        border:'none',
+        borderRadius:'50%',
+        width:'34px', height:'34px',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        fontSize:'16px', cursor:'pointer',
+        boxShadow:'0 2px 6px rgba(0,0,0,0.25)',
+        transition:'background 0.2s'
+      },
+      onclick: function () {
+        S.fullscreen = !S.fullscreen;
+        try {
+          if (S.fullscreen) document.body.classList.add('wa-mobile-fullscreen');
+          else document.body.classList.remove('wa-mobile-fullscreen');
+        } catch (_) {}
+        rerender();
+      }
+    }, active ? '⤢' : '⛶');
+  }
+
+  /* v1.1 — install fullscreen CSS once (idempotent). Hides SPA
+   * chrome so mobile WA UI takes the entire viewport. */
+  function installFsCss() {
+    if (document.getElementById('wa-mobile-fs-css')) return;
+    var s = document.createElement('style');
+    s.id = 'wa-mobile-fs-css';
+    s.textContent =
+      'body.wa-mobile-fullscreen #sidebar,' +
+      'body.wa-mobile-fullscreen .topbar,' +
+      'body.wa-mobile-fullscreen #topbar,' +
+      'body.wa-mobile-fullscreen .app-topbar,' +
+      'body.wa-mobile-fullscreen .app-sidebar,' +
+      'body.wa-mobile-fullscreen .fab,' +
+      'body.wa-mobile-fullscreen .lead-add-fab,' +
+      'body.wa-mobile-fullscreen #lead-add-fab-mobile,' +
+      'body.wa-mobile-fullscreen .topbar-chip,' +
+      'body.wa-mobile-fullscreen .app-footer { display: none !important; }' +
+      'body.wa-mobile-fullscreen { padding:0 !important; margin:0 !important; overflow:hidden !important; }' +
+      'body.wa-mobile-fullscreen #view,' +
+      'body.wa-mobile-fullscreen .shell,' +
+      'body.wa-mobile-fullscreen main { height:100vh !important; margin:0 !important; padding:0 !important; }' +
+      /* iOS momentum scrolling for messages area */
+      '.wbv2m *{-webkit-overflow-scrolling:touch;}';
+    document.head.appendChild(s);
+  }
+
+  /* =============================================================
    * 22. MAIN RENDER
    * ============================================================= */
   function rerender() {
     if (!S.view) return;
     S.lastRender = Date.now();
     injectStyles();
+    installFsCss();  /* v1.1 */
+    /* v1.1 — outer wrap MUST have a real height so children with
+     * flex:1 + overflow:auto actually scroll. Prior height:100%
+     * collapsed because SPA view has no defined height. Adding CSS
+     * class wbv2m-fs applies when Fullscreen mode is on. */
     var wrap = h('div', {
-      class: 'wbv2m',
+      class: 'wbv2m' + (S.fullscreen ? ' wbv2m-fs' : ''),
       style: {
-        position:'relative',
+        position: S.fullscreen ? 'fixed' : 'relative',
+        top: S.fullscreen ? '0' : undefined,
+        left: S.fullscreen ? '0' : undefined,
+        right: S.fullscreen ? '0' : undefined,
+        bottom: S.fullscreen ? '0' : undefined,
         width:'100%',
-        height: '100%',
-        minHeight: '100vh',
+        height: '100vh',
+        maxHeight: '100vh',
         background:'#fff',
-        overflow:'hidden'
+        overflow:'hidden',
+        zIndex: S.fullscreen ? '9998' : 'auto'
       }
     });
     // Screens
@@ -1830,11 +1988,16 @@
     else if (S.screen === 'timeline') screenNode = renderTimeline();
     else                              screenNode = renderList();
     wrap.appendChild(screenNode);
+    /* v1.1 — floating fullscreen toggle in top-right corner. Hides
+     * the SPA sidebar + topbar + FAB by adding class wa-mobile-fullscreen
+     * on <body>. Small ⤢ / ⤡ button so it stays visible on every screen. */
+    wrap.appendChild(fullscreenToggleBtn());
     // Overlays
     if (S.overlay === 'templates') wrap.appendChild(overlayTemplates());
     else if (S.overlay === 'options')  wrap.appendChild(overlayOptions());
     else if (S.overlay === 'status')   wrap.appendChild(overlayStatusPicker());
     else if (S.overlay === 'number')   wrap.appendChild(overlayNumberPicker());
+    else if (S.overlay === 'assign')   wrap.appendChild(overlayAssignPicker());
     else if (S.overlay === 'remarks')  wrap.appendChild(overlayRemarks());
 
     S.view.replaceChildren(wrap);
