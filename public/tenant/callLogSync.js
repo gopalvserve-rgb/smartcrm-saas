@@ -9,6 +9,13 @@
  * CallLog.Calls over the chosen range (respecting the saved SIM selection), then
  * POSTs the rows to api_call_logSyncBatch. Isolated file — does not touch app.js.
  *
+ * CALLLOG_AUTOSYNC_ON_OPEN_v2 (2026-07-12): also runs SILENTLY on every app open
+ * and every return-from-background, so reps never have to tap anything. This lives
+ * in the SPA (not native) on purpose -- LeadCRMNative.syncCallLog() already ships in
+ * the installed APK, so auto-sync works on the phones people ALREADY have. No
+ * reinstall needed. Reads ONLY the call log (number / timestamp / type / duration).
+ * It never touches recordings, so it cannot hang the app.
+ *
  * Desktop / no-app: the button explains this runs in the mobile app.
  */
 (function () {
@@ -75,9 +82,13 @@
   }
 
   // ---- the sync itself ----------------------------------------------------
-  function runSync(sinceMs, untilMs, btn) {
+  function runSync(sinceMs, untilMs, btn, opts) {
+    opts = opts || {};
+    var silent = !!opts.silent;
+    var say = function (m, t) { if (!silent) toast(m, t); else { try { console.log('[callsync]', m); } catch (e) {} } };
     if (!hasNative()) {
-      toast('Call sync runs in the mobile app. Open the app and tap Sync Calls.', 'warn');
+      say('Call sync runs in the mobile app. Open the app and tap Sync Calls.', 'warn');
+      if (opts.done) opts.done(null);
       return;
     }
     if (btn) { btn.disabled = true; btn.dataset._t = btn.textContent; btn.textContent = 'Reading call log…'; }
@@ -86,22 +97,82 @@
       try { delete window[cb]; } catch (e) { window[cb] = undefined; }
       var data;
       try { data = JSON.parse(json || '{}'); } catch (e) { data = { error: 'bad response' }; }
-      if (data.error) { toast('Could not read call log: ' + data.error, 'err'); restore(); return; }
+      if (data.error) { say('Could not read call log: ' + data.error, 'err'); restore(); if (opts.done) opts.done(null); return; }
       var rows = data.rows || [];
-      if (!rows.length) { toast('No calls found in that range on the selected SIM(s).', 'warn'); restore(); return; }
+      if (!rows.length) { say('No calls found in that range on the selected SIM(s).', 'warn'); restore(); if (opts.done) opts.done({ inserted: 0, repaired: 0 }); return; }
       try {
         var r = await api('api_call_logSyncBatch', { rows: rows });
-        toast('✅ Synced ' + r.inserted + ' new call' + (r.inserted === 1 ? '' : 's') +
-              ' · ' + r.skipped + ' already logged · ' + r.matched + ' matched a lead', 'ok');
+        var fixed = Number(r.repaired || 0);
+        var added = Number(r.inserted || 0);
+        if (silent) {
+          // Only speak up when something actually changed; otherwise stay quiet.
+          if (added || fixed) {
+            toast('🔄 ' + added + ' new call' + (added === 1 ? '' : 's') +
+                  (fixed ? ' · ' + fixed + ' fixed' : '') + ' synced from your phone', 'ok');
+          }
+          try { console.log('[callsync] auto:', JSON.stringify(r)); } catch (e) {}
+        } else {
+          toast('✅ Synced ' + added + ' new call' + (added === 1 ? '' : 's') +
+                (fixed ? ' · ' + fixed + ' fixed' : '') +
+                ' · ' + r.skipped + ' already logged · ' + r.matched + ' matched a lead', 'ok');
+        }
         if (String(location.hash).indexOf('callactivity') >= 0 && typeof window.loadCallActivity === 'function') {
           try { window.loadCallActivity(); } catch (e) {}
         }
-      } catch (e) { toast('Upload failed: ' + e.message, 'err'); }
+        if (opts.done) opts.done(r);
+      } catch (e) { say('Upload failed: ' + e.message, 'err'); if (opts.done) opts.done(null); }
       restore();
     };
     function restore() { if (btn && btn.dataset._t) { btn.disabled = false; btn.textContent = btn.dataset._t; } }
     try { LeadCRMNative.syncCallLog(sinceMs, untilMs, cb); }
-    catch (e) { try { delete window[cb]; } catch (_) {} toast('Sync failed: ' + e.message, 'err'); restore(); }
+    catch (e) { try { delete window[cb]; } catch (_) {} say('Sync failed: ' + e.message, 'err'); restore(); if (opts.done) opts.done(null); }
+  }
+
+  // ---- CALLLOG_AUTOSYNC_ON_OPEN_v2 ---------------------------------------
+  // Sync the phone's call log automatically on every app open / resume.
+  //
+  // Why this lives in JS and not in the APK: LeadCRMNative.syncCallLog() is
+  // ALREADY in the installed app (that's what the Sync button calls), so doing
+  // it here means auto-sync starts working on the phones people already have --
+  // no reinstall, no waiting for a store/APK rollout.
+  //
+  // Cost control: debounced to once every 3 minutes, and the window is only
+  // 'since the last successful auto-sync' (first ever run: 7 days, capped at 7
+  // days after that). Reads the CallLog content provider only -- number,
+  // timestamp, type and duration. NO recording files are touched, so it can't
+  // hang the app.
+  var DAY = 86400000;
+  var AUTO_MIN_GAP_MS = 3 * 60 * 1000;   // don't re-sync more often than this
+  var autoRunning = false;
+
+  function autoKey(k) { return 'cls_auto_' + k + '_' + (slug() || 'x'); }
+  function lsGetNum(k) { var v = Number(localStorage.getItem(autoKey(k)) || 0); return isFinite(v) ? v : 0; }
+  function lsSetNum(k, v) { try { localStorage.setItem(autoKey(k), String(v)); } catch (e) {} }
+
+  function autoSync(reason) {
+    if (autoRunning) return;
+    if (!hasNative() || !token()) return;          // desktop web / logged out
+    var now = Date.now();
+    var lastRun = lsGetNum('lastrun');
+    if (lastRun && (now - lastRun) < AUTO_MIN_GAP_MS) return;   // debounce
+
+    // Window: from the last successful sync (minus 15 min of slack) to now.
+    var lastOk = lsGetNum('since');
+    var since  = lastOk ? (lastOk - 15 * 60 * 1000) : (now - 7 * DAY);
+    var floor  = now - 7 * DAY;                    // never look back further
+    if (since < floor) since = floor;
+
+    autoRunning = true;
+    lsSetNum('lastrun', now);                      // debounce even if it fails
+    try { console.log('[callsync] auto-sync (' + reason + ') since', new Date(since).toISOString()); } catch (e) {}
+
+    runSync(since, now, null, {
+      silent: true,
+      done: function (r) {
+        autoRunning = false;
+        if (r) lsSetNum('since', now);             // only advance on success
+      }
+    });
   }
 
   // ---- modal --------------------------------------------------------------
@@ -318,7 +389,40 @@
     try { mo.observe(document.getElementById('app') || document.body, { childList: true, subtree: true }); } catch (e) {}
     window.addEventListener('hashchange', function () { setTimeout(function () { injectButton(); injectFab(); }, 200); });
     setTimeout(function () { injectButton(); injectFab(); }, 800);
+
+    // CALLLOG_AUTOSYNC_ON_OPEN_v2 — fire on open, and again whenever the app is
+    // brought back to the foreground. Delayed 2.5s on boot so login/bootstrap
+    // finishes first (we need the token) and the UI paints before we do work.
+    setTimeout(function () { try { autoSync('app-open'); } catch (e) {} }, 2500);
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        setTimeout(function () { try { autoSync('app-resume'); } catch (e) {} }, 800);
+      }
+    });
+    window.addEventListener('focus', function () {
+      setTimeout(function () { try { autoSync('window-focus'); } catch (e) {} }, 800);
+    });
+    // Capacitor fires this on native resume even when visibilitychange doesn't.
+    try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+        window.Capacitor.Plugins.App.addListener('appStateChange', function (st) {
+          if (st && st.isActive) {
+            setTimeout(function () { try { autoSync('capacitor-resume'); } catch (e) {} }, 800);
+          }
+        });
+      }
+    } catch (e) {}
   }
+  // Exposed so support can force a sync from the console: CRM_syncCallsNow()
+  try {
+    window.CRM_syncCallsNow = function (days) {
+      var n = Date.now();
+      runSync(n - (Number(days) || 7) * DAY, n, null, {});
+    };
+    window.CRM_autoSyncCalls = autoSync;
+  } catch (e) {}
+
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
 })();
