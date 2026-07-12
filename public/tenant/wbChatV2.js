@@ -1594,6 +1594,23 @@
    * Data loading happens asynchronously after the element is returned.
    */
   function render() {
+    /* WA_MOBILE_UI_v1 (2026-07-12) — on narrow viewports delegate to the
+     * mobile module so mobile users get the redesigned WhatsApp UI while
+     * desktop keeps the existing 3-column layout. Guarded so it degrades
+     * back to desktop if the mobile bundle didn't load. */
+    try {
+      var _isMobile = false;
+      try {
+        _isMobile = (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 768px)').matches)
+                 || (window.innerWidth && window.innerWidth <= 768);
+      } catch (_) {}
+      if (_isMobile && window.WB_CHAT_V2_MOBILE && typeof window.WB_CHAT_V2_MOBILE.render === 'function') {
+        var _view = document.createElement('div');
+        _view.style.cssText = 'width:100%;height:100%;';
+        window.WB_CHAT_V2_MOBILE.render(_view);
+        return _view;
+      }
+    } catch (_) { /* silent fall-through to desktop */ }
     injectStyles();
     const root = shell();
     // Defer data loads so the shell mounts first (caller does replaceChildren).
