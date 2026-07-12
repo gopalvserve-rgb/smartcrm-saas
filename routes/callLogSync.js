@@ -92,9 +92,16 @@ async function api_call_logSyncBatch(token, payload) {
     // IS the start. Accept a match on either interpretation, within ±90s, for
     // the same user + direction + last-10 digits.
     const tail = '%' + digits.slice(-10);
+    // DEDUP_RINGING_FIX_v1 (2026-07-12) — `event <> 'incoming_ringing'` is load
+    // bearing. The receiver logs TWO rows per inbound call: a RINGING row and an
+    // ENDED row. A CallLog row corresponds to the ENDED one. Without this filter
+    // the RINGING row counted as "already logged", we skipped early, and the
+    // BROKEN ended-twin (direction='unknown' / blank phone) never reached the
+    // repair block below — which is exactly why those rows kept surviving.
     const { rows: dup } = await db.query(
       `SELECT 1 FROM call_events
          WHERE user_id = $1 AND direction = $2
+           AND event <> 'incoming_ringing'
            AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') LIKE $3
            AND ( ABS(EXTRACT(EPOCH FROM (created_at - $4::timestamptz))) < ${W}
               OR ABS(EXTRACT(EPOCH FROM ((created_at - (COALESCE(duration_s,0) * interval '1 second')) - $4::timestamptz))) < ${W} )
