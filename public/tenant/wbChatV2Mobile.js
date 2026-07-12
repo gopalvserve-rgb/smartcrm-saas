@@ -624,7 +624,7 @@
           flexShrink:'0', boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
         }}, ICON.waLogo('white', 18)),
         /* Tiny version marker */
-        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.4'),
+        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.5'),
         miniStat(stats.unread,   'Unread',   C.green),
         miniStat(stats.open,     'Open',     '#F59E0B'),
         miniStat(stats.resolved, 'Resolved', '#10B981'),
@@ -2456,8 +2456,31 @@ api('api_leads_update', lid, { status_id: opt.id })
   /* =============================================================
    * 25. EXPORT
    * ============================================================= */
+  /* v2_5 — SAFETY WRAPPER: if render() throws, show a red diagnostic panel
+   * instead of blanking the SPA. Prevents any single JS bug in this module
+   * from producing a white screen for the whole app. */
+  function safeRender(view) {
+    try {
+      return render(view);
+    } catch (e) {
+      var msg = String(e && (e.stack || e.message || e));
+      try {
+        view.innerHTML = '';
+        var box = document.createElement('div');
+        box.style.cssText = 'padding:16px;background:#FEE2E2;color:#7F1D1D;font:13px/1.5 -apple-system,system-ui;border:2px solid #DC2626;border-radius:8px;margin:12px;';
+        box.innerHTML = '<div style="font-weight:700;font-size:16px;margin-bottom:8px">WhatsApp UI error (v2.5)</div>' +
+                        '<div style="margin-bottom:8px">The mobile WhatsApp view could not render. This is usually caused by a stale bundle cached in the app. Please:</div>' +
+                        '<ol style="margin:0 0 8px 20px;padding:0"><li>Force-close the app</li><li>Reopen it</li><li>If it still fails: Settings → Apps → SmartCRM → Clear Cache → reopen</li></ol>' +
+                        '<div style="font-size:11px;opacity:.7;margin-top:12px;font-family:monospace;word-break:break-all">' + msg.replace(/[<>&]/g,'') + '</div>';
+        view.appendChild(box);
+      } catch (_) {}
+      try { console.error('[WB_CHAT_V2_MOBILE render] ', e); } catch (_) {}
+    }
+  }
+
   window.WB_CHAT_V2_MOBILE = {
-    render: render,
+    render: safeRender,
+    _renderRaw: render,
     _state: S,           // exposed for diagnostics
     _api:  api,
     _colors: C
