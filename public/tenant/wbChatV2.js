@@ -706,7 +706,11 @@
      * History = EVERYTHING (the archive). It used to mean "last 30 days", which
      * both hid genuinely old chats and let History come back SMALLER than the
      * full list — that is where the nonsense "21 conversations" came from. */
-    const cutoffMs = (S.filter === 'all' || S.tab === 'history')
+    /* The status pill (All / Unread / Open / Resolved) used to ALSO switch the date
+     * window off — `S.filter === 'all'` forced an infinite cutoff — and 'all' is the
+     * default pill, so the Recent tab silently showed every chat ever. Status and date
+     * are independent filters; only the tab controls the date window now. */
+    const cutoffMs = (S.tab === 'history')
       ? Number.POSITIVE_INFINITY
       : 7 * 86400 * 1000;
     const meId = (S.me && S.me.id) || null;
