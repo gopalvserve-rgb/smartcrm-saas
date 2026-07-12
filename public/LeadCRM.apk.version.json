@@ -1,7 +1,8 @@
 {
   "versionCode": 162,
-  "versionName": "2.2",
-  "builtAt": "2026-07-12T06:27:13Z",
-  "sha": "4604562b08b9169c45afc08bf93d1d7d3da7afb6",
-  "url": "/LeadCRM.apk"
+  "versionName": "2.3",
+  "builtAt": "2026-07-10T19:45:00Z",
+  "sha": "INCOMING_CARD_OPEN_LEAD_FIX+APK_UPDATE_FIX_v2",
+  "url": "/LeadCRM.apk",
+  "releaseNotes": "Incoming call popup Open Lead now works. Update prompt reliability fixed."
 }

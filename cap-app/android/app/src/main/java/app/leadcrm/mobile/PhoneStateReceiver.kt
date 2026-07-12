@@ -280,26 +280,14 @@ class PhoneStateReceiver : BroadcastReceiver() {
             return
         }
         Thread {
-            // CALL_NUMBER_FIX_v1 (2026-07-12) — two bugs fixed here:
-            //  (1) The old window was `eventTimeMs - 30_000`, where eventTimeMs is the
-            //      call END. But CallLog.Calls.DATE is the call START, so ANY call
-            //      longer than 30s was excluded by its own WHERE clause and the number
-            //      came back empty. We now look back far enough to cover any realistic
-            //      call; ORDER BY DATE DESC LIMIT 1 still picks the call that just ended.
-            //  (2) A single 700ms attempt gave up before slow OEMs had flushed the row.
-            //      We now retry with backoff (~11s total).
-            val backoff = longArrayOf(700L, 1_500L, 3_000L, 6_000L)
-            var n = ""
-            for (waitMs in backoff) {
-                try { Thread.sleep(waitMs) } catch (_: Throwable) {}
-                n = readLastCallLogNumber(ctx, sinceMs = eventTimeMs - 21_600_000L)
-                if (n.isNotEmpty()) break
-            }
+            try { Thread.sleep(700) } catch (_: Throwable) {}
+            // Look back ~30 s — the call we just ended started within that window.
+            val n = readLastCallLogNumber(ctx, sinceMs = eventTimeMs - 30_000L)
             if (n.isNotEmpty()) {
                 Log.i(TAG, "CallLog fallback resolved number: $n")
                 lastNumber = n
             } else {
-                Log.w(TAG, "CallLog fallback found no entry after retries — phone will be empty")
+                Log.w(TAG, "CallLog fallback found no entry — phone will be empty")
             }
             cb(n)
         }.start()
