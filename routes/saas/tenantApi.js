@@ -40,6 +40,7 @@ try { errorLogs = require('./errorLogs'); } catch (_) {}
 // Add more entries here as route files are ported into smartcrm-saas/routes/.
 const ROUTE_FILES = [
   'admin',
+  'userCallPrefs',   /* USER_CALL_PREFS_v1 — per-user call settings */
   'announcements',
   'auth',
   'campaigns',
