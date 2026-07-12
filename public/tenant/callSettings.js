@@ -138,6 +138,7 @@
     else sel.value = (Number(mineVal) === 1) ? '1' : '0';
 
     wrap.appendChild(sel);
+    wrap._sel = sel;
     wrap._get = function () { return sel.value === INHERIT ? null : sel.value; };
     return wrap;
   }
@@ -152,6 +153,7 @@
     options.forEach(function (o) { sel.appendChild(el('option', { value: o[0] }, esc(o[1]))); });
     sel.value = (mineVal === null || mineVal === undefined || mineVal === '') ? INHERIT : String(mineVal);
     wrap.appendChild(sel);
+    wrap._sel = sel;
     wrap._get = function () { return sel.value === INHERIT ? null : sel.value; };
     return wrap;
   }
@@ -283,65 +285,127 @@
     }
     wrap.appendChild(c1);
 
-    // ============ 2. MY SETTINGS (per user) ============
-    var c2 = card('⚙️ ' + (editingSelf ? 'My call settings' : 'Settings for ' + esc((users.filter(function (u) { return Number(u.id) === Number(data.user_id); })[0] || {}).name || 'this rep')),
-      'Each of these can follow the company default, or be overridden just for this person.');
+    // ============ 2. WHICH CALLS ARE SAVED (per user) ============
+    // CALLS_HUB_v5 (2026-07-12) — every field now says, in plain words, what Yes and
+    // No actually DO. And the four auto-lead detail fields are HIDDEN unless auto-add
+    // is actually on, because when it's off they do nothing and are pure noise.
+    var whoFor = editingSelf ? 'My' :
+      ('Settings for ' + esc((users.filter(function (u) { return Number(u.id) === Number(data.user_id); })[0] || {}).name || 'this rep'));
+
+    // Live plain-English summary of what the current choices add up to.
+    var summary = el('div', { style: 'padding:.7rem .9rem;border-radius:10px;background:#eef2ff;border-left:4px solid #4f46e5;margin-bottom:1rem;font-size:.9rem;line-height:1.5' });
+    wrap.appendChild(summary);
+
+    var c2 = card('📥 ' + (editingSelf ? 'Which of my calls are saved' : whoFor + ' — which calls are saved'),
+      'This decides what lands in <b>Call Activity</b>. It has nothing to do with creating leads — that is the next section.');
 
     var fAutoSync = triState('Sync my call log every time I open the app',
       mine.autosync_on_open, co.autosync_on_open,
-      'Copies number, time, call status and talk time from the phone. Recordings are never fetched, so it can’t slow the app down.');
+      '<b>Yes</b> — every time you open the app, calls are copied from your phone\'s call log into the CRM (number, time, in/out/missed, talk time, SIM).<br>' +
+      '<b>No</b> — nothing is copied automatically; you would have to press Sync yourself.<br>' +
+      '<span style="color:#64748b">Recordings are never fetched here, so this cannot slow the app down.</span>');
     c2.appendChild(fAutoSync);
 
-    var fSyncLO = triState('Only sync calls that match a CRM lead',
+    var fSyncLO = triState('Only save calls from numbers already in the CRM',
       mine.sync_lead_only, co.sync_lead_only,
-      'Keeps personal calls out of the CRM. Applies to the phone call-log sync.');
+      '<b>No</b> — <b>every</b> call is saved: incoming, missed and outgoing, even from numbers you have never spoken to. <i>(This is what you want if you need a complete call log.)</i><br>' +
+      '<b>Yes</b> — calls from unknown numbers are <b>thrown away</b> and never appear in Call Activity. Only calls to/from existing leads are kept. Use this to keep personal calls out.');
     c2.appendChild(fSyncLO);
 
-    var fCapLO = triState('Only capture live calls that match a CRM lead',
+    var fCapLO = triState('Same rule for calls captured live, as they happen',
       mine.capture_lead_only, co.capture_lead_only,
-      'Same idea, for calls captured as they happen.');
+      'The setting above covers calls copied from your phone\'s call log. This one covers calls the app catches in real time.<br>' +
+      '<b>Keep both the same</b> unless you have a reason not to.');
     c2.appendChild(fCapLO);
 
-    var fActLO = triState('Call Activity shows only lead-matched calls by default',
+    var fActLO = triState('Hide unknown numbers on the Call Activity page',
       mine.activity_lead_only, co.activity_lead_only,
-      'A view filter — nothing is deleted.');
+      '<b>No</b> — the page shows all your calls.<br>' +
+      '<b>Yes</b> — the page opens with a filter hiding unknown numbers. <b>Nothing is deleted</b> — you can untick the filter any time. This is only about what you see, not what is stored.');
     c2.appendChild(fActLO);
     wrap.appendChild(c2);
 
     // ============ 3. AUTO-ADD LEADS (per user) ============
-    var c3 = card('➕ Auto-add leads from my calls',
-      'When a call is from a number that is NOT in the CRM, create a lead for it.');
+    var c3 = card('➕ Turn calls from unknown numbers into leads',
+      'Completely separate from the section above. Calls are saved either way — this only decides whether a <b>new lead record</b> is created for a number that is not in the CRM yet.');
 
-    var fMode = selectRow('Mode', mine.autolead_mode, co.autolead_mode,
-      [['auto', 'Create the lead automatically'], ['manual', 'Ask me first (popup)']]);
-    c3.appendChild(fMode);
-
-    var fIn = triState('Incoming &amp; missed calls from unknown numbers',
-      mine.autolead_inbound, co.autolead_inbound);
+    var fIn = triState('Create a lead when an unknown number calls me (incoming or missed)',
+      mine.autolead_inbound, co.autolead_inbound,
+      '<b>Yes</b> — a stranger rings you, and a lead is created automatically with their number.<br>' +
+      '<b>No</b> — the call is still saved to Call Activity, but <b>no lead is created</b>. You stay in control of who becomes a lead.');
     c3.appendChild(fIn);
 
-    var fOut = triState('Outgoing calls to unknown numbers',
+    var fOut = triState('Create a lead when I call an unknown number (outgoing)',
       mine.autolead_outbound, co.autolead_outbound,
-      'Usually left off — most outbound calls are to leads you already have.');
+      '<b>Yes</b> — you dial a number that is not in the CRM, and a lead is created for it.<br>' +
+      '<b>No</b> — no lead is created. <span style="color:#64748b">Usually left off: most outbound calls are to leads you already have, and this would create leads for taxis, family, delivery calls, etc.</span>');
     c3.appendChild(fOut);
 
-    var fMin = numberRow('Only if the call lasted at least (seconds)',
-      mine.autolead_min_seconds, co.autolead_min_seconds,
-      '0 = create a lead even for missed calls.');
-    c3.appendChild(fMin);
+    // ---- the four detail fields below only mean anything if auto-add is ON ----
+    var offNote = el('div', { class: 'muted', style: 'padding:.6rem .8rem;background:#f8fafc;border-radius:8px;font-size:.85rem' },
+      '✅ Auto-add is <b>off</b> — no leads will be created from your calls. ' +
+      'The extra options (status, minimum duration, duplicates) are hidden because they do nothing while this is off.');
+    c3.appendChild(offNote);
+
+    var adv = el('div', { style: 'border-top:1px dashed #cbd5e1;margin-top:.8rem;padding-top:.6rem' });
+
+    var fMode = selectRow('How should the lead be created?', mine.autolead_mode, co.autolead_mode,
+      [['auto', 'Create it automatically, no popup'], ['manual', 'Ask me first (review in Pending Call Queue)']],
+      '<b>Automatically</b> — the lead just appears.<br><b>Ask me first</b> — the call waits in the Pending Call Queue and you decide.');
+    adv.appendChild(fMode);
+
+    var fMin = numberRow('Ignore calls shorter than (seconds)', mine.autolead_min_seconds, co.autolead_min_seconds,
+      'Stops one-ring wrong numbers and spam from becoming leads. <b>0</b> = create a lead even for a missed call with no talk time. <b>5</b> is a sensible starting point.');
+    adv.appendChild(fMin);
 
     var stOpts = [['0', 'Default (New)']].concat((statuses || []).map(function (s) {
       return [String(s.id), String(s.name || s.label || ('#' + s.id))];
     }));
-    var fStatus = selectRow('New leads get this status', mine.autolead_status_id, String(co.autolead_status_id || '0'), stOpts);
-    c3.appendChild(fStatus);
+    var fStatus = selectRow('Which status should these new leads get?', mine.autolead_status_id, String(co.autolead_status_id || '0'), stOpts,
+      'Where they land in your pipeline. Leave on Default (New) unless you want call-generated leads separated from your other leads.');
+    adv.appendChild(fStatus);
 
-    var fDup = selectRow('If the number already exists', mine.autolead_on_duplicate, co.autolead_on_duplicate,
-      [['attach', 'Attach the call to the existing lead'],
+    var fDup = selectRow('If that number is already a lead', mine.autolead_on_duplicate, co.autolead_on_duplicate,
+      [['attach', 'Attach the call to the existing lead (recommended)'],
        ['skip',   'Do nothing'],
-       ['new',    'Create another lead anyway']]);
-    c3.appendChild(fDup);
+       ['new',    'Create a second lead anyway']],
+      '<b>Attach</b> keeps your lead list clean — every call from a repeat caller links back to their original lead.');
+    adv.appendChild(fDup);
+    c3.appendChild(adv);
     wrap.appendChild(c3);
+
+    // ---- show/hide the detail fields + keep the plain-English summary honest ----
+    var effOf = function (field, companyVal) {
+      var v = field._get();
+      return (v === null) ? !!companyVal : (v === '1');
+    };
+    function refresh() {
+      var inOn   = effOf(fIn,  co.autolead_inbound);
+      var outOn  = effOf(fOut, co.autolead_outbound);
+      var anyOn  = inOn || outOn;
+      adv.style.display     = anyOn ? '' : 'none';
+      offNote.style.display = anyOn ? 'none' : '';
+
+      var syncLO = effOf(fSyncLO, co.sync_lead_only);
+      var autoOn = effOf(fAutoSync, co.autosync_on_open);
+
+      var line1 = !autoOn
+        ? '⚠️ Calls are <b>not</b> synced automatically — you have to press Sync yourself.'
+        : (syncLO
+            ? '📥 Only calls to/from <b>numbers already in the CRM</b> are saved. Calls from unknown numbers are discarded.'
+            : '📥 <b>Every</b> call is saved to Call Activity — incoming, missed and outgoing, known numbers and unknown.');
+
+      var line2 = !anyOn
+        ? '➕ <b>No leads</b> are created automatically from calls.'
+        : ('➕ A lead <b>is</b> created automatically for unknown numbers on ' +
+           (inOn && outOn ? '<b>incoming, missed and outgoing</b>' : (inOn ? '<b>incoming and missed</b>' : '<b>outgoing</b>')) + ' calls.');
+
+      summary.innerHTML = '<b>What these settings do right now</b><br>' + line1 + '<br>' + line2;
+    }
+    [fAutoSync, fSyncLO, fCapLO, fActLO, fIn, fOut].forEach(function (f) {
+      if (f && f._sel) f._sel.addEventListener('change', refresh);
+    });
+    refresh();
 
     // ---- save ----
     var saveBtn = el('button', { class: 'btn primary' },
