@@ -613,7 +613,7 @@
               h('span', { style: {
                 fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
                 color: C.green, padding:'2px 6px', borderRadius:'4px'
-              }}, 'v1.7')
+              }}, 'v1.8')
             ),
             h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
           )
@@ -2104,29 +2104,37 @@ api('api_leads_update', lid, { status_id: opt.id })
     if (document.getElementById('wa-mobile-fs-css')) return;
     var s = document.createElement('style');
     s.id = 'wa-mobile-fs-css';
-    /* v1_6 — nuclear fullscreen: hide ALL app chrome, edge-to-edge WA */
+    /* v1_8 — SAFE fullscreen: no nuclear display:none. Just hide the
+     * app's known chrome selectors and float the .wbv2m container above.
+     * When body has class wa-mobile-fullscreen: 
+     *  - Hide sidebar/topbar/footer/FABs
+     *  - Fullscreen the wbv2m container via position:fixed
+     */
     s.textContent =
-      'body.wa-mobile-fullscreen > *:not(.wbv2m):not(script):not(style) { display:none !important; }' +
       'body.wa-mobile-fullscreen #sidebar,' +
       'body.wa-mobile-fullscreen .topbar,' +
       'body.wa-mobile-fullscreen #topbar,' +
       'body.wa-mobile-fullscreen .app-topbar,' +
       'body.wa-mobile-fullscreen .app-sidebar,' +
-      'body.wa-mobile-fullscreen aside,' +
-      'body.wa-mobile-fullscreen header:not(.wbv2m header),' +
-      'body.wa-mobile-fullscreen footer,' +
-      'body.wa-mobile-fullscreen nav,' +
+      'body.wa-mobile-fullscreen .app-footer,' +
       'body.wa-mobile-fullscreen .fab,' +
       'body.wa-mobile-fullscreen .lead-add-fab,' +
       'body.wa-mobile-fullscreen #lead-add-fab-mobile,' +
-      'body.wa-mobile-fullscreen .topbar-chip,' +
-      'body.wa-mobile-fullscreen .app-footer { display: none !important; }' +
-      'body.wa-mobile-fullscreen { padding:0 !important; margin:0 !important; overflow:hidden !important; background:#fff !important; }' +
+      'body.wa-mobile-fullscreen .topbar-chip { display: none !important; }' +
+      'body.wa-mobile-fullscreen { padding:0 !important; margin:0 !important; overflow:hidden !important; }' +
+      /* Make the wbv2m container itself fill the viewport */
+      'body.wa-mobile-fullscreen .wbv2m {' +
+        ' position:fixed !important; top:0 !important; left:0 !important;' +
+        ' right:0 !important; bottom:0 !important; width:100vw !important;' +
+        ' height:100vh !important; z-index:99000 !important;' +
+        ' background:#fff !important; margin:0 !important;' +
+      '}' +
+      /* Make sure parent chain doesn't clip the fixed child */
       'body.wa-mobile-fullscreen #view,' +
       'body.wa-mobile-fullscreen .shell,' +
-      'body.wa-mobile-fullscreen main { height:100vh !important; width:100vw !important; margin:0 !important; padding:0 !important; position:fixed !important; top:0 !important; left:0 !important; right:0 !important; bottom:0 !important; z-index:9998 !important; }' +
+      'body.wa-mobile-fullscreen main { overflow:visible !important; }' +
       /* iOS momentum scrolling for messages area */
-      '.wbv2m *{-webkit-overflow-scrolling:touch;}';
+      '.wbv2m * { -webkit-overflow-scrolling: touch; }';
     document.head.appendChild(s);
   }
 
@@ -2180,6 +2188,32 @@ api('api_leads_update', lid, { status_id: opt.id })
     else if (S.overlay === 'remarks')  wrap.appendChild(overlayRemarks());
 
     S.view.replaceChildren(wrap);
+    /* v1_8 — floating always-visible EXIT button when fullscreen is on.
+     * Attached to body (not view) with z-index 100000 so it survives no
+     * matter what happens with layout. Impossible to get stuck. */
+    try {
+      var oldExitBtn = document.getElementById('wbv2m-force-exit-fs');
+      if (oldExitBtn) oldExitBtn.remove();
+      if (S.fullscreen) {
+        var forceExit = document.createElement('button');
+        forceExit.id = 'wbv2m-force-exit-fs';
+        forceExit.textContent = '✕ Exit Full View';
+        forceExit.style.cssText = [
+          'position:fixed', 'top:10px', 'right:10px', 'z-index:100000',
+          'background:#DC2626', 'color:#fff', 'border:none',
+          'padding:10px 14px', 'border-radius:22px', 'font-size:13px',
+          'font-weight:700', 'cursor:pointer', 'box-shadow:0 4px 12px rgba(0,0,0,0.4)',
+          'font-family:-apple-system,BlinkMacSystemFont,sans-serif'
+        ].join(';');
+        forceExit.onclick = function () {
+          S.fullscreen = false;
+          try { document.body.classList.remove('wa-mobile-fullscreen'); } catch (_) {}
+          try { forceExit.remove(); } catch (_) {}
+          rerender();
+        };
+        document.body.appendChild(forceExit);
+      }
+    } catch (_) {}
   }
 
   /* =============================================================
