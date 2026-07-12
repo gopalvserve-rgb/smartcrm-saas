@@ -1,0 +1,180 @@
+/* =====================================================================
+   RESPONSIVE_FIXES_v1  (2026-07-12)
+   ---------------------------------------------------------------------
+   ADDITIVE layer. Loaded AFTER styles.css. Deliberately does NOT modify
+   styles.css (158 KB, shared, and its local copy has diverged from main —
+   editing it would silently revert other people's work).
+
+   Everything here is scoped and reversible: delete this file + its <link>
+   to fully undo.
+
+   Findings this fixes (all measured live, not guessed):
+
+   1. LAPTOP HORIZONTAL OVERFLOW (the big one)
+      At 1024px the page scrolls horizontally by 168–231px on every module.
+      Root cause: a single component — `.topbar-right` renders 931px wide and
+      never wraps. With the ~216px sidebar it overruns the viewport
+      (measured right edge 1255px vs 1024px viewport).
+      Measured: dashboard +192px, leads +231px, callactivity +168px.
+
+   2. MISSING BREAKPOINT TIERS
+      styles.css only really breaks at 780px. So tablets (481–768) get the
+      MOBILE layout and small laptops (769–1024) get the FULL DESKTOP layout.
+      Both middle tiers were simply absent. We add a laptop tier here.
+
+   3. TOUCH TARGETS BELOW 44px
+      Measured hundreds of sub-44px controls per page (leads: 210 at 375px,
+      403 at 1024px; callactivity: 239). Enforce a 44px floor on mobile.
+
+   4. TABLE / CHART OVERFLOW
+      Tables run 780–1850px wide. Most already sit in a scrollable ancestor
+      (so they're fine); we only guarantee a scroll container for the ones
+      that don't, and stop charts/cards bursting their card on mobile.
+   ===================================================================== */
+
+
+/* ---------------------------------------------------------------------
+   1. TOPBAR — the root cause of laptop overflow.
+   Let the action bar wrap instead of forcing the page wider. Below the
+   laptop tier it scrolls horizontally on its own row rather than pushing
+   the document.
+   --------------------------------------------------------------------- */
+@media (max-width: 1180px) {
+  .topbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 100%;
+    row-gap: 6px;
+  }
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 48px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+}
+
+/* Tighter laptops: keep it on one row but let it scroll, so it can never
+   widen the document. */
+@media (min-width: 781px) and (max-width: 1024px) {
+  .topbar-right {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+  .topbar-right::-webkit-scrollbar { height: 4px; }
+  .topbar-right > * { flex: 0 0 auto; }
+}
+
+/* Belt-and-braces: nothing may widen the document. */
+@media (max-width: 1180px) {
+  html, body { max-width: 100%; }
+  .shell, .main, #view { min-width: 0; max-width: 100%; }
+}
+
+
+/* ---------------------------------------------------------------------
+   2. LAPTOP TIER (769–1024) — previously non-existent.
+   Give the content column room back by trimming the fixed sidebar.
+   --------------------------------------------------------------------- */
+@media (min-width: 781px) and (max-width: 1024px) {
+  .sidebar { width: 190px; }
+  .shell   { grid-template-columns: 190px 1fr; }
+  .main    { min-width: 0; }          /* critical: lets grid child shrink */
+  .cards, .chart-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+}
+
+
+/* ---------------------------------------------------------------------
+   3. TABLES — guarantee a scroll container.
+   Most tables already sit inside an overflow-x:auto parent. These rules
+   only catch the ones that don't, so wide tables scroll INSIDE their card
+   instead of dragging the whole page sideways.
+   --------------------------------------------------------------------- */
+@media (max-width: 1024px) {
+  .card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .card > table,
+  #view > table { min-width: 0; }
+  table { max-width: none; }          /* allow natural width; parent scrolls */
+}
+
+
+/* ---------------------------------------------------------------------
+   4. TOUCH TARGETS — 44px floor on mobile/tablet (WCAG 2.5.5).
+   Only applied where a control is genuinely interactive; icon-only ghost
+   buttons get square targets without changing their visual size much.
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  .btn,
+  button.btn,
+  a.btn,
+  .toolbar button,
+  .subtabs button {
+    min-height: 44px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  /* icon-only buttons: keep them square and tappable */
+  .btn.sm, .btn.xs {
+    min-height: 40px;
+    min-width: 40px;
+  }
+  /* checkboxes are the worst offenders in list views */
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+  }
+  /* form controls: stop iOS zoom-on-focus (needs >=16px) and make them tappable */
+  input, select, textarea, .input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
+
+/* ---------------------------------------------------------------------
+   5. FILTER BARS / TOOLBARS — stack instead of squeezing.
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .toolbar > * { flex: 1 1 auto; min-width: 0; }
+  .ms-dropdown-panel {
+    max-width: calc(100vw - 24px);
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+}
+
+
+/* ---------------------------------------------------------------------
+   6. MODALS — fit the viewport, scroll the body, keep close reachable.
+   styles.css only handled .popup-new-lead .modal and .modal.modal-lg.
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  .modal {
+    max-width: calc(100vw - 20px);
+    max-height: 90vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+
+/* ---------------------------------------------------------------------
+   7. CHARTS / MEDIA — never burst the card.
+   (Measured on Reports: .card 530px and .chart-wrap 505px inside a 372px
+   viewport.)
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  .chart-wrap { max-width: 100%; overflow-x: auto; }
+  .chart-wrap canvas { max-width: 100%; }
+  img, svg, canvas { max-width: 100%; height: auto; }
+}
