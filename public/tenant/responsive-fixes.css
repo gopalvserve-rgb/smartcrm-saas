@@ -357,3 +357,29 @@
     padding-bottom: 120px !important;
   }
 }
+
+/* ---------------------------------------------------------------------
+   13b. TOOLBAR BUTTONS — don't stretch icon-only buttons.
+   After 13 stacked the toolbar, the icon-only 🔄 refresh button inherited
+   `width:100%` and rendered as a full-width empty pill with a tiny glyph
+   floating in the middle — it read as a broken element. Let plain buttons
+   size to their content (still a 44px tap target) and reserve full width
+   for the PRIMARY call-to-action only, so the visual hierarchy is right:
+   fields → small refresh → prominent "Set target".
+   --------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  #view .toolbar > button,
+  #view .toolbar > .btn {
+    width: auto !important;
+    min-width: 44px;
+    min-height: 44px;
+    align-self: flex-start !important;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  #view .toolbar > button.primary,
+  #view .toolbar > .btn.primary {
+    width: 100% !important;
+    align-self: stretch !important;
+  }
+}
