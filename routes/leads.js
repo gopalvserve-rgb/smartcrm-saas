@@ -1023,6 +1023,11 @@ async function api_leads_create(token, payload) {
     source_ref: p.source_ref || '',
     product_id: resolvedProductId,
     status_id: _statusId,
+    // SUB_STATUS_CREATE_FIX_v1 (2026-07-12) — api_leads_update carried sub_status_id
+    // but api_leads_create built its own `base` object and never included it, so a
+    // sub-status picked on a BRAND-NEW lead was dropped. campaign_id had the same hole.
+    sub_status_id: p.sub_status_id ? (Number(p.sub_status_id) || null) : null,
+    campaign_id:   p.campaign_id   ? (Number(p.campaign_id)   || null) : null,
     assigned_to: _proposedAssignee || null,
     // Address block — accepted for migration imports; lead form already
     // captures city, the rest is opt-in.

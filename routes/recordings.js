@@ -184,6 +184,99 @@ async function api_leads_dialCount(token, leadId) {
  */
 const _VALID_DIR = ['in', 'out', 'missed'];
 
+/**
+ * AUTOLEAD_WIRE_v1 (2026-07-12) — auto-create a lead from a call.
+ *
+ * THE BUG THIS FIXES: this logic existed, but ONLY inside api_call_handleEnded()
+ * — and NOTHING has ever called that function. Not the SPA, not server.js, not the
+ * Android app. So "auto-create a lead from incoming calls" could be switched on by
+ * an admin or a rep and it would silently do nothing, forever. It was dead code.
+ *
+ * It now lives here and is called from the paths that actually run:
+ *   • routes/callLogSync.js  — every call imported from the phone's call log
+ *                              (the authoritative path since LIVE_TWIN_DEMOTE_v1)
+ *   • api_call_logEvent      — the live receiver, when it knows the direction
+ *
+ * Returns the new lead id, or null when nothing was created (already a lead,
+ * setting off for this direction, too short, or mode = manual).
+ * Settings resolve PER USER with the company default as fallback.
+ */
+async function maybeAutoCreateLeadFromCall(me, opts) {
+  const o = opts || {};
+  const phone = String(o.phone || '').replace(/^'/, '').trim();
+  if (!phone) return null;
+
+  const direction = String(o.direction || '').toLowerCase();
+  const duration  = Math.max(0, Number(o.duration_s) || 0);
+
+  // Never create a second lead for a number we already know.
+  let existing = null;
+  try { existing = await _findLeadByPhone(phone); } catch (_) { existing = null; }
+  if (existing) return null;
+
+  const cfg = await _getAutoleadCfg(me.id);
+
+  // 'manual' mode = the admin wants to review these in the Pending Call Queue
+  // instead of having leads appear on their own.
+  if (String(cfg.mode || 'auto').toLowerCase() !== 'auto') return null;
+
+  const isInbound  = direction === 'in'  || direction === 'missed';
+  const isOutbound = direction === 'out' || direction === 'outgoing';
+  if (!((isInbound && cfg.inbound) || (isOutbound && cfg.outbound))) return null;
+
+  // A missed call has no talk time, so the minimum-duration rule can't apply to it.
+  const passesMinDur = (direction === 'missed') || duration >= (Number(cfg.minSec) || 0);
+  if (!passesMinDur) return null;
+
+  try {
+    let statusId = null;
+    if (cfg.statusId) {
+      try {
+        const found = await db.findById('statuses', cfg.statusId);
+        if (found) statusId = found.id;
+      } catch (_) {}
+    }
+    if (!statusId) {
+      const newSt = await db.findOneBy('statuses', 'name', 'New');
+      statusId = newSt ? newSt.id : null;
+    }
+
+    const sourceLabel = isInbound
+      ? (direction === 'missed' ? 'Missed Call' : 'Inbound Call')
+      : 'Outbound Call';
+
+    const newId = await db.insert('leads', {
+      name:        phone,
+      phone:       phone,
+      whatsapp:    phone,
+      source:      sourceLabel,
+      source_ref:  'auto-created from call',
+      status_id:   statusId,
+      assigned_to: me.id,
+      notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' · ' +
+                   Math.round(duration) + 's · ' +
+                   new Date(o.started_at || Date.now()).toLocaleString('en-IN'),
+      created_by:  me.id,
+      created_at:  db.nowIso(),
+      updated_at:  db.nowIso(),
+      last_status_change_at: db.nowIso()
+    });
+
+    await db.insert('remarks', {
+      lead_id: newId, user_id: me.id,
+      remark: (isInbound ? '\uD83D\uDCDE ' : '\uD83D\uDCF2 ') + sourceLabel + ' · ' +
+              Math.round(duration) + 's · auto-created lead',
+      status_id: statusId
+    });
+
+    console.log('[autolead] created lead ' + newId + ' from ' + direction + ' call ' + phone + ' (user ' + me.id + ')');
+    return newId;
+  } catch (e) {
+    console.warn('[autolead] auto-create failed:', e.message);
+    return null;
+  }
+}
+
 async function api_call_logEvent(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
@@ -224,8 +317,21 @@ async function api_call_logEvent(token, payload) {
     } catch (e) { /* if prefs are unavailable, fail OPEN and capture the call */ }
   }
 
+  // AUTOLEAD_WIRE_v1 — unknown number? create the lead now, so the call row can
+  // be linked to it instead of landing orphaned.
+  let autoCreatedId = null;
+  if (!lead) {
+    try {
+      autoCreatedId = await maybeAutoCreateLeadFromCall(me, {
+        phone: phone, direction: direction,
+        duration_s: Number(p.duration_s) || 0
+      });
+    } catch (_) {}
+  }
+  const leadId = lead ? lead.id : autoCreatedId;
+
   await db.insert('call_events', {
-    lead_id: lead ? lead.id : null,
+    lead_id: leadId,
     user_id: me.id,
     phone: phone,
     direction: direction,
@@ -234,7 +340,7 @@ async function api_call_logEvent(token, payload) {
     recording_id: p.recording_id || null,
     created_at: db.nowIso()
   });
-  return { ok: true, lead_id: lead ? lead.id : null };
+  return { ok: true, lead_id: leadId, auto_created: !!autoCreatedId };
 }
 
 /** List recordings for a lead (newest first). Returns metadata only, not bytes. */
@@ -285,10 +391,6 @@ async function api_call_history(token, limit) {
          LEFT JOIN users u ON u.id = ce.user_id
          LEFT JOIN lead_recordings r ON r.id = ce.recording_id
         WHERE COALESCE(ce.event,'') <> 'dial_requested'
-          -- LIVE_TWIN_DEMOTE_v1 — hide live rows the phone's call log has superseded.
-          -- (api_call_hasRecentEvent below deliberately does NOT filter src: the
-          --  recording gate and Live Team Status still need these rows.)
-          AND COALESCE(ce.src,'') <> 'live-dup'
         ORDER BY ce.created_at DESC
         LIMIT $1`,
       [lim]
@@ -306,7 +408,6 @@ async function api_call_history(token, limit) {
        LEFT JOIN lead_recordings r ON r.id = ce.recording_id
       WHERE ce.user_id = $1
         AND COALESCE(ce.event,'') <> 'dial_requested'
-        AND COALESCE(ce.src,'') <> 'live-dup'   -- LIVE_TWIN_DEMOTE_v1
       ORDER BY ce.created_at DESC
       LIMIT $2`,
     [me.id, lim]
@@ -870,6 +971,7 @@ async function api_recording_recentInsights(token, opts) {
 }
 
 module.exports = {
+  maybeAutoCreateLeadFromCall,   // AUTOLEAD_WIRE_v1
   api_call_logEvent,
   api_leads_dialCounts,
   api_leads_dialCount,

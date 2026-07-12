@@ -20,7 +20,7 @@
  */
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
-const { _findLeadByPhone } = require('./recordings');
+const { _findLeadByPhone, maybeAutoCreateLeadFromCall } = require('./recordings');
 
 // Lazy, idempotent column add. Runs once per process; safe on every tenant.
 let _cols = false;
@@ -67,7 +67,7 @@ async function api_call_logSyncBatch(token, payload) {
   const RW = 150;  // repair window, seconds — wider than W because Doze can delay a
                    // live row's created_at by a minute or more (82s measured on a
                    // real device).
-  let inserted = 0, repaired = 0, skipped = 0, matched = 0;
+  let inserted = 0, repaired = 0, skipped = 0, matched = 0, autoCreated = 0;
 
   for (const r of rows) {
     const phone  = String(r.phone || '').trim();
@@ -91,6 +91,24 @@ async function api_call_logSyncBatch(token, payload) {
 
     let lead = null;
     try { lead = await _findLeadByPhone(phone); } catch (_) { lead = null; }
+
+    // AUTOLEAD_WIRE_v1 (2026-07-12) — unknown number: create the lead here if the
+    // rep/company has auto-create switched on for this direction.
+    //
+    // This is THE fix for "auto-create incoming calls as lead doesn't work": the
+    // logic only ever existed inside api_call_handleEnded(), which has no caller
+    // anywhere in the codebase, so the setting did nothing. The phone's call log is
+    // now the authoritative source of calls, so this is where it belongs.
+    if (!lead) {
+      try {
+        const newId = await maybeAutoCreateLeadFromCall(me, {
+          phone: phone, direction: direction,
+          duration_s: duration, started_at: startMs
+        });
+        if (newId) { lead = { id: newId }; autoCreated++; }
+      } catch (e) { /* never fail a sync because of lead creation */ }
+    }
+
     if (lead) matched++;
     if (leadOnly && !lead) { skipped++; continue; }
 
@@ -181,7 +199,7 @@ async function api_call_logSyncBatch(token, payload) {
     await _demoteLiveTwins(me.id, tail, startMs, duration, null);
   }
 
-  return { ok: true, received: rows.length, inserted, repaired, skipped, matched };
+  return { ok: true, received: rows.length, inserted, repaired, skipped, matched, autoCreated };
 }
 
 /**
