@@ -423,13 +423,31 @@
       S._newSince = newSince;
     } catch (_) {}
   }
-  async function loadThreads() {
+  async function loadThreads(loadMoreOpts) {
     try {
       const tenantBrand = (window.CRM && CRM.brand) || {};
-      const opts = { scanLimit: 10000, show_all: true };
+      /* WA_MOBILE_V1_3 (2026-07-12) — desktop pagination + search */
+      if (!S.dPage) S.dPage = 1;
+      if (!S.dPageSize) S.dPageSize = 100;
+      const opts = { scanLimit: 10000, show_all: true,
+                     page: (loadMoreOpts && loadMoreOpts.page) || S.dPage,
+                     page_size: S.dPageSize };
+      if (S.dSearch) opts.q = String(S.dSearch).trim();
       const list = await api('api_wb_chat_threads', opts);
+      /* Compute hasMore + append/replace based on page */
+      const incoming = Array.isArray(list) ? list : [];
+      S.dHasMore = incoming.length === S.dPageSize;
+      if (loadMoreOpts && loadMoreOpts.page && loadMoreOpts.page > 1) {
+        const combined = ((S.threadsRaw || []).concat(incoming));
+        S.threadsRaw = combined;
+      } else {
+        S.threadsRaw = incoming;
+      }
+      /* Skip the old raw assignment below via the guard flag: */
+      S._skipRawAssign = true;
       const _prev = S.threadsRaw || [];
-      S.threadsRaw = Array.isArray(list) ? list : [];
+      if (!S._skipRawAssign) S.threadsRaw = Array.isArray(list) ? list : [];
+      S._skipRawAssign = false;
       _wbv2DiffNew(_prev, S.threadsRaw);
       // v2.0 — install silent auto-poll once. Refreshes thread list +
       // active chat every 20s so reps don't need to click Refresh.
@@ -523,7 +541,18 @@
         h('span', { style: { color: '#54656f' } }, '🔍'),
         h('input', { placeholder: 'Search by name, phone, or message',
           value: S.search,
-          oninput: (e) => { S.search = e.target.value; renderThreadList(); } }))));
+          oninput: (e) => {
+            S.search = e.target.value;
+            /* WA_MOBILE_V1_3 — debounced database-wide search */
+            try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
+            S.dSrchT = setTimeout(async () => {
+              S.dSearch = S.search;
+              S.dPage = 1;
+              await loadThreads();
+              renderThreads();
+            }, 350);
+            renderThreadList();
+          } }))));
 
     // Filter pills + assignee + phone selectors
     const unreadCount = (S.threadsRaw || []).filter(t => Number(t.unread || t.unread_count || 0) > 0).length;
