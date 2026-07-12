@@ -398,9 +398,15 @@
     gap: 6px !important;
     justify-content: flex-start !important;
   }
-  .lc-actions > * {
+  /* styles.css sets `.lc-actions .la-item { flex: 1 1 0 }` — a 2-class selector
+     that outranks `.lc-actions > *`, so the children kept collapsing to 33px.
+     Match their specificity (and then some) to actually win. */
+  #view .lc-actions > .la-item,
+  #view .lc-actions > .la-btn,
+  .lc-actions > .la-item,
+  .lc-actions > .la-btn {
     flex: 0 0 auto !important;
-    min-width: 44px;
-    min-height: 44px;
+    min-width: 44px !important;
+    min-height: 44px !important;
   }
 }
