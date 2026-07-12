@@ -595,60 +595,56 @@
         onclick: function () { S.filter = id; rerender(); }
       }, label);
     };
-    var stripHeader = h('div', { style: {
-      background: C.headerDark, padding: '8px 12px 10px', flexShrink: '0'
-    }},
-      h('div', { style: {
-        display:'flex', alignItems:'center', justifyContent:'space-between',
-        marginBottom:'6px'
+    /* v2_2 — ONE-ROW compact header: WA icon + inline mini stat pills,
+     * then compact search + filter button on next row. */
+    var miniStat = function (num, label, color) {
+      return h('div', { style: {
+        display:'inline-flex', alignItems:'center', gap:'3px',
+        background:'rgba(255,255,255,0.10)', borderRadius:'6px',
+        padding:'2px 6px', fontSize:'11px', flexShrink:'0'
       }},
-        h('div', { style: { display:'flex', alignItems:'center', gap:'8px' }},
-          /* v2_0 — compact logo */
-          h('div', { style: {
-            width:'32px', height:'32px', background:C.green, borderRadius:'8px',
-            display:'flex', alignItems:'center', justifyContent:'center',
-            boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
-          }}, ICON.waLogo('white', 18)),
-          /* v2_1 — no more SmartCRM title, just the WA icon; version
-           * badge kept ultra-subtle as data attribute on the container */
-          h('span', {
-            'data-wa-mobile-version': 'v2.1',
-            style: { color: 'rgba(255,255,255,0.35)', fontSize:'9px', fontWeight:'600' }
-          }, 'v2.1')
-        ),
-        /* v2_0 — FULL VIEW button removed per user request */
-        null
+        h('span', { style: { color: color, fontWeight:'700' } }, String(num || 0)),
+        h('span', { style: { color: C.textDarkMeta, fontSize:'9px', fontWeight:'500' } }, label)
+      );
+    };
+    var stripHeader = h('div', { style: {
+      background: C.headerDark, padding: '8px 10px', flexShrink: '0'
+    }},
+      /* Row 1: WA icon + version badge + inline stat pills, on ONE line */
+      h('div', { style: {
+        display:'flex', alignItems:'center', gap:'6px',
+        flexWrap:'nowrap', overflowX:'auto', marginBottom:'8px'
+      }},
+        h('div', { style: {
+          width:'32px', height:'32px', background:C.green, borderRadius:'8px',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          flexShrink:'0', boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
+        }}, ICON.waLogo('white', 18)),
+        /* Tiny version marker */
+        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.2'),
+        miniStat(stats.unread,   'Unread',   C.green),
+        miniStat(stats.open,     'Open',     '#F59E0B'),
+        miniStat(stats.resolved, 'Resolved', '#10B981'),
+        miniStat(stats.total,    'Total',    '#6366F1')
       ),
-      h('div', { style: { display:'flex', gap:'8px' }},
-        stat(stats.unread,   'Unread',   C.green),
-        stat(stats.open,     'Open',     '#F59E0B'),
-        stat(stats.resolved, 'Resolved', '#10B981'),
-        stat(stats.total,    'Total',    '#6366F1')
-      ),
-      /* v1_6 — INLINE SEARCH BOX right in the header, guaranteed visible */
+      /* Row 2: search box + filter button */
       (function () {
-        var searchWrap = h('div', {
-          style: {
-            marginTop:'6px', display:'flex', alignItems:'center', gap:'6px',
-            background:'#fff', borderRadius:'10px', padding:'6px 10px',
-            border:'1px solid rgba(255,255,255,0.35)'
-          }
-        });
-        searchWrap.appendChild(h('span', { style: { fontSize:'16px', flexShrink:'0' }}, '🔍'));
+        var searchWrap = h('div', { style: {
+          display:'flex', alignItems:'center', gap:'6px',
+          background:'#fff', borderRadius:'8px', padding:'4px 8px'
+        }});
+        searchWrap.appendChild(h('span', { style: { fontSize:'14px', flexShrink:'0' }}, '🔍'));
         var searchInput = h('input', {
-          type: 'text',
+          type:'text',
           value: S.search || '',
-          placeholder: 'Search name, phone, or message…',
-          /* Explicit dark-on-white for guaranteed visibility */
+          placeholder:'Search…',
           style: {
             flex:'1', border:'none', outline:'none', background:'transparent',
-            fontSize:'14px', color:'#111827', minWidth:'0', padding:'1px 0'
+            fontSize:'14px', color:'#111827', minWidth:'0', padding:'2px 0'
           },
           oninput: function (e) {
             S.search = e.target.value;
-            /* Immediate local re-filter */
             rerender();
-            /* Debounced server search */
             try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
             S.dSrchT = setTimeout(function () {
               S.dSearch = S.search; S.page = 1;
@@ -657,12 +653,12 @@
           }
         });
         searchWrap.appendChild(searchInput);
-        /* Big red X clear button when there's text */
+        /* Clear ✕ button */
         if (S.search) {
-          var xBtn = h('button', {
+          searchWrap.appendChild(h('button', {
             style: {
               background:'#DC2626', color:'#fff', border:'none', borderRadius:'50%',
-              width:'26px', height:'26px', cursor:'pointer', fontSize:'14px',
+              width:'22px', height:'22px', cursor:'pointer', fontSize:'12px',
               fontWeight:'700', display:'flex', alignItems:'center',
               justifyContent:'center', flexShrink:'0', lineHeight:'1'
             },
@@ -670,13 +666,22 @@
               S.search = ''; S.dSearch = ''; S.page = 1;
               loadThreads().then(rerender);
             }
-          }, '✕');
-          searchWrap.appendChild(xBtn);
+          }, '✕'));
         }
-        return searchWrap;
+        /* v2_2 — Filter button (opens filter menu) */
+        var filterBtn = h('button', {
+          style: {
+            background: (S.filterUser || S.filterPhone) ? C.green : '#F3F4F6',
+            color: (S.filterUser || S.filterPhone) ? '#fff' : '#4B5563',
+            border:'none', borderRadius:'8px', padding:'6px 10px',
+            cursor:'pointer', fontSize:'13px', fontWeight:'600',
+            display:'flex', alignItems:'center', gap:'4px', flexShrink:'0'
+          },
+          onclick: function () { S.overlay = 'filter'; rerender(); }
+        }, '⚙', h('span', { style: { fontSize:'11px' }}, 'Filter'));
+        return h('div', { style: { display:'flex', gap:'6px', alignItems:'stretch' }}, searchWrap, filterBtn);
       })()
     );
-
     var chips = h('div', { style: {
       display:'flex', gap:'6px', padding:'8px 12px', background:'#fff',
       borderBottom:'1px solid #E5E7EB', flexShrink:'0', overflowX:'auto'
@@ -2001,6 +2006,98 @@ api('api_leads_update', lid, { status_id: opt.id })
   }
 
   /* =============================================================
+   * 20c. OVERLAY: FILTER (v2_2)
+   * Sub-filters: filter by assigned user, filter by phone number.
+   * Both empty = no extra filter (default).
+   * ============================================================= */
+  function overlayFilter() {
+    var users = (S.users || []).slice().sort(function (a, b) {
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    var phones = S.phones || [];
+    var sheet = h('div', {
+      class:'wbv2m-sheet',
+      style: {
+        position:'absolute', bottom:'0', left:'0', right:'0', maxHeight:'70vh',
+        background:'#fff', borderRadius:'20px 20px 0 0', paddingBottom:'16px',
+        display:'flex', flexDirection:'column'
+      }
+    },
+      h('div', { style: { width:'36px', height:'4px', background:'#E5E7EB', borderRadius:'100px', margin:'10px auto 0' }}),
+      h('div', { style: { padding:'14px 16px 10px', borderBottom:'1px solid ' + C.divider,
+                           display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:'0' }},
+        h('h3', { style: { margin:'0', fontSize:'16px', fontWeight:'700', color:'#111' }}, 'Filter conversations'),
+        h('button', {
+          style: { background:'#F3F4F6', border:'none', cursor:'pointer', width:'28px', height:'28px',
+                   borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+                   fontSize:'14px', color:'#6B7280' },
+          onclick: closeOverlay
+        }, '✕')
+      ),
+      h('div', { style: { flex:'1', overflowY:'auto', padding:'12px 16px' }},
+        /* User filter */
+        h('div', { style: { marginBottom:'16px' }},
+          h('div', { style: { fontSize:'12px', fontWeight:'700', color:'#6B7280',
+                              textTransform:'uppercase', marginBottom:'8px' }}, '👤 Assigned to'),
+          h('select', {
+            value: S.filterUser || '',
+            style: { width:'100%', padding:'10px', border:'1px solid #E5E7EB',
+                     borderRadius:'8px', fontSize:'14px', background:'#fff' },
+            onchange: function (e) { S.filterUser = e.target.value || null; }
+          },
+            h('option', { value:'' }, '— Any user —'),
+            users.map(function (u) {
+              return h('option', { value: u.id, selected: String(S.filterUser) === String(u.id) ? 'selected' : null }, u.name);
+            })
+          )
+        ),
+        /* Phone number filter */
+        h('div', { style: { marginBottom:'16px' }},
+          h('div', { style: { fontSize:'12px', fontWeight:'700', color:'#6B7280',
+                              textTransform:'uppercase', marginBottom:'8px' }}, '📞 WhatsApp number'),
+          h('select', {
+            value: S.filterPhone || '',
+            style: { width:'100%', padding:'10px', border:'1px solid #E5E7EB',
+                     borderRadius:'8px', fontSize:'14px', background:'#fff' },
+            onchange: function (e) { S.filterPhone = e.target.value || null; }
+          },
+            h('option', { value:'' }, '— Any number —'),
+            phones.map(function (p) {
+              return h('option', { value: p.id || p.phone,
+                                    selected: String(S.filterPhone) === String(p.id || p.phone) ? 'selected' : null },
+                (p.label ? p.label + ' · ' : '') + (p.phone || p.id));
+            })
+          )
+        )
+      ),
+      h('div', { style: { padding:'12px 16px', borderTop:'1px solid ' + C.divider, display:'flex', gap:'8px' }},
+        h('button', {
+          style: {
+            flex:'1', padding:'12px', background:'#F3F4F6', color:'#111',
+            border:'none', borderRadius:'10px', fontWeight:'600', cursor:'pointer'
+          },
+          onclick: function () {
+            S.filterUser = null; S.filterPhone = null;
+            closeOverlay();
+            loadThreads().then(rerender);
+          }
+        }, 'Clear'),
+        h('button', {
+          style: {
+            flex:'2', padding:'12px', background:C.greenDark, color:'#fff',
+            border:'none', borderRadius:'10px', fontWeight:'700', cursor:'pointer'
+          },
+          onclick: function () {
+            closeOverlay();
+            loadThreads().then(rerender);
+          }
+        }, 'Apply filters')
+      )
+    );
+    return overlayBackdrop(sheet);
+  }
+
+  /* =============================================================
    * 21. NAVIGATION HELPERS
    * ============================================================= */
   function openChat(t) {
@@ -2186,6 +2283,7 @@ api('api_leads_update', lid, { status_id: opt.id })
     else if (S.overlay === 'number')   wrap.appendChild(overlayNumberPicker());
     else if (S.overlay === 'assign')   wrap.appendChild(overlayAssignPicker());
     else if (S.overlay === 'remarks')  wrap.appendChild(overlayRemarks());
+    else if (S.overlay === 'filter')   wrap.appendChild(overlayFilter());
 
     S.view.replaceChildren(wrap);
     /* v2_0 — force-exit button removed with FULL VIEW feature */
