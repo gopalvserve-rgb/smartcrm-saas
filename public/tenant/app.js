@@ -23337,7 +23337,7 @@ function _caRenderRecent(rowsAll) {
   const fmtDur = (s) => { s = Number(s) || 0; if (!s) return '—'; const m = Math.floor(s/60), ss = String(s%60).padStart(2,'0'); return m + ':' + ss; };
   const t = h('table', { class: 'table' });
   t.innerHTML = '<thead><tr>' +
-    '<th style="width:24px"></th><th></th><th>Name / Phone</th><th>Rep</th><th>Direction</th><th>Duration</th><th>When</th><th></th>' +
+    '<th style="width:24px"></th><th></th><th>Name / Phone</th><th>Rep</th><th>Direction</th><th>Duration</th><th>SIM</th><th>When</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map(r => {
       const dur = Number(r.rec_duration || r.duration_s) || 0;
@@ -23360,6 +23360,12 @@ function _caRenderRecent(rowsAll) {
         '<td>' + esc(r.rep_name || '—') + '</td>' +
         '<td>' + direction + '</td>' +
         '<td>' + fmtDur(dur) + '</td>' +
+        // CALLS_SIM_COL_v1 — show which SIM the call came from, so a wrong-SIM or
+        // untagged call is obvious at a glance. '—' = we don't know (live-captured
+        // rows have no SIM; only the phone's call log carries it).
+        '<td>' + (_sim === ''
+          ? '<span class="muted">—</span>'
+          : '<span title="' + esc(r.sim_label || ('SIM ' + (Number(_sim) + 1))) + '">SIM ' + (Number(_sim) + 1) + '</span>') + '</td>' +
         '<td>' + when + '</td>' +
         '<td>' +
           (r.lead_id ? '<button class="btn sm" onclick="openLeadModal(' + r.lead_id + ')">Open lead</button>' : '') +

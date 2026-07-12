@@ -184,7 +184,9 @@
   // ---- main panel ---------------------------------------------------------
   var _targetUserId = 0;   // whose settings the admin is editing (0 = me)
 
-  async function render(body) {
+  async function render(body, opts) {
+    opts = opts || {};
+    var compact = !!opts.compact;   // Dialer > Settings on the phone: just my own stuff
     body.innerHTML = '<div class="loading">Loading…</div>';
 
     var uid = _targetUserId || myId();
@@ -212,7 +214,7 @@
     body.appendChild(wrap);
 
     // ---- admin: whose settings am I editing? ----
-    if (isAdmin() && users.length) {
+    if (isAdmin() && users.length && !compact) {
       var pick = card('👤 Whose settings?', 'As an admin you can set these up on behalf of any rep.');
       var us = el('select', { class: 'input', style: 'max-width:22rem' });
       users.forEach(function (u) {
@@ -369,7 +371,7 @@
           try { localStorage.setItem('cls_auto_enabled_' + (slug() || 'x'), eff ? '1' : '0'); } catch (e) {}
         }
         toast('✅ Saved', 'ok');
-        render(body);
+        render(body, opts);
       } catch (e) {
         toast('Could not save: ' + e.message, 'err');
         saveBtn.disabled = false;
@@ -393,8 +395,8 @@
       wrap.appendChild(syncCard);
     }
 
-    // ============ 4. COMPANY DEFAULTS (admin only) ============
-    if (!isAdmin()) return;
+    // ============ 4. COMPANY DEFAULTS (admin only, desktop) ============
+    if (!isAdmin() || compact) return;
 
     var c4 = card('🏢 Company defaults',
       'What applies to any rep who hasn’t chosen for themselves — and to everyone who joins later. ' +
@@ -485,6 +487,33 @@
     });
   }
 
+  // ---- Dialer > ⚙️ Settings (the phone) -------------------------------------
+  // This is where reps actually look for phone settings — the Dialer already owns
+  // the caller-card and recording toggles, so SIM choice / call sync / auto-add-lead
+  // belong next to them, not buried in the desktop Settings screen.
+  function injectDialerSettings() {
+    if (String(location.hash).indexOf('dialer') < 0) return;
+    var host = document.querySelector('.dialer-settings');
+    if (!host) return;                                   // not on the ⚙️ tab
+    if (host.querySelector('#cs-dialer-card')) return;   // already injected
+
+    var box = document.createElement('div');
+    box.id = 'cs-dialer-card';
+    box.className = 'settings-card';
+    box.style.cssText = 'border-left:4px solid #4f46e5';
+    box.innerHTML = '<div style="font-weight:700;margin-bottom:.15rem">📱 Calls, SIM &amp; CRM sync</div>' +
+      '<div class="muted" style="font-size:.82rem;margin-bottom:.6rem">' +
+      'Which SIM to copy calls from, and whether unknown numbers become leads. These are ' +
+      '<b>your own</b> settings — they don\'t affect anyone else.</div>';
+    var inner = document.createElement('div');
+    box.appendChild(inner);
+    host.appendChild(box);
+
+    render(inner, { compact: true }).catch(function (e) {
+      inner.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
+    });
+  }
+
   // ---- SIM filter on Call Activity -----------------------------------------
   function injectSimFilter() {
     if (String(location.hash).indexOf('callactivity') < 0) return;
@@ -530,14 +559,14 @@
 
   // ---- boot ---------------------------------------------------------------
   var mo = new MutationObserver(function () {
-    try { injectTab(); injectSimFilter(); } catch (e) {}
+    try { injectTab(); injectSimFilter(); injectDialerSettings(); } catch (e) {}
   });
   function start() {
     try { mo.observe(document.getElementById('app') || document.body, { childList: true, subtree: true }); } catch (e) {}
     window.addEventListener('hashchange', function () {
-      setTimeout(function () { try { injectTab(); injectSimFilter(); } catch (e) {} }, 250);
+      setTimeout(function () { try { injectTab(); injectSimFilter(); injectDialerSettings(); } catch (e) {} }, 250);
     });
-    setTimeout(function () { try { injectTab(); injectSimFilter(); } catch (e) {} }, 900);
+    setTimeout(function () { try { injectTab(); injectSimFilter(); injectDialerSettings(); } catch (e) {} }, 900);
     try { window.CRM_openCallSettings = openTab; } catch (e) {}
   }
   if (document.body) start();
