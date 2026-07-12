@@ -613,30 +613,86 @@
               h('span', { style: {
                 fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
                 color: C.green, padding:'2px 6px', borderRadius:'4px'
-              }}, 'v1.5')
+              }}, 'v1.6')
             ),
             h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
           )
         ),
-        h('div', { style: { display:'flex', gap:'2px' }},
-          h('button', {
-            class: 'wbv2m-btn-tap',
-            style: { background:'none', border:'none', cursor:'pointer', padding:'8px', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center' },
-            onclick: function () { S.screen = 'search'; S.search = ''; rerender(); }
-          }, ICON.search(C.textDarkMeta)),
-          h('button', {
-            class: 'wbv2m-btn-tap',
-            style: { background:'none', border:'none', cursor:'pointer', padding:'8px', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center' },
-            onclick: function () { toast('Tap a chat below to compose a reply', 'info'); }
-          }, ICON.compose(C.textDarkMeta))
-        )
+        /* v1_6 — replaced tiny icon buttons with a BIG obvious Full View pill */
+        h('button', {
+          style: {
+            background: S.fullscreen ? '#DC2626' : C.green,
+            color: '#fff', border:'none', borderRadius:'20px',
+            padding:'8px 14px', fontSize:'13px', fontWeight:'700',
+            cursor:'pointer', display:'flex', alignItems:'center', gap:'6px',
+            boxShadow:'0 2px 8px rgba(0,0,0,0.25)'
+          },
+          onclick: function () {
+            S.fullscreen = !S.fullscreen;
+            try {
+              if (S.fullscreen) document.body.classList.add('wa-mobile-fullscreen');
+              else document.body.classList.remove('wa-mobile-fullscreen');
+            } catch (_) {}
+            rerender();
+          }
+        }, S.fullscreen ? '⤢ Exit Full View' : '🖥 FULL VIEW')
       ),
       h('div', { style: { display:'flex', gap:'8px' }},
         stat(stats.unread,   'Unread',   C.green),
         stat(stats.open,     'Open',     '#F59E0B'),
         stat(stats.resolved, 'Resolved', '#10B981'),
         stat(stats.total,    'Total',    '#6366F1')
-      )
+      ),
+      /* v1_6 — INLINE SEARCH BOX right in the header, guaranteed visible */
+      (function () {
+        var searchWrap = h('div', {
+          style: {
+            marginTop:'12px', display:'flex', alignItems:'center', gap:'8px',
+            background:'#fff', borderRadius:'12px', padding:'10px 12px',
+            border:'2px solid rgba(255,255,255,0.35)'
+          }
+        });
+        searchWrap.appendChild(h('span', { style: { fontSize:'16px', flexShrink:'0' }}, '🔍'));
+        var searchInput = h('input', {
+          type: 'text',
+          value: S.search || '',
+          placeholder: 'Search name, phone, or message…',
+          /* Explicit dark-on-white for guaranteed visibility */
+          style: {
+            flex:'1', border:'none', outline:'none', background:'transparent',
+            fontSize:'16px', color:'#111827', minWidth:'0', padding:'2px 0'
+          },
+          oninput: function (e) {
+            S.search = e.target.value;
+            /* Immediate local re-filter */
+            rerender();
+            /* Debounced server search */
+            try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
+            S.dSrchT = setTimeout(function () {
+              S.dSearch = S.search; S.page = 1;
+              loadThreads().then(rerender).catch(function () {});
+            }, 400);
+          }
+        });
+        searchWrap.appendChild(searchInput);
+        /* Big red X clear button when there's text */
+        if (S.search) {
+          var xBtn = h('button', {
+            style: {
+              background:'#DC2626', color:'#fff', border:'none', borderRadius:'50%',
+              width:'26px', height:'26px', cursor:'pointer', fontSize:'14px',
+              fontWeight:'700', display:'flex', alignItems:'center',
+              justifyContent:'center', flexShrink:'0', lineHeight:'1'
+            },
+            onclick: function () {
+              S.search = ''; S.dSearch = ''; S.page = 1;
+              loadThreads().then(rerender);
+            }
+          }, '✕');
+          searchWrap.appendChild(xBtn);
+        }
+        return searchWrap;
+      })()
     );
 
     var chips = h('div', { style: {
@@ -2046,21 +2102,27 @@ api('api_leads_update', lid, { status_id: opt.id })
     if (document.getElementById('wa-mobile-fs-css')) return;
     var s = document.createElement('style');
     s.id = 'wa-mobile-fs-css';
+    /* v1_6 — nuclear fullscreen: hide ALL app chrome, edge-to-edge WA */
     s.textContent =
+      'body.wa-mobile-fullscreen > *:not(.wbv2m):not(script):not(style) { display:none !important; }' +
       'body.wa-mobile-fullscreen #sidebar,' +
       'body.wa-mobile-fullscreen .topbar,' +
       'body.wa-mobile-fullscreen #topbar,' +
       'body.wa-mobile-fullscreen .app-topbar,' +
       'body.wa-mobile-fullscreen .app-sidebar,' +
+      'body.wa-mobile-fullscreen aside,' +
+      'body.wa-mobile-fullscreen header:not(.wbv2m header),' +
+      'body.wa-mobile-fullscreen footer,' +
+      'body.wa-mobile-fullscreen nav,' +
       'body.wa-mobile-fullscreen .fab,' +
       'body.wa-mobile-fullscreen .lead-add-fab,' +
       'body.wa-mobile-fullscreen #lead-add-fab-mobile,' +
       'body.wa-mobile-fullscreen .topbar-chip,' +
       'body.wa-mobile-fullscreen .app-footer { display: none !important; }' +
-      'body.wa-mobile-fullscreen { padding:0 !important; margin:0 !important; overflow:hidden !important; }' +
+      'body.wa-mobile-fullscreen { padding:0 !important; margin:0 !important; overflow:hidden !important; background:#fff !important; }' +
       'body.wa-mobile-fullscreen #view,' +
       'body.wa-mobile-fullscreen .shell,' +
-      'body.wa-mobile-fullscreen main { height:100vh !important; margin:0 !important; padding:0 !important; }' +
+      'body.wa-mobile-fullscreen main { height:100vh !important; width:100vw !important; margin:0 !important; padding:0 !important; position:fixed !important; top:0 !important; left:0 !important; right:0 !important; bottom:0 !important; z-index:9998 !important; }' +
       /* iOS momentum scrolling for messages area */
       '.wbv2m *{-webkit-overflow-scrolling:touch;}';
     document.head.appendChild(s);
