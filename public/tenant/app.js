@@ -10091,6 +10091,11 @@ async function openLeadModal(id) {
       // payload, so selecting a campaign never persisted (reverted to None on
       // reopen) and the dashboard campaign filter had nothing to match.
       campaign_id: fd.get('campaign_id') ? (Number(fd.get('campaign_id')) || null) : null,
+      // SUB_STATUS_SAVE_FIX_v1 (2026-07-12) — same bug as campaign_id above: the
+      // Sub-status dropdown was rendered and pre-selected from the lead, but its
+      // value was NEVER added to the save payload, so picking one did nothing and
+      // it showed "— none —" again on reopen. '' (none) must send null, not 0.
+      sub_status_id: fd.get('sub_status_id') ? (Number(fd.get('sub_status_id')) || null) : null,
       tags: tagsValue,
       next_followup_at: localDtInputToIso(fd.get('next_followup_at')),
       city: fd.get('city'), notes: fd.get('notes'),
