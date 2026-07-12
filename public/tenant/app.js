@@ -23348,7 +23348,10 @@ function _caRenderRecent(rowsAll) {
             ? 'Missed' : (r.direction === 'in' ? 'Incoming' : (r.direction === 'out' ? 'Outgoing' : (r.direction || ''))));
       const canSelect = !r.lead_id;
       const checked = window._caSelectedIds && window._caSelectedIds.has(r.id);
-      return '<tr>' +
+      // CALLS_HUB_v1 — expose the SIM slot so the SIM filter (callSettings.js) can
+      // show "SIM 1 only" / "SIM 2 only" without re-fetching or touching this render.
+      const _sim = (r.sim_slot == null || r.sim_slot === '') ? '' : String(r.sim_slot);
+      return '<tr data-sim="' + _sim + '">' +
         '<td>' + (canSelect ? '<input type="checkbox" data-ce-id="' + r.id + '" ' + (checked ? 'checked' : '') + ' />' : '') + '</td>' +
         '<td style="font-size:1.2rem">' + dirIcon(r) + '</td>' +
         '<td><strong>' + esc(r.lead_name || r.phone || '—') + '</strong>' +

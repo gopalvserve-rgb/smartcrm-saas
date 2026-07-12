@@ -246,8 +246,11 @@
           lsJs.src = 'leadScoring.js?v=2026-06-27-restore-v1'; lsJs.defer = true;
           document.body.appendChild(lsJs);
           var clsJs = document.createElement('script');       // CALLLOG_SYNC_v1 — device call-log Sync UI + SIM settings
-          clsJs.src = 'callLogSync.js?v=2026-07-12-autosync-every-open-v3'; clsJs.defer = true;
+          clsJs.src = 'callLogSync.js?v=2026-07-12-callshub-v4'; clsJs.defer = true;
           document.body.appendChild(clsJs);
+          var csJs = document.createElement('script');
+          csJs.src = 'callSettings.js?v=2026-07-12-callshub-v1'; csJs.defer = true;
+          document.body.appendChild(csJs);
         }
         if (document.body) injectSpaScripts();
         else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });

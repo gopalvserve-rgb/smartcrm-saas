@@ -167,6 +167,11 @@
   function autoSync(reason) {
     if (autoRunning) return;
     if (!hasNative()) return;                                  // desktop web
+    // CALLS_HUB_v1 — respect the rep's toggle in Settings > Calls & Mobile.
+    // Default ON; only an explicit '0' turns it off.
+    try {
+      if (localStorage.getItem('cls_auto_enabled_' + (slug() || 'x')) === '0') return;
+    } catch (e) {}
     if (!token()) { waitForTokenThenSync(reason); return; }    // bug 3: retry, don't give up
 
     var now = Date.now();
