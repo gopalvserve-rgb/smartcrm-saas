@@ -535,6 +535,9 @@
       } else if (S.filter === 'resolved') {
         if (statusStage(t.status_name) !== 'resolved') return false;
       }
+      /* v2_3 — user + WA-number filter (from Filter overlay) */
+      if (S.filterUser && String(t.assigned_to || '') !== String(S.filterUser)) return false;
+      if (S.filterPhone && String(t.phone_number_id || '') !== String(S.filterPhone)) return false;
       // search
       if (q) {
         var hay = ((t.lead_name || '') + ' ' + (t.phone || '') + ' ' + (t.company || '') + ' ' + (t.last_msg || '')).toLowerCase();
@@ -595,7 +598,7 @@
         onclick: function () { S.filter = id; rerender(); }
       }, label);
     };
-    /* v2_2 — ONE-ROW compact header: WA icon + inline mini stat pills,
+    /* v2_3 — ONE-ROW compact header: WA icon + inline mini stat pills,
      * then compact search + filter button on next row. */
     var miniStat = function (num, label, color) {
       return h('div', { style: {
@@ -621,7 +624,7 @@
           flexShrink:'0', boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
         }}, ICON.waLogo('white', 18)),
         /* Tiny version marker */
-        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.2'),
+        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.3'),
         miniStat(stats.unread,   'Unread',   C.green),
         miniStat(stats.open,     'Open',     '#F59E0B'),
         miniStat(stats.resolved, 'Resolved', '#10B981'),
@@ -643,12 +646,21 @@
             fontSize:'14px', color:'#111827', minWidth:'0', padding:'2px 0'
           },
           oninput: function (e) {
+            /* v2_3 — DO NOT rerender on every keystroke; that destroys the
+             * input DOM and blocks the user from typing past the first char.
+             * Only debounced load fires rerender, and we restore focus + caret
+             * position after the async render so the user can keep typing. */
             S.search = e.target.value;
-            rerender();
             try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
             S.dSrchT = setTimeout(function () {
               S.dSearch = S.search; S.page = 1;
-              loadThreads().then(rerender).catch(function () {});
+              loadThreads().then(function () {
+                rerender();
+                try {
+                  var inp = document.querySelector('.wbv2m input[placeholder="Search…"]');
+                  if (inp) { inp.focus(); var v = String(inp.value || ''); inp.setSelectionRange(v.length, v.length); }
+                } catch (_) {}
+              }).catch(function () {});
             }, 400);
           }
         });
@@ -2043,7 +2055,7 @@ api('api_leads_update', lid, { status_id: opt.id })
             value: S.filterUser || '',
             style: { width:'100%', padding:'10px', border:'1px solid #E5E7EB',
                      borderRadius:'8px', fontSize:'14px', background:'#fff' },
-            onchange: function (e) { S.filterUser = e.target.value || null; }
+            onchange: function (e) { S.filterUser = e.target.value || null; rerender(); }
           },
             h('option', { value:'' }, '— Any user —'),
             users.map(function (u) {
@@ -2059,7 +2071,7 @@ api('api_leads_update', lid, { status_id: opt.id })
             value: S.filterPhone || '',
             style: { width:'100%', padding:'10px', border:'1px solid #E5E7EB',
                      borderRadius:'8px', fontSize:'14px', background:'#fff' },
-            onchange: function (e) { S.filterPhone = e.target.value || null; }
+            onchange: function (e) { S.filterPhone = e.target.value || null; rerender(); }
           },
             h('option', { value:'' }, '— Any number —'),
             phones.map(function (p) {
