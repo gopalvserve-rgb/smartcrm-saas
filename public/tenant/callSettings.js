@@ -621,7 +621,8 @@
       if (s !== '') slots[s] = true;
     });
     var keys = Object.keys(slots).sort();
-    if (!keys.length) return;   // no SIM-tagged rows yet — don't show a dead filter
+    // (Even with zero SIM-tagged rows we still render the chips — that is precisely
+    //  the case where the user needs to see that everything on screen is a ghost.)
 
     var box = document.createElement('span');
     box.id = 'cs-sim-filter';
@@ -630,24 +631,66 @@
     lab.className = 'muted'; lab.textContent = 'SIM';
     box.appendChild(lab);
 
-    var opts = [['', 'All']].concat(keys.map(function (k) { return [k, 'SIM ' + (Number(k) + 1)]; }));
+    // SIM_ONLY_DEFAULT_v1 (2026-07-12) — Call Activity now DEFAULTS to showing only
+    // calls that carry a SIM.
+    //
+    // Why a SIM is the right test: measured on live data, 349/349 rows that came from
+    // the phone's call log have a SIM, and 0/151 rows written by the live receiver do.
+    // So "has a SIM" is an exact proxy for "this really happened on the phone" — the
+    // live receiver's rows are the ones with the wrong timestamps (a Doze-delayed
+    // RINGING broadcast produced a phantom "Missed" call 24 minutes after a call that
+    // was actually answered), no number, and unreliable direction.
+    //
+    // This is a VIEW FILTER ONLY. Nothing is deleted, nothing is hidden server-side by
+    // this code, and "All" brings everything straight back — so it can be watched for a
+    // day and reverted instantly if it hides anything it shouldn't.
+    var MODES = [
+      ['sim',  'On SIM'],     // any SIM  -> the real calls
+      ['',     'All']         // everything, incl. rows with no SIM
+    ].concat(keys.map(function (k) { return [k, 'SIM ' + (Number(k) + 1)]; }));
+
+    var hint = document.createElement('span');
+    hint.className = 'muted';
+    hint.style.cssText = 'font-size:.78rem;margin-left:.35rem';
+
+    function apply(mode) {
+      var hidden = 0, shown = 0;
+      tbl.querySelectorAll('tbody tr').forEach(function (tr) {
+        var sim = tr.getAttribute('data-sim');
+        var ok;
+        if (mode === 'sim')      ok = (sim !== '' && sim !== null);
+        else if (mode === '')    ok = true;
+        else                     ok = (sim === mode);
+        tr.style.display = ok ? '' : 'none';
+        if (ok) shown++; else hidden++;
+      });
+      hint.textContent = (mode === 'sim' && hidden)
+        ? '(' + hidden + ' hidden — no SIM, not from the phone\'s call log)'
+        : '';
+      try { localStorage.setItem('ca_sim_mode', mode); } catch (e) {}
+    }
+
+    var saved = 'sim';
+    try { var v = localStorage.getItem('ca_sim_mode'); if (v !== null) saved = v; } catch (e) {}
+    if (!MODES.some(function (m) { return m[0] === saved; })) saved = 'sim';
+
     var btns = [];
-    opts.forEach(function (o) {
+    MODES.forEach(function (o) {
       var b = document.createElement('button');
       b.className = 'btn sm';
       b.textContent = o[1];
+      if (o[0] === 'sim') b.title = 'Only calls that really happened on your phone (they carry a SIM). Hides ghost rows from the live receiver.';
       b.onclick = function () {
         btns.forEach(function (x) { x.classList.toggle('primary', x === b); });
-        tbl.querySelectorAll('tbody tr').forEach(function (tr) {
-          var s = tr.getAttribute('data-sim');
-          tr.style.display = (!o[0] || s === o[0]) ? '' : 'none';
-        });
+        apply(o[0]);
       };
+      if (o[0] === saved) b.classList.add('primary');
       btns.push(b);
       box.appendChild(b);
     });
-    btns[0].classList.add('primary');
+    box.appendChild(hint);
     bar.appendChild(box);
+    apply(saved);
   }
 
   // ---- boot ---------------------------------------------------------------
