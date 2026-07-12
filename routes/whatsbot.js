@@ -1843,8 +1843,17 @@ function _wbApplyThreadFilters(list, opts) {
   var q = String((opts && opts.q) || '').trim().toLowerCase();
   var digits = q.replace(/\D/g, '');
   var statusFilter = String((opts && opts.status_filter) || '').toLowerCase();
-  var page = Math.max(1, Number((opts && opts.page) || 0));
-  var pageSize = Math.max(1, Math.min(200, Number((opts && opts.page_size) || 0)));
+  /* WA_CHAT_PAGING_FIX_v1 (2026-07-12) — DANGEROUS DEFAULT, now fixed.
+   * This used to read:
+   *   page     = Math.max(1, Number(opts.page || 0));        // → 1
+   *   pageSize = Math.max(1, Math.min(200, opts.page_size || 0)); // → 1  (!!)
+   * so ANY caller that didn't pass page_size — the 20s auto-poller in
+   * wbChatV2.js, the mobile list, every legacy caller — silently got a slice
+   * of ONE thread. Pagination is now opt-in: no page_size, no slicing, full
+   * list returned exactly as before WA_MOBILE_V1_2. */
+  var sizeRaw = Number((opts && opts.page_size) || 0);
+  var page = Math.max(1, Number((opts && opts.page) || 1));
+  var pageSize = sizeRaw > 0 ? Math.min(200, sizeRaw) : 0;
   var out = list;
   if (q) {
     out = out.filter(function (t) {
@@ -1870,9 +1879,16 @@ function _wbApplyThreadFilters(list, opts) {
     });
   }
   var total = out.length;
-  if (page && pageSize) {
+  if (pageSize > 0) {
     var start = (page - 1) * pageSize;
     var sliced = out.slice(start, start + pageSize);
+    /* .slice() drops the own-properties the caller attached to the array
+     * (unread_by_phone / filter_phone_number_id), which the unread badge needs.
+     * Carry them across. */
+    try {
+      if (out.unread_by_phone !== undefined) sliced.unread_by_phone = out.unread_by_phone;
+      if (out.filter_phone_number_id !== undefined) sliced.filter_phone_number_id = out.filter_phone_number_id;
+    } catch (_) {}
     /* Return page as array (unchanged contract) but stash meta on the
      * array itself via a non-enumerable property so paginated callers
      * can read it. Old callers ignore it. */
