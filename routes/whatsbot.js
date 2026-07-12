@@ -2066,10 +2066,18 @@ async function api_wb_chat_threads(token, opts) {
   return _wbApplyThreadFilters(outThreads, opts);
 }
 
-async function api_wb_chat_messages(token, phone) {
+async function api_wb_chat_messages(token, phone, opts) {
+  /* WA_MOBILE_V1_3 (2026-07-12) — message pagination. Backward compat:
+   * old callers pass (token, phone) with no opts and behave exactly as
+   * before (last 500 messages, ASC).
+   * New signature: opts = { before_ts, limit }
+   *   before_ts — ISO timestamp; return only messages with created_at < before_ts
+   *   limit     — cap; default 500 for legacy, 100 for paginated calls */
   const me = await authUser(token);
   if (!phone) return [];
   const p = String(phone).replace(/\D/g, '');
+  const beforeTs = (opts && opts.before_ts) ? String(opts.before_ts) : null;
+  const limit    = Math.max(1, Math.min(1000, Number((opts && opts.limit) || 0))) || 500;
   // Reading a thread is permissive — any authenticated user can fetch
   // messages by phone (e.g. when opening a chat from the lead modal or
   // from the WhatsApp icon on the leads list). The threads-LIST is the
@@ -2081,18 +2089,31 @@ async function api_wb_chat_messages(token, phone) {
    * with the actual sender's name. LEFT JOIN — messages sent from the
    * WA mobile app have user_id NULL and get no join match (renders as
    * '📱 Mobile' in the SPA). */
-  const { rows } = await db.query(
+  /* v1_3 — when before_ts is set, page BACKWARD: DESC by created_at,
+   * grab `limit` rows, then reverse to ASC before returning. */
+  const sqlArgs = [p];
+  let sqlWhere = '(w.from_number = $1 OR w.to_number = $1)';
+  let sqlOrder = 'ORDER BY w.created_at ASC';
+  let sqlLimit = 'LIMIT 500';
+  if (beforeTs) {
+    sqlArgs.push(beforeTs);
+    sqlWhere += ' AND w.created_at < $2';
+    sqlOrder = 'ORDER BY w.created_at DESC';
+    sqlLimit = 'LIMIT ' + limit;
+  }
+  const { rows: rawRows } = await db.query(
     `SELECT w.id, w.direction, w.body, w.message_type, w.media_url, w.media_id,
             w.status, w.reply_to, w.created_at, w.read_at, w.delivered_at,
             w.error_text, w.template_name, w.phone_number_id,
             w.user_id, u.name AS user_name
        FROM whatsapp_messages w
        LEFT JOIN users u ON u.id = w.user_id
-       WHERE w.from_number = $1 OR w.to_number = $1
-       ORDER BY w.created_at ASC
-       LIMIT 500`,
-    [p]
+       WHERE ` + sqlWhere + `
+       ` + sqlOrder + `
+       ` + sqlLimit,
+    sqlArgs
   );
+  const rows = beforeTs ? rawRows.slice().reverse() : rawRows;
   // Mark inbound messages as read
   try {
     await db.query(
