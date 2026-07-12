@@ -241,7 +241,19 @@ async function api_leads_recordings(token, leadId) {
  *  CALLS_ADMIN_v1 (2026-06-27): admin/manager bypasses the user filter so
  *  the Lead modal Calls view + Dialer history aren't empty for them on
  *  showcase tenants (and on any real account where the admin hasn't
- *  personally dialled but wants to audit team activity). */
+ *  personally dialled but wants to audit team activity).
+ *
+ *  DIAL_REQUESTED_HIDE_v1 (2026-07-12): 'dial_requested' rows are NOT calls.
+ *  app.js writes one the instant a rep TAPS the call button in the CRM —
+ *  before the dialer even opens — purely as a reference point for the
+ *  recording-sync gate and the dial-count badge. If the rep then backs out
+ *  and never places the call, that row still sat in Call Activity looking
+ *  like a real 0-second "Outgoing" call the rep never made. (Reported:
+ *  +918376947677 / lead "Honey Vasistha" showing as Dialing.)
+ *  Worse, when the call WAS placed, this 0s row matched the de-dup in
+ *  callLogSync and swallowed the real synced row, so the talk time was lost.
+ *  The row still exists (the gate and the dial count still use it) — it is
+ *  simply no longer shown as a call. The phone's call log remains the truth. */
 async function api_call_history(token, limit) {
   const me = await authUser(token);
   const lim = Math.min(Number(limit) || 100, 500);
@@ -258,6 +270,7 @@ async function api_call_history(token, limit) {
          LEFT JOIN leads l ON l.id = ce.lead_id
          LEFT JOIN users u ON u.id = ce.user_id
          LEFT JOIN lead_recordings r ON r.id = ce.recording_id
+        WHERE COALESCE(ce.event,'') <> 'dial_requested'
         ORDER BY ce.created_at DESC
         LIMIT $1`,
       [lim]
@@ -274,6 +287,7 @@ async function api_call_history(token, limit) {
        LEFT JOIN leads l ON l.id = ce.lead_id
        LEFT JOIN lead_recordings r ON r.id = ce.recording_id
       WHERE ce.user_id = $1
+        AND COALESCE(ce.event,'') <> 'dial_requested'
       ORDER BY ce.created_at DESC
       LIMIT $2`,
     [me.id, lim]

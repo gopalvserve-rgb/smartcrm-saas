@@ -108,7 +108,7 @@ async function api_call_logSyncBatch(token, payload) {
     const { rows: dup } = await db.query(
       `SELECT 1 FROM call_events
          WHERE user_id = $1 AND direction = $2
-           AND event <> 'incoming_ringing'
+           AND event NOT IN ('incoming_ringing', 'dial_requested')
            AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') LIKE $3
            AND ( ABS(EXTRACT(EPOCH FROM (created_at - $4::timestamptz))) < ${W}
               OR ABS(EXTRACT(EPOCH FROM ((created_at - (COALESCE(duration_s,0) * interval '1 second')) - $4::timestamptz))) < ${W} )
@@ -144,6 +144,11 @@ async function api_call_logSyncBatch(token, payload) {
                  regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') = ''
                  OR ( regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') LIKE $2
                       AND ( direction = 'unknown'
+                            -- DIAL_REQUESTED_HIDE_v1: a 'dial_requested' row is a
+                            -- 0-second INTENT written when the rep tapped Call. If the
+                            -- call really happened, absorb it here so the row carries the
+                            -- real talk time instead of staying at 0s.
+                            OR ( COALESCE(duration_s,0) = 0 AND event = 'dial_requested' )
                             OR ( COALESCE(duration_s,0) = 0 AND direction <> $3 ) ) )
                )
            AND ABS(EXTRACT(EPOCH FROM (created_at - $4::timestamptz))) < ${RW}
