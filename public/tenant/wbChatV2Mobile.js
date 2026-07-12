@@ -607,7 +607,14 @@
             display:'flex', alignItems:'center', justifyContent:'center'
           }}, ICON.waLogo('white')),
           h('div', null,
-            h('div', { style: { color:'#fff', fontSize:'16px', fontWeight:'700', lineHeight:'1.1' } }, 'SmartCRM'),
+            h('div', { style: { color:'#fff', fontSize:'16px', fontWeight:'700', lineHeight:'1.1', display:'flex', alignItems:'center', gap:'6px' } },
+              'SmartCRM',
+              /* v1_5 — visible build tag so user can confirm which version their phone is running */
+              h('span', { style: {
+                fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
+                color: C.green, padding:'2px 6px', borderRadius:'4px'
+              }}, 'v1.5')
+            ),
             h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
           )
         ),
@@ -653,6 +660,38 @@
       ));
     } else {
       rows.forEach(function (t) { list.appendChild(threadRow(t, false)); });
+      /* v1_5 — inline pagination row at the BOTTOM of the scrollable list
+       * (not floating). Follows the last conversation, respects scroll. */
+      if (S.hasMore) {
+        var loadRow = h('button', {
+          style: {
+            display:'block', width:'calc(100% - 32px)', margin:'12px 16px 20px',
+            background:'#fff', border:'2px dashed #00A884', color:'#00A884',
+            padding:'14px', borderRadius:'12px', fontSize:'14px', fontWeight:'700',
+            cursor:'pointer'
+          },
+          onclick: function () {
+            if (S.loadingMore) return;
+            S.loadingMore = true;
+            loadRow.textContent = 'Loading page ' + ((S.page || 1) + 1) + '…';
+            var nextPage = (S.page || 1) + 1;
+            loadThreads({ page: nextPage }).then(function () {
+              S.page = nextPage;
+              S.loadingMore = false;
+              rerender();
+            }).catch(function () {
+              S.loadingMore = false;
+              loadRow.textContent = '⚠ Retry — Load next page';
+            });
+          }
+        }, '⬇ Load page ' + ((S.page || 1) + 1) + '  (next 50 chats)');
+        list.appendChild(loadRow);
+      } else if ((S.page || 1) > 1) {
+        list.appendChild(h('div', {
+          style: { textAlign:'center', color:'#9CA3AF', fontSize:'12px',
+                   padding:'16px 12px 24px', fontStyle:'italic' }
+        }, '— End of conversations · ' + rows.length + ' shown across ' + (S.page || 1) + ' pages —'));
+      }
     }
 
     return h('div', { style: {
@@ -2063,27 +2102,7 @@ api('api_leads_update', lid, { status_id: opt.id })
     else                              screenNode = renderList();
     wrap.appendChild(screenNode);
 
-    /* WA_MOBILE_V1_4 — floating pagination footer for list view */
-    if (S.screen === 'list' && S.hasMore) {
-      var pgBar = document.createElement('div');
-      pgBar.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#00A884;color:#fff;padding:12px 20px;border-radius:100px;box-shadow:0 4px 16px rgba(0,168,132,0.4);font-weight:600;font-size:13px;cursor:pointer;z-index:9997;display:flex;align-items:center;gap:8px;';
-      pgBar.innerHTML = '<span>Page ' + (S.page || 1) + '</span><span>→ Load next 50</span>';
-      pgBar.onclick = function () {
-        if (S.loadingMore) return;
-        S.loadingMore = true;
-        pgBar.innerHTML = '<span>Loading…</span>';
-        var nextPage = (S.page || 1) + 1;
-        loadThreads({ page: nextPage }).then(function () {
-          S.page = nextPage;
-          S.loadingMore = false;
-          rerender();
-        }).catch(function () {
-          S.loadingMore = false;
-          rerender();
-        });
-      };
-      wrap.appendChild(pgBar);
-    }
+    /* v1_5 — removed floating pagination; now inline at end of list */
     /* v1.1 — floating fullscreen toggle in top-right corner. Hides
      * the SPA sidebar + topbar + FAB by adding class wa-mobile-fullscreen
      * on <body>. Small ⤢ / ⤡ button so it stays visible on every screen. */
