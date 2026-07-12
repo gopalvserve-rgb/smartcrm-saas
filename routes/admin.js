@@ -10,6 +10,10 @@ const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
 const CONFIG_KEYS = [
+  // CALLS_HUB_v1 (2026-07-12) — settings surfaced in Settings -> 'Calls & Mobile'.
+  // CALLS_SYNC_LEAD_ONLY was read by routes/callLogSync.js but was NEVER in this
+  // allowlist, so api_admin_setConfig silently dropped every attempt to save it.
+  'CALLS_SYNC_LEAD_ONLY', 'CALLS_AUTOSYNC_ON_OPEN',
   'COMPANY_NAME', 'COMPANY_LOGO_URL', 'COMPANY_GST', 'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
   'META_APP_ID', 'META_APP_SECRET', 'META_PAGE_ID', 'META_PAGE_ACCESS_TOKEN', 'META_VERIFY_TOKEN',
   'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_BUSINESS_ACCOUNT_ID', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN',

@@ -225,6 +225,7 @@ async function api_call_history(token, limit) {
     const { rows } = await db.query(
       `SELECT ce.id, ce.lead_id, ce.user_id, ce.phone, ce.direction, ce.event,
               ce.duration_s, ce.recording_id, ce.created_at,
+              ce.sim_slot, ce.sim_label, ce.src,
               l.name AS lead_name,
               u.name AS user_name,
               r.id AS rec_id, r.duration_s AS rec_duration, r.size_bytes AS rec_size
@@ -241,6 +242,7 @@ async function api_call_history(token, limit) {
   const { rows } = await db.query(
     `SELECT ce.id, ce.lead_id, ce.user_id, ce.phone, ce.direction, ce.event,
             ce.duration_s, ce.recording_id, ce.created_at,
+            ce.sim_slot, ce.sim_label, ce.src,
             l.name AS lead_name,
             r.id AS rec_id, r.duration_s AS rec_duration, r.size_bytes AS rec_size
        FROM call_events ce
