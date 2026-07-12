@@ -624,7 +624,7 @@
           flexShrink:'0', boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
         }}, ICON.waLogo('white', 18)),
         /* Tiny version marker */
-        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.3'),
+        h('span', { style: { color:'rgba(255,255,255,0.35)', fontSize:'8px', fontWeight:'700', flexShrink:'0' }}, 'v2.4'),
         miniStat(stats.unread,   'Unread',   C.green),
         miniStat(stats.open,     'Open',     '#F59E0B'),
         miniStat(stats.resolved, 'Resolved', '#10B981'),
@@ -637,36 +637,42 @@
           background:'#fff', borderRadius:'8px', padding:'4px 8px'
         }});
         searchWrap.appendChild(h('span', { style: { fontSize:'14px', flexShrink:'0' }}, '🔍'));
+        /* v2_4 — MANUAL search: user types freely, then hits the Search
+         * button (or Enter). No debounce, no rerender-on-keystroke, so
+         * focus is never lost. runSearch() is defined below. */
         var searchInput = h('input', {
           type:'text',
           value: S.search || '',
-          placeholder:'Search…',
+          placeholder:'Type name/phone, then tap Search',
           style: {
             flex:'1', border:'none', outline:'none', background:'transparent',
             fontSize:'14px', color:'#111827', minWidth:'0', padding:'2px 0'
           },
-          oninput: function (e) {
-            /* v2_3 — DO NOT rerender on every keystroke; that destroys the
-             * input DOM and blocks the user from typing past the first char.
-             * Only debounced load fires rerender, and we restore focus + caret
-             * position after the async render so the user can keep typing. */
-            S.search = e.target.value;
-            try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
-            S.dSrchT = setTimeout(function () {
-              S.dSearch = S.search; S.page = 1;
-              loadThreads().then(function () {
-                rerender();
-                try {
-                  var inp = document.querySelector('.wbv2m input[placeholder="Search…"]');
-                  if (inp) { inp.focus(); var v = String(inp.value || ''); inp.setSelectionRange(v.length, v.length); }
-                } catch (_) {}
-              }).catch(function () {});
-            }, 400);
+          oninput:   function (e) { S.search = e.target.value; },
+          onkeydown: function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
           }
         });
+        function runSearch() {
+          S.dSearch = S.search || ''; S.page = 1;
+          loadThreads().then(rerender).catch(function () {});
+        }
+        function clearSearch() {
+          S.search = ''; S.dSearch = ''; S.page = 1;
+          loadThreads().then(rerender).catch(function () {});
+        }
         searchWrap.appendChild(searchInput);
-        /* Clear ✕ button */
-        if (S.search) {
+        /* v2_4 — always-visible Search button (green) */
+        searchWrap.appendChild(h('button', {
+          style: {
+            background: C.green || '#25D366', color:'#fff', border:'none',
+            borderRadius:'8px', padding:'6px 12px', cursor:'pointer',
+            fontSize:'12px', fontWeight:'700', flexShrink:'0', lineHeight:'1'
+          },
+          onclick: runSearch
+        }, '🔍 Search'));
+        /* Clear ✕ button — only when the ACTIVE search has a value */
+        if (S.dSearch) {
           searchWrap.appendChild(h('button', {
             style: {
               background:'#DC2626', color:'#fff', border:'none', borderRadius:'50%',
@@ -674,10 +680,7 @@
               fontWeight:'700', display:'flex', alignItems:'center',
               justifyContent:'center', flexShrink:'0', lineHeight:'1'
             },
-            onclick: function () {
-              S.search = ''; S.dSearch = ''; S.page = 1;
-              loadThreads().then(rerender);
-            }
+            onclick: clearSearch
           }, '✕'));
         }
         /* v2_2 — Filter button (opens filter menu) */
