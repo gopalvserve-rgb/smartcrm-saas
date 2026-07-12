@@ -129,21 +129,67 @@ async function api_leads_dialCount(token, leadId) {
   return { count: e.count || 0, last_dialed_at: e.last || null };
 }
 
+/**
+ * CALLLOG_IS_TRUTH_v1 (2026-07-12)
+ * --------------------------------
+ * The live path NEVER guesses any more. It writes a call_events row ONLY when
+ * it genuinely knows BOTH the phone number AND the direction. Anything else is
+ * left to the CallLog sync (routes/callLogSync.js), which copy-pastes the
+ * phone's own call log — number, timestamp, type, talk time, SIM — verbatim.
+ *
+ * Why: Android 10+ hands the receiver no number on outgoing calls, and app.js
+ * deliberately sends NO direction on 'call_ended' (it genuinely cannot tell
+ * inbound from outbound in the JS layer). Every attempt to fill those gaps by
+ * inference produced garbage rows:
+ *   • direction defaulted to 'out'  -> phantom "Outgoing" rows for missed calls
+ *   • direction recorded as 'unknown' -> visible junk in Call Activity
+ *   • blank phone                    -> the "—" rows with no number
+ * A blank-phone row could never match a lead or gate a recording anyway
+ * (`phone LIKE '%tail'` can't match ''), so dropping it loses nothing.
+ *
+ * What still writes a row (all of these DO know both fields, so the recording
+ * sync gate in api_call_hasRecentEvent keeps its reference points):
+ *   • 'incoming_ringing'  — direction 'in', number from the ring
+ *   • 'dial_requested'    — direction 'out', number from the lead we dialled
+ *   • native events that carry a real direction + number (missed, and
+ *     everything from APK #66 onward, which reads direction from CallLog.TYPE)
+ *
+ * The lead lookup / auto-create / caller-ID behaviour is UNCHANGED — we still
+ * resolve the lead and return lead_id even when we skip the row.
+ */
+const _VALID_DIR = ['in', 'out', 'missed'];
+
 async function api_call_logEvent(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
   const lead = await _findLeadByPhone(p.phone);
+
+  const phone = String(p.phone || '').trim();
+  const digits = phone.replace(/[^0-9]/g, '');
+  let direction = String(p.direction || '').toLowerCase();
+  if (!_VALID_DIR.includes(direction)) {
+    // Only infer where the event itself is unambiguous. Never from nothing.
+    if (p.event === 'incoming_ringing') direction = 'in';
+    else if (p.missed) direction = 'missed';
+    else direction = '';
+  }
+
+  // No number, or no direction we can stand behind -> write NOTHING. The
+  // CallLog sync will bring this call in exactly as the phone recorded it.
+  if (!digits || !direction) {
+    return {
+      ok: true,
+      lead_id: lead ? lead.id : null,
+      skipped: true,
+      reason: !digits ? 'no_phone' : 'no_direction'
+    };
+  }
+
   await db.insert('call_events', {
     lead_id: lead ? lead.id : null,
     user_id: me.id,
-    phone: p.phone || '',
-    // CALL_DIRECTION_TRUTH_v1 (2026-07-12) — do NOT default to 'out'.
-    // Guessing here is what filed incoming/missed calls as phantom outgoing
-    // rows whenever the device couldn't tell us the direction. Record
-    // 'unknown' instead and let the CallLog sync repair it from TYPE.
-    direction: (['in', 'out', 'missed'].includes(String(p.direction || '').toLowerCase())
-      ? String(p.direction).toLowerCase()
-      : (p.event === 'incoming_ringing' ? 'in' : (p.missed ? 'missed' : 'unknown'))),
+    phone: phone,
+    direction: direction,
     event: p.event || 'unknown',
     duration_s: Number(p.duration_s) || 0,
     recording_id: p.recording_id || null,
