@@ -167,6 +167,7 @@ async function api_call_logSyncBatch(token, payload) {
          simSlot, simLabel, whenIso, fix[0].id]
       );
       repaired++;
+      await _demoteLiveTwins(me.id, tail, startMs, duration, fix[0].id);
       continue;
     }
 
@@ -177,9 +178,108 @@ async function api_call_logSyncBatch(token, payload) {
       [lead ? lead.id : null, me.id, phone, direction, event, duration, simSlot, simLabel, whenIso]
     );
     inserted++;
+    await _demoteLiveTwins(me.id, tail, startMs, duration, null);
   }
 
   return { ok: true, received: rows.length, inserted, repaired, skipped, matched };
 }
 
-module.exports = { api_call_logSyncBatch };
+/**
+ * LIVE_TWIN_DEMOTE_v1 (2026-07-12)
+ * -------------------------------
+ * The phone's call log is the truth. The live PhoneStateReceiver is not — on
+ * Android 10+ it can't see outgoing numbers, Doze wipes the state it uses to
+ * guess direction, and a missed OFFHOOK makes an answered call look "Missed".
+ * Every duplicate/ghost row in Call Activity came from it.
+ *
+ * So once the call log has given us the real row for a call, we DEMOTE the live
+ * receiver's row(s) for that same call: src = 'live-dup'. We do NOT delete them,
+ * and that is deliberate:
+ *
+ *   • Live Team Status (routes/team.js) reads call_events raw. It needs the live
+ *     'incoming_ringing' / 'dial_requested' row to show a rep as ON CALL (with the
+ *     number), and the live 'call_ended' row to detect the HANG-UP. Deleting them
+ *     would strand reps on "On call" for the full 20-minute safety cap.
+ *   • The recording upload gate (api_call_hasRecentEvent) also reads the raw table.
+ *
+ * Neither filters on src, so both keep working exactly as before. Only the
+ * call-facing views (Call Activity + the call KPIs in routes/reports.js) exclude
+ * 'live-dup'. Reversible: clearing src back to NULL restores the old behaviour.
+ */
+async function _demoteLiveTwins(userId, tail, startMs, durationS, keepId) {
+  const startIso = new Date(startMs - 300 * 1000).toISOString();
+  const endIso   = new Date(startMs + (durationS * 1000) + 300 * 1000).toISOString();
+  try {
+    await db.query(
+      `UPDATE call_events
+          SET src = 'live-dup'
+        WHERE user_id = $1
+          AND src IS NULL
+          AND ($2::int IS NULL OR id <> $2::int)
+          AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') <> ''
+          AND regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') LIKE $3
+          AND created_at >= $4::timestamptz
+          AND created_at <= $5::timestamptz`,
+      [userId, keepId, tail, startIso, endIso]
+    );
+  } catch (e) { /* best-effort: never fail a sync over cosmetics */ }
+}
+
+/**
+ * LIVE_TWIN_CLEANUP_v1 — one-off backfill of LIVE_TWIN_DEMOTE_v1 over history.
+ *
+ * api_call_cleanupGhosts(token, { apply?: bool })
+ *   apply=false (default) -> DRY RUN. Counts what would be demoted, changes nothing.
+ *   apply=true            -> marks them src='live-dup'.
+ *
+ * A row is a ghost only if ALL of these hold:
+ *   - the live receiver wrote it        (src IS NULL)
+ *   - it has a number                   (blank-phone rows are handled by the repair pass)
+ *   - the phone's call log has the SAME call for the SAME user, within +/-5 min
+ *   - it carries no recording           (paranoia; recording_id is never set today,
+ *                                        but if that ever changes we must not hide one)
+ *
+ * NOTHING IS DELETED. The rows stay so Live Team Status and the recording gate --
+ * which read call_events raw and do not filter on src -- keep working untouched.
+ * Reversible: UPDATE call_events SET src=NULL WHERE src='live-dup'.
+ */
+async function api_call_cleanupGhosts(token, payload) {
+  const me = await authUser(token);
+  if (String(me.role || '') !== 'admin') throw new Error('Admins only');
+  const apply = !!(payload && payload.apply);
+
+  const WHERE = `
+      FROM call_events ce
+     WHERE ce.src IS NULL
+       AND ce.recording_id IS NULL
+       AND regexp_replace(COALESCE(ce.phone,''), '[^0-9]', '', 'g') <> ''
+       AND EXISTS (
+             SELECT 1 FROM call_events t
+              WHERE t.src IN ('calllog', 'calllog-fix')
+                AND t.user_id = ce.user_id
+                AND t.id <> ce.id
+                AND RIGHT(regexp_replace(COALESCE(t.phone,''),  '[^0-9]', '', 'g'), 10)
+                  = RIGHT(regexp_replace(COALESCE(ce.phone,''), '[^0-9]', '', 'g'), 10)
+                AND ce.created_at BETWEEN t.created_at - INTERVAL '5 minutes'
+                                      AND t.created_at + (COALESCE(t.duration_s,0) * INTERVAL '1 second') + INTERVAL '5 minutes'
+           )`;
+
+  const { rows: preview } = await db.query(
+    `SELECT COUNT(*)::int AS n,
+            COUNT(*) FILTER (WHERE ce.direction = 'out')::int    AS ghost_out,
+            COUNT(*) FILTER (WHERE ce.direction = 'missed')::int AS ghost_missed,
+            COUNT(*) FILTER (WHERE ce.direction = 'in')::int     AS ghost_in,
+            COUNT(*) FILTER (WHERE ce.direction = 'unknown')::int AS ghost_unknown
+       ${WHERE}`
+  );
+  const found = preview[0] || { n: 0 };
+  if (!apply) return { dry_run: true, would_demote: found.n, breakdown: found };
+
+  const { rowCount } = await db.query(
+    `UPDATE call_events SET src = 'live-dup'
+      WHERE id IN (SELECT ce.id ${WHERE})`
+  );
+  return { dry_run: false, demoted: rowCount, breakdown: found };
+}
+
+module.exports = { api_call_logSyncBatch, api_call_cleanupGhosts, _demoteLiveTwins };

@@ -994,6 +994,14 @@ async function api_reports_callActivity(token, filters) {
             -- tapped-but-abandoned call was counted and shown as a real 0-second
             -- Outgoing call the rep never made (+918376947677 / "Honey Vasistha").
             AND ce.event NOT IN ('autodial_requested', 'dial_requested')
+            -- LIVE_TWIN_DEMOTE_v1 (2026-07-12): rows the live receiver wrote that the
+            -- phone's call log has since superseded are marked src='live-dup'. They are
+            -- NOT calls -- they're the ghost "Missed"/"Unknown"/blank duplicates -- so
+            -- they must not be shown or counted. They STAY in the table on purpose:
+            -- Live Team Status (routes/team.js) needs the live ring/dial row to show a rep
+            -- as ON CALL and the live call_ended row to detect the HANG-UP, and the
+            -- recording upload gate reads the raw table too. Neither filters on src.
+            AND COALESCE(ce.src,'') <> 'live-dup'
             ${leadOnlyClause}
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
@@ -1297,6 +1305,14 @@ async function api_reports_callActivity(token, filters) {
            -- DIAL_REQUESTED_FIX_v1 — 'dial_requested' is an INTENT (rep tapped Call),
            -- not a call. It was never actually excluded here despite the comment above.
            AND ce.event NOT IN ('autodial_requested', 'dial_requested')
+           -- LIVE_TWIN_DEMOTE_v1 (2026-07-12): rows the live receiver wrote that the
+           -- phone's call log has since superseded are marked src='live-dup'. They are
+           -- NOT calls -- they're the ghost "Missed"/"Unknown"/blank duplicates -- so
+           -- they must not be shown or counted. They STAY in the table on purpose:
+           -- Live Team Status (routes/team.js) needs the live ring/dial row to show a rep
+           -- as ON CALL and the live call_ended row to detect the HANG-UP, and the
+           -- recording upload gate reads the raw table too. Neither filters on src.
+           AND COALESCE(ce.src,'') <> 'live-dup'
            ${leadOnlyClause}
            -- CALL_RECENT_DEDUP_v2 (2026-06-03) — hide 'incoming_ringing' rows
            -- that have a paired 'call_ended' OR 'recording_saved' for the
