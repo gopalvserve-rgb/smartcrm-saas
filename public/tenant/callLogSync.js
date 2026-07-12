@@ -136,14 +136,29 @@
   // it here means auto-sync starts working on the phones people already have --
   // no reinstall, no waiting for a store/APK rollout.
   //
-  // Cost control: debounced to once every 3 minutes, and the window is only
-  // 'since the last successful auto-sync' (first ever run: 7 days, capped at 7
-  // days after that). Reads the CallLog content provider only -- number,
-  // timestamp, type and duration. NO recording files are touched, so it can't
-  // hang the app.
+  // AUTOSYNC_EVERY_OPEN_v3 (2026-07-12) — three bugs that made this NOT fire on
+  // every open, all fixed here:
+  //
+  //   1. There was a 3-MINUTE persistent debounce. Close + reopen inside 3
+  //      minutes and the sync was skipped. That is not "every open". The guard
+  //      is now IN-MEMORY ONLY and just 15s -- long enough to collapse the
+  //      visibilitychange + focus + capacitor-resume events that all fire
+  //      together on a single resume, short enough that every genuine open
+  //      syncs. A fresh app launch resets it, so a cold open ALWAYS syncs.
+  //
+  //   2. The debounce timestamp was written BEFORE the sync ran, so a FAILED
+  //      sync still burned the window. Now only success advances the watermark.
+  //
+  //   3. On a cold launch we checked for the auth token once at +2.5s and gave
+  //      up silently if login/bootstrap hadn't finished -- so a slow login meant
+  //      that whole session never synced. Now we retry until the token shows up.
+  //
+  // Reads the CallLog content provider only -- number, timestamp, type,
+  // duration, SIM. NO recording files are touched, so it can't hang the app.
   var DAY = 86400000;
-  var AUTO_MIN_GAP_MS = 3 * 60 * 1000;   // don't re-sync more often than this
+  var AUTO_MIN_GAP_MS = 15 * 1000;   // in-memory only: collapses duplicate resume events
   var autoRunning = false;
+  var lastRunAt = 0;                 // in-memory -> a fresh launch always syncs
 
   function autoKey(k) { return 'cls_auto_' + k + '_' + (slug() || 'x'); }
   function lsGetNum(k) { var v = Number(localStorage.getItem(autoKey(k)) || 0); return isFinite(v) ? v : 0; }
@@ -151,10 +166,11 @@
 
   function autoSync(reason) {
     if (autoRunning) return;
-    if (!hasNative() || !token()) return;          // desktop web / logged out
+    if (!hasNative()) return;                                  // desktop web
+    if (!token()) { waitForTokenThenSync(reason); return; }    // bug 3: retry, don't give up
+
     var now = Date.now();
-    var lastRun = lsGetNum('lastrun');
-    if (lastRun && (now - lastRun) < AUTO_MIN_GAP_MS) return;   // debounce
+    if (lastRunAt && (now - lastRunAt) < AUTO_MIN_GAP_MS) return;  // duplicate resume event
 
     // Window: from the last successful sync (minus 15 min of slack) to now.
     var lastOk = lsGetNum('since');
@@ -163,16 +179,38 @@
     if (since < floor) since = floor;
 
     autoRunning = true;
-    lsSetNum('lastrun', now);                      // debounce even if it fails
-    try { console.log('[callsync] auto-sync (' + reason + ') since', new Date(since).toISOString()); } catch (e) {}
+    lastRunAt = now;
+    try { console.log('[callsync] auto-sync (' + reason + ') since ' + new Date(since).toISOString()); } catch (e) {}
 
     runSync(since, now, null, {
       silent: true,
       done: function (r) {
         autoRunning = false;
-        if (r) lsSetNum('since', now);             // only advance on success
+        if (r) {
+          lsSetNum('since', now);                  // bug 2: only advance on SUCCESS
+        } else {
+          lastRunAt = 0;                           // bug 2: a failure must not block the next try
+        }
       }
     });
+  }
+
+  // Bug 3: on a cold launch the SPA may not have written the token yet. Poll for
+  // it (every 1.5s, up to 30s) instead of silently skipping the whole session.
+  var tokenWaitTimer = null;
+  function waitForTokenThenSync(reason) {
+    if (tokenWaitTimer) return;
+    var tries = 0;
+    tokenWaitTimer = setInterval(function () {
+      tries++;
+      if (token()) {
+        clearInterval(tokenWaitTimer); tokenWaitTimer = null;
+        autoSync(reason + '+token-ready');
+      } else if (tries >= 20) {                    // 20 x 1.5s = 30s
+        clearInterval(tokenWaitTimer); tokenWaitTimer = null;
+        try { console.log('[callsync] gave up waiting for token'); } catch (e) {}
+      }
+    }, 1500);
   }
 
   // ---- modal --------------------------------------------------------------
