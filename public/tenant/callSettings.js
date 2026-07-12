@@ -190,15 +190,20 @@
    * `mineCsv` is the rep's own value: null = inherit the company default,
    * '' = an explicit NONE (which is NOT the same as inherit).
    */
-  function dirGroup(titleHtml, hintHtml, mineCsv, companyArr) {
+  function dirGroup(titleHtml, hintHtml, mineCsv, effectiveArr) {
     var OPTS = [
       ['in',     'All Incoming calls'],
       ['missed', 'All Missed calls'],
       ['out',    'All Outgoing calls']
     ];
+    // EFFECTIVE_RENDER_FIX_v1 (2026-07-12) — tick the boxes from the EFFECTIVE value
+    // the server will actually act on, NOT the company default. They differ whenever a
+    // legacy autolead_inbound/outbound flag is bridging: the boxes said "None of them"
+    // while the server was busy creating leads on every call. Never show a state the
+    // server does not hold.
     var inheriting = (mineCsv === null || mineCsv === undefined);
     var current = inheriting
-      ? (companyArr || []).slice()
+      ? (effectiveArr || []).slice()
       : String(mineCsv).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
 
     var wrap = el('div', { style: 'margin:.2rem 0 .4rem' });
@@ -361,16 +366,32 @@
     var summary = el('div', { style: 'padding:.7rem .9rem;border-radius:10px;background:#eef2ff;border-left:4px solid #4f46e5;margin-bottom:1rem;font-size:.9rem;line-height:1.6' });
     wrap.appendChild(summary);
 
+    var eff = data.effective || {};
+
     var c2 = card('📋 Show in Call Activity',
       'Which calls from your phone are copied into the CRM. Tick what you want to see.');
-    var fShow = dirGroup('', '', mine.sync_directions, co.sync_directions);
+    var fShow = dirGroup('', '', mine.sync_directions, eff.sync_directions);
     c2.appendChild(fShow);
+
+    // The 4th filter people actually ask for: only calls to/from numbers already in the CRM.
+    var loCb = el('input'); loCb.type = 'checkbox';
+    loCb.checked = !!eff.sync_lead_only;
+    var loLab = el('label', { style: 'display:flex;align-items:flex-start;gap:.55rem;cursor:pointer;font-size:.92rem;margin-top:.7rem;padding-top:.6rem;border-top:1px solid #e2e8f0' });
+    loLab.appendChild(loCb);
+    var loTxt = el('div', {});
+    loTxt.appendChild(el('div', { style: 'font-weight:600' }, 'Only calls that match a lead in the CRM'));
+    loTxt.appendChild(el('div', { class: 'muted', style: 'font-size:.8rem;line-height:1.5' },
+      'An extra filter on top of the ticks above. When ON, calls from numbers that are <b>not</b> a CRM lead ' +
+      'are discarded and never appear in Call Activity — a good way to keep personal calls out. ' +
+      'When OFF, every call you ticked above is saved.'));
+    loLab.appendChild(loTxt);
+    c2.appendChild(loLab);
     wrap.appendChild(c2);
 
     var c3 = card('➕ Create auto lead',
       'Which calls from <b>numbers not yet in the CRM</b> should automatically become a lead. ' +
       'This is separate — a call can show in Call Activity without becoming a lead.');
-    var fLead = dirGroup('', '', mine.autolead_directions, co.autolead_directions);
+    var fLead = dirGroup('', '', mine.autolead_directions, eff.autolead_directions);
     c3.appendChild(fLead);
 
     // The lead-creation detail knobs only mean anything when at least one box is ticked.
@@ -400,10 +421,8 @@
       mine.autosync_on_open, co.autosync_on_open,
       'Off means nothing is copied from your phone unless you press Sync yourself.');
     c4.appendChild(fAutoSync);
-    var fSyncLO = triState('Of the calls above, keep only ones already in the CRM',
-      mine.sync_lead_only, co.sync_lead_only,
-      'An extra filter on top of the ticks. <b>Yes</b> throws away calls from unknown numbers entirely.');
-    c4.appendChild(fSyncLO);
+    // (sync_lead_only now lives as a checkbox in "Show in Call Activity" — one control,
+    //  one setting. Two controls for one policy is how settings drift apart.)
     var fCapLO = triState('Same rule for calls captured live', mine.capture_lead_only, co.capture_lead_only);
     c4.appendChild(fCapLO);
     var fActLO = triState('Open the Call Activity page with unknown numbers hidden',
@@ -425,12 +444,14 @@
 
       summary.innerHTML =
         '<b>What these settings do right now</b><br>' +
-        '📋 Call Activity will show your <b>' + list(show) + '</b> calls.' +
+        '📋 Call Activity will show your <b>' + list(show) + '</b> calls' +
+        (loCb.checked ? ', but <b>only from numbers already in the CRM</b>.' : ' — from any number.') +
         (show.length ? '' : ' <span style="color:#b45309">Nothing will be saved.</span>') +
         '<br>➕ ' + (lead.length
           ? 'A lead <b>is</b> created automatically for unknown numbers on <b>' + list(lead) + '</b> calls.'
           : '<b>No leads</b> are created automatically from calls.');
     }
+    loCb.addEventListener('change', refresh);
     fShow._onchange = refresh;
     fLead._onchange = refresh;
     refresh();
@@ -448,7 +469,7 @@
             sync_directions:       fShow._get(),
             autolead_directions:   fLead._get(),
             autosync_on_open:      fAutoSync._get(),
-            sync_lead_only:        fSyncLO._get(),
+            sync_lead_only:        loCb.checked ? '1' : '0',
             capture_lead_only:     fCapLO._get(),
             activity_lead_only:    fActLO._get(),
             autolead_mode:         fMode._get(),
