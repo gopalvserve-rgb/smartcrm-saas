@@ -609,17 +609,12 @@
             display:'flex', alignItems:'center', justifyContent:'center',
             boxShadow:'0 1px 4px rgba(37,211,102,0.3)'
           }}, ICON.waLogo('white', 18)),
-          h('div', null,
-            h('div', { style: { color:'#fff', fontSize:'16px', fontWeight:'700', lineHeight:'1.1', display:'flex', alignItems:'center', gap:'6px' } },
-              'SmartCRM',
-              /* v1_5 — visible build tag so user can confirm which version their phone is running */
-              h('span', { style: {
-                fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
-                color: C.green, padding:'2px 6px', borderRadius:'4px'
-              }}, 'v2.0')
-            ),
-            h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
-          )
+          /* v2_1 — no more SmartCRM title, just the WA icon; version
+           * badge kept ultra-subtle as data attribute on the container */
+          h('span', {
+            'data-wa-mobile-version': 'v2.1',
+            style: { color: 'rgba(255,255,255,0.35)', fontSize:'9px', fontWeight:'600' }
+          }, 'v2.1')
         ),
         /* v2_0 — FULL VIEW button removed per user request */
         null
@@ -2183,7 +2178,7 @@ api('api_leads_update', lid, { status_id: opt.id })
     /* v1.1 — floating fullscreen toggle in top-right corner. Hides
      * the SPA sidebar + topbar + FAB by adding class wa-mobile-fullscreen
      * on <body>. Small ⤢ / ⤡ button so it stays visible on every screen. */
-    wrap.appendChild(fullscreenToggleBtn());
+/* v2_1 — removed */
     // Overlays
     if (S.overlay === 'templates') wrap.appendChild(overlayTemplates());
     else if (S.overlay === 'options')  wrap.appendChild(overlayOptions());
