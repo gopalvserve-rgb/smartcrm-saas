@@ -602,10 +602,12 @@
         marginBottom:'12px'
       }},
         h('div', { style: { display:'flex', alignItems:'center', gap:'8px' }},
+          /* v1_9 — bigger, more obvious WhatsApp logo */
           h('div', { style: {
-            width:'30px', height:'30px', background:C.green, borderRadius:'8px',
-            display:'flex', alignItems:'center', justifyContent:'center'
-          }}, ICON.waLogo('white')),
+            width:'40px', height:'40px', background:C.green, borderRadius:'10px',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            boxShadow:'0 2px 6px rgba(37,211,102,0.35)'
+          }}, ICON.waLogo('white', 24)),
           h('div', null,
             h('div', { style: { color:'#fff', fontSize:'16px', fontWeight:'700', lineHeight:'1.1', display:'flex', alignItems:'center', gap:'6px' } },
               'SmartCRM',
@@ -613,7 +615,7 @@
               h('span', { style: {
                 fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
                 color: C.green, padding:'2px 6px', borderRadius:'4px'
-              }}, 'v1.8')
+              }}, 'v1.9')
             ),
             h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
           )
@@ -2110,6 +2112,24 @@ api('api_leads_update', lid, { status_id: opt.id })
      *  - Hide sidebar/topbar/footer/FABs
      *  - Fullscreen the wbv2m container via position:fixed
      */
+    /* v1_9 — always hide classic WA sub-tabs on mobile viewports.
+     * Applied when the module is loaded (viewport <=768 is our mobile). */
+    if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+      var mCss = document.createElement('style');
+      mCss.id = 'wa-mobile-hide-classic';
+      mCss.textContent =
+        /* Hide any subtab strip inside the WA view — the classic tabs like
+         * Connect Account / Templates / Bots / Message Bot. */
+        '.subtabs, .subtab-strip, .sub-tabs, .wb-subtabs { display:none !important; }' +
+        /* Hide any classic WA content leftover so it doesn't peek behind. */
+        '#whatsbot-tabs, .whatsbot-tabs, .wb-tabs { display:none !important; }' +
+        /* Ensure the view fills the page on mobile — no extra whitespace above. */
+        '#view.wa-mobile-active { padding:0 !important; margin:0 !important; }' +
+        /* Hide the SPA outer topbar on the WhatsApp page in mobile viewport */
+        'body.wa-mobile-on-wa .topbar, body.wa-mobile-on-wa #topbar,' +
+        'body.wa-mobile-on-wa .app-topbar { display:none !important; }';
+      document.head.appendChild(mCss);
+    }
     s.textContent =
       'body.wa-mobile-fullscreen #sidebar,' +
       'body.wa-mobile-fullscreen .topbar,' +
@@ -2251,6 +2271,13 @@ api('api_leads_update', lid, { status_id: opt.id })
     // clear on nav away
     try {
       window.addEventListener('hashchange', function () {
+        /* v1_9 — remove body class when navigating away from WA */
+        try {
+          if (!/whatsbot/.test(String(location.hash || ''))) {
+            document.body.classList.remove('wa-mobile-on-wa');
+            document.body.classList.remove('wa-mobile-fullscreen');
+          }
+        } catch (_) {}
         if (!S.view || !document.body.contains(S.view)) {
           if (S.poller) { clearInterval(S.poller); S.poller = null; }
         }
@@ -2264,6 +2291,8 @@ api('api_leads_update', lid, { status_id: opt.id })
   function render(view) {
     S.view = view;
     injectStyles();
+    /* v1_9 — mark body so CSS can hide the classic WA topbar in mobile. */
+    try { document.body.classList.add('wa-mobile-on-wa'); } catch (_) {}
     /* v1_7 — install a single popstate handler for back-button trapping.
      * Idempotent: won't stack multiple handlers if render fires twice. */
     if (!window.__wbv2m_backTrap) {
