@@ -137,7 +137,13 @@ async function api_call_logEvent(token, payload) {
     lead_id: lead ? lead.id : null,
     user_id: me.id,
     phone: p.phone || '',
-    direction: p.direction || (p.event === 'incoming_ringing' ? 'in' : 'out'),
+    // CALL_DIRECTION_TRUTH_v1 (2026-07-12) — do NOT default to 'out'.
+    // Guessing here is what filed incoming/missed calls as phantom outgoing
+    // rows whenever the device couldn't tell us the direction. Record
+    // 'unknown' instead and let the CallLog sync repair it from TYPE.
+    direction: (['in', 'out', 'missed'].includes(String(p.direction || '').toLowerCase())
+      ? String(p.direction).toLowerCase()
+      : (p.event === 'incoming_ringing' ? 'in' : (p.missed ? 'missed' : 'unknown'))),
     event: p.event || 'unknown',
     duration_s: Number(p.duration_s) || 0,
     recording_id: p.recording_id || null,
