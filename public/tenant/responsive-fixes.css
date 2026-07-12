@@ -284,3 +284,76 @@
   #view, .main { overflow-x: clip; }
   .table-wrap, .card { max-width: 100%; }
 }
+
+
+/* =====================================================================
+   RESPONSIVE_FIXES_v3  (2026-07-12)
+   ---------------------------------------------------------------------
+   Measured live on /t/vserve/#/targets at a 341px viewport (iPhone-class).
+   Two concrete defects, both invisible to v1/v2:
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   13. TOOLBAR / FILTER BAR — the "Month  [        ]" dead-gap bug.
+   styles.css renders .toolbar as a TWO-COLUMN GRID on phones
+   (computed: grid-template-columns: 136px 136px). Its children are flat
+   siblings — label, input, label, select, button, button — so every label
+   landed in column 1 and its control in column 2, leaving a dead gap
+   between "Month" and its field, and stranding the lone 🔄 refresh button
+   in a half-width cell that reads as a broken pill.
+   v1's `.toolbar { flex-wrap: wrap }` never applied: the computed display
+   is grid, not flex, so the flex rules were inert.
+   Fix: stack it — label directly above its control, everything full width.
+   --------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  #view .toolbar {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+  }
+  #view .toolbar > * {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    flex: 0 0 auto !important;
+  }
+  #view .toolbar > label {
+    font-weight: 600;
+    margin-bottom: -2px !important;
+    text-align: left;
+  }
+  #view .toolbar > button,
+  #view .toolbar > .btn {
+    min-height: 44px;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   14. FLOATING ACTION BUTTONS — chat bubble landing on the content.
+   #chat-fab is draggable and PERSISTS its position as an inline style
+   (measured: `inset: 100px auto auto 236px`) — a desktop coordinate. On a
+   341px phone that puts it directly on top of the filter card / Month
+   field. Inline styles beat class rules, so this needs !important.
+   Dock both FABs bottom-right on phones and stack them, then reserve
+   space so the last card is never trapped underneath.
+   --------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  #chat-fab {
+    inset: auto !important;
+    top: auto !important;
+    left: auto !important;
+    right: 14px !important;
+    bottom: 148px !important;
+  }
+  #copilot-fab {
+    top: auto !important;
+    left: auto !important;
+    right: 14px !important;
+    bottom: 84px !important;
+  }
+  #view {
+    padding-bottom: 120px !important;
+  }
+}
