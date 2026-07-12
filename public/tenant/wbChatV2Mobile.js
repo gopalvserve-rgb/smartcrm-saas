@@ -613,7 +613,7 @@
               h('span', { style: {
                 fontSize:'9px', fontWeight:'700', background:'rgba(37,211,102,0.25)',
                 color: C.green, padding:'2px 6px', borderRadius:'4px'
-              }}, 'v1.6')
+              }}, 'v1.7')
             ),
             h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' } }, 'WhatsApp Inbox')
           )
@@ -868,7 +868,7 @@
           h('button', {
             class:'wbv2m-btn-tap',
             style: { background:'none', border:'none', cursor:'pointer', padding:'8px', display:'flex', alignItems:'center' },
-            onclick: function () { S.overlay = 'options'; rerender(); }
+            onclick: function () { S.overlay = 'options'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {} rerender(); }
           }, ICON.kebab(C.textDarkMeta))
         )
       )
@@ -903,7 +903,7 @@
             borderRadius:'100px', padding:'4px 10px', fontSize:'11px', fontWeight:'700',
             cursor:'pointer', flexShrink:'0'
           },
-          onclick: function () { S.overlay = 'status'; rerender(); }
+          onclick: function () { S.overlay = 'status'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {} rerender(); }
         }, t.status_name || 'New', ICON.caret(stColors.fg)),
         h('span', { style: {
           fontSize:'11px', color:'#374151', fontWeight:'500', flex:'1',
@@ -936,7 +936,7 @@
             background: C.numBtn, border:'1px solid ' + C.numBtnBorder,
             borderRadius:'6px', padding:'4px 9px', cursor:'pointer', flexShrink:'0'
           },
-          onclick: function () { S.overlay = 'number'; rerender(); }
+          onclick: function () { S.overlay = 'number'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {} rerender(); }
         },
           ICON.smallWa(C.successDark),
           h('span', { style: { fontSize:'11px', fontWeight:'600', color:'#15803D' }}, selectedNumberLabel),
@@ -952,7 +952,7 @@
             cursor:'pointer', display:'flex', alignItems:'center', gap:'3px', flexShrink:'0'
           },
           onclick: function () {
-            S.overlay = 'remarks';
+            S.overlay = 'remarks'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {}
             if (S.activeLeadId) loadRemarks(S.activeLeadId).then(rerender);
             else rerender();
           }
@@ -1121,7 +1121,7 @@
           display:'flex', alignItems:'center', gap:'5px'
         },
         onclick: function () {
-          S.overlay = 'templates';
+          S.overlay = 'templates'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {}
           if (!S.templates) loadTemplates().then(rerender);
           else rerender();
         }
@@ -1642,11 +1642,11 @@
           function () { markResolved(); }),
         row(C.optAssign.bg, ICON.user(C.optAssign.fg),
           'Assign to Agent', 'Currently: ' + agent, false,
-          function () { S.overlay = 'assign'; rerender(); }),
+          function () { S.overlay = 'assign'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {} rerender(); }),
         row(C.optNote.bg, ICON.pencil(C.optNote.fg),
           'Add Internal Note', 'Visible only to your team', false,
           function () {
-            S.overlay = 'remarks';
+            S.overlay = 'remarks'; try { history.pushState({ wa_screen: 'overlay', ts: Date.now() }, ''); } catch (_) {}
             if (S.activeLeadId) loadRemarks(S.activeLeadId).then(rerender);
             else rerender();
           }),
@@ -2030,6 +2030,8 @@ api('api_leads_update', lid, { status_id: opt.id })
     S.messages = [];
     S.remarks = [];
     S.lead = null;
+    /* v1_7 — push a marker so Android back returns to list, not out */
+    try { history.pushState({ wa_screen: 'chat', ts: Date.now() }, ''); } catch (_) {}
     rerender();
     // fetch data in parallel
     Promise.all([
@@ -2228,6 +2230,43 @@ api('api_leads_update', lid, { status_id: opt.id })
   function render(view) {
     S.view = view;
     injectStyles();
+    /* v1_7 — install a single popstate handler for back-button trapping.
+     * Idempotent: won't stack multiple handlers if render fires twice. */
+    if (!window.__wbv2m_backTrap) {
+      window.__wbv2m_backTrap = function (ev) {
+        try {
+          /* If we're not inside the WA mobile module anymore, don't intercept. */
+          if (!S.view || !document.body.contains(S.view)) return;
+          /* Close overlay first if one is open */
+          if (S.overlay) {
+            S.overlay = null;
+            history.pushState({ wa_screen: 'list', ts: Date.now() }, '');
+            rerender();
+            return;
+          }
+          /* If on chat / search / timeline, go back to list */
+          if (S.screen === 'chat' || S.screen === 'search' || S.screen === 'timeline') {
+            S.screen = 'list';
+            S.activeThread = null;
+            S.activePhone = null;
+            S.activeLeadId = null;
+            S.messages = [];
+            S.lead = null;
+            history.pushState({ wa_screen: 'list', ts: Date.now() }, '');
+            rerender();
+            return;
+          }
+          /* On list: don't intercept. Let SPA back-nav happen. */
+        } catch (_) {}
+      };
+      try { window.addEventListener('popstate', window.__wbv2m_backTrap); } catch (_) {}
+    }
+    /* Push an initial list-state marker so the FIRST back press consumes it */
+    try {
+      if (!history.state || !history.state.wa_screen) {
+        history.pushState({ wa_screen: 'list', ts: Date.now() }, '');
+      }
+    } catch (_) {}
     // initial loading state
     var boot = h('div', {
       class: 'wbv2m',
