@@ -118,7 +118,10 @@ async function _rawPrefs(userId) {
       const { rows } = await db.query(
         'SELECT capture_lead_only FROM users WHERE id = $1', [userId]);
       const legacy = rows[0] && rows[0].capture_lead_only;
-      if (legacy !== null && legacy !== undefined) row.capture_lead_only = Number(legacy) === 1 ? 1 : 0;
+      // Only a legacy 1 counts as a real opt-in. A legacy 0 is just the column's
+      // NOT NULL default and must NOT be read as "this rep explicitly chose No",
+      // or nobody could ever inherit a company default of ON.
+      if (Number(legacy) === 1) row.capture_lead_only = 1;
     } catch (e) { /* column may not exist on older tenants */ }
   }
   return row;
@@ -201,10 +204,22 @@ async function api_userCallPrefs_save(token, payload) {
     const i = cols.indexOf('capture_lead_only');
     if (i >= 0) {
       const v = vals[i];
+      // MIRROR_CLEAR_FIX_v1 (2026-07-12): users.capture_lead_only is NOT NULL, so
+      // writing NULL to it threw, the catch swallowed it, and the old value stayed
+      // stuck at 1 — leaving the rep permanently opted in to "capture only my
+      // CRM-lead calls" with their non-lead calls silently dropped. The legacy column
+      // has no "inherit" state, so clearing the override writes the COMPANY default
+      // into it, which is what "inherit" resolves to anyway.
+      let legacy;
+      if (v === null) {
+        const co = await _companyDefaults();
+        legacy = co.capture_lead_only ? 1 : 0;
+      } else {
+        legacy = Number(v) === 1 ? 1 : 0;
+      }
       try {
-        await db.query('UPDATE users SET capture_lead_only = $1 WHERE id = $2',
-          [v === null ? null : (Number(v) === 1 ? 1 : 0), uid]);
-      } catch (e) { /* column may not exist */ }
+        await db.query('UPDATE users SET capture_lead_only = $1 WHERE id = $2', [legacy, uid]);
+      } catch (e) { /* column may not exist on older tenants */ }
     }
   }
   return await api_userCallPrefs_get(token, uid);
