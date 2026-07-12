@@ -161,6 +161,12 @@
 
     // active selection
     activeThread: null,
+    /* WA_MOBILE_V1_2 — server-side search + pagination state */
+    page: 1,
+    pageSize: 50,
+    hasMore: false,
+    loadingMore: false,
+    searchDebouncer: null,
     activePhone: null,
     activeLeadId: null,
     sendFromId: null,
@@ -431,8 +437,13 @@
   /* =============================================================
    * 9. DATA LOADING
    * ============================================================= */
-  function loadThreads() {
-    return api('api_wb_chat_threads', { scanLimit: 10000, show_all: true })
+  function loadThreads(loadMoreOpts) {
+    /* WA_MOBILE_V1_2 — search + pagination: send q/page/page_size + status */
+    var opts = { scanLimit: 10000, show_all: true, page: S.page || 1, page_size: S.pageSize || 50 };
+    if (S.search) opts.q = String(S.search).trim();
+    if (S.filter && S.filter !== 'all') opts.status_filter = String(S.filter);
+    if (loadMoreOpts && loadMoreOpts.page) opts.page = loadMoreOpts.page;
+    return api('api_wb_chat_threads', opts)
       .then(function (list) {
         S.threads = Array.isArray(list) ? list : [];
         S.threads.sort(function (a, b) {
@@ -1097,9 +1108,12 @@
             color:'#fff', fontSize:'15px', flex:'1', minWidth:'0'
           },
           oninput: function (e) {
-          /* v1.1 — patch only the results DIV, keep input focused. */
+          /* v1_2 — debounced (300ms) server search + local filter for
+           * instant feedback. Local pass runs immediately; server call
+           * fires only after typing pauses. */
           S.search = e.target.value;
           try {
+            /* Local instant filter for feedback while typing. */
             var listEl = document.querySelector('.wbv2m-search-results');
             if (listEl) {
               listEl.innerHTML = '';
