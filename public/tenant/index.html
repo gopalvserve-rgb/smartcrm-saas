@@ -125,7 +125,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-07-12-wa-mobile-v1" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-07-12-wa-mobile-v1-1" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -166,7 +166,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-07-12-wa-mobile-v1';
+          s.src = 'app.js?v=2026-07-12-wa-mobile-v1-1';
           document.body.appendChild(s);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
@@ -211,13 +211,13 @@
           // rewrote this block, which is why the redesign "disappeared".
           // Inert unless WB_CHAT_V2_ENABLED='1' (vserve-only beta).
           var wb = document.createElement('script');
-          wb.src = 'wbChatV2.js?v=2026-07-12-wa-mobile-v1';
+          wb.src = 'wbChatV2.js?v=2026-07-12-wa-mobile-v1-1';
           document.body.appendChild(wb);
           /* WA_MOBILE_UI_v1 (2026-07-12) — mobile WhatsApp module loaded
            * alongside the desktop v2. The v2 render() delegates to
            * WB_CHAT_V2_MOBILE on viewports <=768px. */
           var wbM = document.createElement('script');
-          wbM.src = 'wbChatV2Mobile.js?v=2026-07-12-wa-mobile-v1';
+          wbM.src = 'wbChatV2Mobile.js?v=2026-07-12-wa-mobile-v1-1';
           document.body.appendChild(wbM);
           // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — the loaders below were ALSO
           // dropped when the pack scripts rewrote this block, which is why the
