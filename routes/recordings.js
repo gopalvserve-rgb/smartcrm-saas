@@ -285,6 +285,10 @@ async function api_call_history(token, limit) {
          LEFT JOIN users u ON u.id = ce.user_id
          LEFT JOIN lead_recordings r ON r.id = ce.recording_id
         WHERE COALESCE(ce.event,'') <> 'dial_requested'
+          -- LIVE_TWIN_DEMOTE_v1 — hide live rows the phone's call log has superseded.
+          -- (api_call_hasRecentEvent below deliberately does NOT filter src: the
+          --  recording gate and Live Team Status still need these rows.)
+          AND COALESCE(ce.src,'') <> 'live-dup'
         ORDER BY ce.created_at DESC
         LIMIT $1`,
       [lim]
@@ -302,6 +306,7 @@ async function api_call_history(token, limit) {
        LEFT JOIN lead_recordings r ON r.id = ce.recording_id
       WHERE ce.user_id = $1
         AND COALESCE(ce.event,'') <> 'dial_requested'
+        AND COALESCE(ce.src,'') <> 'live-dup'   -- LIVE_TWIN_DEMOTE_v1
       ORDER BY ce.created_at DESC
       LIMIT $2`,
     [me.id, lim]
