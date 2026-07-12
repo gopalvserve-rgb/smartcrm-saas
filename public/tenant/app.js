@@ -39884,6 +39884,43 @@ function _initCrmCopilot() {
   }, '\u2728');
   document.body.appendChild(fab);
 
+  // COPILOT_FAB_CAPTION_v1 (2026-07-12) — the button was a bare purple circle with
+  // no words on it, so nobody knew what it did. A small caption sits under it.
+  // It rides along with the FAB when dragged (same wrapper positioning), hides
+  // while the panel is open, and is purely decorative — pointer-events: none, so
+  // it can never swallow a tap meant for the button.
+  const fabCap = h('div', {
+    id: 'copilot-fab-cap',
+    style: {
+      position: 'fixed', zIndex: '9989',
+      fontSize: '11px', fontWeight: '600', lineHeight: '1',
+      color: '#6366f1', letterSpacing: '.2px',
+      textAlign: 'center', whiteSpace: 'nowrap',
+      pointerEvents: 'none', userSelect: 'none',
+      textShadow: '0 1px 3px rgba(255,255,255,.9), 0 0 2px rgba(255,255,255,.9)'
+    }
+  }, 'Ask AI');
+  document.body.appendChild(fabCap);
+
+  // Keep the caption glued under the button wherever it ends up (drag, resize,
+  // mobile reflow). Reads the FAB's real rect, so it works for every layout path.
+  const _placeCap = () => {
+    try {
+      if (!fab.isConnected) return;
+      const r = fab.getBoundingClientRect();
+      if (!r.width) { fabCap.style.display = 'none'; return; }
+      const open = !!document.getElementById('copilot-panel');
+      fabCap.style.display = open ? 'none' : '';
+      fabCap.style.left = (r.left + r.width / 2) + 'px';
+      fabCap.style.top  = (r.bottom + 3) + 'px';
+      fabCap.style.transform = 'translateX(-50%)';
+    } catch (_) {}
+  };
+  _placeCap();
+  window.addEventListener('resize', _placeCap);
+  window.addEventListener('scroll', _placeCap, true);
+  setInterval(_placeCap, 600);   // cheap: one rect read, covers drag + panel toggle
+
   // ---------- Restore saved position ----------
   // Position is stored as { left, top } in pixels relative to viewport.
   // We snap to the nearest edge on drop, so the position is always valid
