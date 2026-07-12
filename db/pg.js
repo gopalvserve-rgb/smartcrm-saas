@@ -126,7 +126,23 @@ const SCHEMA = {
               /* LEAD_POOL_v1 — Free Pool / status-released pool membership */
               'in_pool', 'pool_entered_at', 'pool_origin_status_id', 'pool_origin_user_id',
               /* POOL_PULL_FRESH_v1 — when a lead is pulled it gets a fresh pull timestamp */
-              'pulled_at'],
+              'pulled_at',
+              /* SCHEMA_DROP_FIX_v1 (2026-07-12) — THE 5th TIME THIS LIST HAS BITTEN US.
+                 _serialize() iterates ONLY over this array, so any column missing here
+                 is SILENTLY DROPPED on every db.insert/db.update — no error, no warning,
+                 the value just never reaches Postgres. All of these columns exist in the
+                 table and are in the routes/leads.js update allowlist, yet none of them
+                 could ever be saved. Measured on a live tenant: 3 sub-statuses defined,
+                 0 leads with one; 0 leads with a campaign_id; 0 leads qualified.
+                 sub_status_id  — SUB_STATUS_v1  (ALTERed in by routes/subStatuses.js)
+                 campaign_id    — LEAD_CAMPAIGN_SAVE_v1 added it to the SPA payload, but
+                                  the server dropped it here, so that fix never worked.
+                 qualified/_at/_by — the Qualified checkbox + who/when set it.
+                 is_hidden      — lead hide/unhide.
+                 RULE: adding a column to the leads table means adding it HERE too. */
+              'sub_status_id', 'campaign_id',
+              'qualified', 'qualified_at', 'qualified_by',
+              'is_hidden'],
     json: ['meta_json', 'extra_json', 'score_breakdown_json']
   },
   project_stages: {
