@@ -987,7 +987,13 @@ async function api_reports_callActivity(token, filters) {
             -- CALL_INTENT_EXCLUDE_v1 (2026-05-21): exclude push-notification
             -- "intent" events like autodial_requested / dial_requested that
             -- never resulted in an actual call.
-            AND ce.event != 'autodial_requested'
+            -- DIAL_REQUESTED_FIX_v1 (2026-07-12): this comment always SAID it
+            -- excluded dial_requested, but the code only ever excluded
+            -- autodial_requested. app.js writes a 'dial_requested' row the moment
+            -- a rep TAPS the call button — before the dialer even opens — so a
+            -- tapped-but-abandoned call was counted and shown as a real 0-second
+            -- Outgoing call the rep never made (+918376947677 / "Honey Vasistha").
+            AND ce.event NOT IN ('autodial_requested', 'dial_requested')
             ${leadOnlyClause}
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
@@ -1278,6 +1284,7 @@ async function api_reports_callActivity(token, filters) {
   const recentSql = `
     SELECT ce.id, ce.lead_id, ce.user_id, ce.phone, ce.direction, ce.event,
            ce.duration_s, ce.recording_id, ce.created_at,
+           ce.sim_slot, ce.sim_label, ce.src,
            l.name AS lead_name,
            u.name AS rep_name,
            r.duration_s AS rec_duration
@@ -1287,7 +1294,9 @@ async function api_reports_callActivity(token, filters) {
       LEFT JOIN lead_recordings r ON r.id = ce.recording_id
      WHERE ce.created_at >= $1 AND ce.created_at <= $2
            -- CALL_INTENT_EXCLUDE_v1 — hide intent events from Recent Calls too
-           AND ce.event != 'autodial_requested'
+           -- DIAL_REQUESTED_FIX_v1 — 'dial_requested' is an INTENT (rep tapped Call),
+           -- not a call. It was never actually excluded here despite the comment above.
+           AND ce.event NOT IN ('autodial_requested', 'dial_requested')
            ${leadOnlyClause}
            -- CALL_RECENT_DEDUP_v2 (2026-06-03) — hide 'incoming_ringing' rows
            -- that have a paired 'call_ended' OR 'recording_saved' for the
