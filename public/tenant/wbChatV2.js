@@ -216,6 +216,17 @@
 
 .wbv2-list { flex: 1; overflow-y: auto; min-height: 0; }
 .wbv2-list .empty { padding: 30px 20px; text-align: center; color: #8696a0; font-size: 13px; }
+
+/* WA_CHAT_PAGING_FIX_v1 — thread-list pager (was never rendered at all) */
+.wbv2-foot { flex: 0 0 auto; background: #fff; border-top: 1px solid #e9edef; padding: 7px 8px 8px; }
+.wbv2-foot-count { font-size: 11px; color: #667781; text-align: center; margin-bottom: 6px; }
+.wbv2-foot-nav { display: flex; align-items: center; justify-content: center; gap: 3px; flex-wrap: wrap; }
+.wbv2-foot-lbl { font-size: 10px; color: #8696a0; margin-left: 4px; }
+.wbv2-pg { min-width: 26px; padding: 3px 7px; font-size: 11px; font-weight: 600; color: #54656f; background: #fff; border: 1px solid #e9edef; border-radius: 6px; cursor: pointer; }
+.wbv2-pg:hover:not(.disabled):not(.active) { background: #f5f6f6; }
+.wbv2-pg.active { background: #00a884; border-color: #00a884; color: #fff; cursor: default; }
+.wbv2-pg.disabled { opacity: .4; cursor: not-allowed; }
+.wbv2-pgsize { font-size: 11px; padding: 3px 5px; border: 1px solid #e9edef; border-radius: 6px; color: #54656f; background: #fff; }
 .wbv2-row { padding: 12px 14px; border-bottom: 1px solid #f5f6f6; cursor: pointer; position: relative; }
 .wbv2-row:hover { background: #f5f6f6; }
 .wbv2-row.active { background: #f0f2f5; }
@@ -426,28 +437,19 @@
   async function loadThreads(loadMoreOpts) {
     try {
       const tenantBrand = (window.CRM && CRM.brand) || {};
-      /* WA_MOBILE_V1_3 (2026-07-12) — desktop pagination + search */
-      if (!S.dPage) S.dPage = 1;
-      if (!S.dPageSize) S.dPageSize = 100;
-      const opts = { scanLimit: 10000, show_all: true,
-                     page: (loadMoreOpts && loadMoreOpts.page) || S.dPage,
-                     page_size: S.dPageSize };
+      /* WA_CHAT_PAGING_FIX_v1 (2026-07-12) — THE "only 100 chats" BUG.
+       * This used to send page:1 / page_size:100 and nothing ever asked for
+       * page 2, so a tenant with 400 conversations could only ever see the
+       * newest 100 — the rest were simply unreachable.
+       * We now pull the FULL thread list (the server no longer slices when
+       * page_size is omitted) and paginate CLIENT-SIDE in renderThreadList().
+       * That keeps every conversation loaded, makes the per-tab counts exact,
+       * and means the 20s auto-poller below can't clobber loaded pages. */
+      const opts = { scanLimit: 10000, show_all: true };
       if (S.dSearch) opts.q = String(S.dSearch).trim();
       const list = await api('api_wb_chat_threads', opts);
-      /* Compute hasMore + append/replace based on page */
-      const incoming = Array.isArray(list) ? list : [];
-      S.dHasMore = incoming.length === S.dPageSize;
-      if (loadMoreOpts && loadMoreOpts.page && loadMoreOpts.page > 1) {
-        const combined = ((S.threadsRaw || []).concat(incoming));
-        S.threadsRaw = combined;
-      } else {
-        S.threadsRaw = incoming;
-      }
-      /* Skip the old raw assignment below via the guard flag: */
-      S._skipRawAssign = true;
       const _prev = S.threadsRaw || [];
-      if (!S._skipRawAssign) S.threadsRaw = Array.isArray(list) ? list : [];
-      S._skipRawAssign = false;
+      S.threadsRaw = Array.isArray(list) ? list : [];
       _wbv2DiffNew(_prev, S.threadsRaw);
       // v2.0 — install silent auto-poll once. Refreshes thread list +
       // active chat every 20s so reps don't need to click Refresh.
@@ -547,7 +549,7 @@
             try { if (S.dSrchT) clearTimeout(S.dSrchT); } catch (_) {}
             S.dSrchT = setTimeout(async () => {
               S.dSearch = S.search;
-              S.dPage = 1;
+              S.pPage = 1;   // WA_CHAT_PAGING_FIX_v1
               await loadThreads();
               renderThreads();
             }, 350);
@@ -588,12 +590,89 @@
     // Recent / History tabs
     host.appendChild(h('div', { class: 'wbv2-tabs' },
       tab('🕒 Recent', 'recent', '(7d)'),
-      tab('📜 History', 'history', '(30d)')));
+      tab('📜 History', 'history', '(all)')));
 
     // List container
     const listEl = h('div', { class: 'wbv2-list', id: 'wbv2-list' });
     host.appendChild(listEl);
+
+    /* WA_CHAT_PAGING_FIX_v1 — the pager that was never rendered. loadThreads()
+     * had been computing a hasMore flag for days, but no control was ever drawn
+     * for it, so the bottom of the page was simply empty. */
+    host.appendChild(h('div', { class: 'wbv2-foot', id: 'wbv2-foot' }));
+
     renderThreadList();
+  }
+
+  /* Client-side pager over the already-loaded thread list. */
+  function renderPager(total) {
+    const foot = $('#wbv2-foot');
+    if (!foot) return;
+    foot.innerHTML = '';
+
+    const size = _pSize();
+    const pages = size ? Math.max(1, Math.ceil(total / size)) : 1;
+    if (S.pPage > pages) S.pPage = pages;
+
+    const from = total ? ((S.pPage - 1) * (size || total)) + 1 : 0;
+    const to   = size ? Math.min(total, S.pPage * size) : total;
+
+    foot.appendChild(h('div', { class: 'wbv2-foot-count' },
+      total ? ('Showing ' + from + '–' + to + ' of ' + total + ' chats') : 'No chats'));
+
+    const nav = h('div', { class: 'wbv2-foot-nav' });
+
+    const go = (p) => { S.pPage = p; renderThreadList(); };
+    const navBtn = (label, targetPage, disabled) => {
+      const b = h('button', { class: 'wbv2-pg' + (disabled ? ' disabled' : '') }, label);
+      if (disabled) b.disabled = true; else b.onclick = () => go(targetPage);
+      return b;
+    };
+
+    if (size && pages > 1) {
+      nav.appendChild(navBtn('«', 1, S.pPage <= 1));
+      nav.appendChild(navBtn('‹', S.pPage - 1, S.pPage <= 1));
+      // window of page numbers around the current page
+      let start = Math.max(1, S.pPage - 2);
+      let end   = Math.min(pages, start + 4);
+      start = Math.max(1, end - 4);
+      for (let p = start; p <= end; p++) {
+        const b = h('button', { class: 'wbv2-pg' + (p === S.pPage ? ' active' : '') }, String(p));
+        if (p !== S.pPage) b.onclick = () => go(p);
+        nav.appendChild(b);
+      }
+      nav.appendChild(navBtn('›', S.pPage + 1, S.pPage >= pages));
+      nav.appendChild(navBtn('»', pages, S.pPage >= pages));
+    }
+
+    const sel = h('select', { class: 'wbv2-pgsize' });
+    [['25','25'],['50','50'],['100','100'],['200','200'],['0','All']].forEach(([v, lbl]) => {
+      const o = h('option', { value: v }, lbl);
+      if (String(size) === v) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = () => {
+      S.pSize = Number(sel.value);
+      try { localStorage.setItem('wbv2_page_size', String(S.pSize)); } catch (_) {}
+      S.pPage = 1;
+      renderThreadList();
+    };
+    nav.appendChild(h('span', { class: 'wbv2-foot-lbl' }, 'per page'));
+    nav.appendChild(sel);
+
+    foot.appendChild(nav);
+  }
+
+  function _pSize() {
+    if (S.pSize === undefined || S.pSize === null) {
+      let saved = 50;
+      try {
+        const v = localStorage.getItem('wbv2_page_size');
+        if (v !== null && v !== '' && !isNaN(Number(v))) saved = Number(v);
+      } catch (_) {}
+      S.pSize = saved;
+    }
+    return Number(S.pSize) || 0;   // 0 = show all
   }
   function pill(label, key, count) {
     return h('span', {
@@ -604,7 +683,12 @@
   function tab(label, key, sub) {
     return h('div', {
       class: 'tab' + (S.tab === key ? ' active' : ''),
-      onclick: () => { S.tab = key; renderThreadList(); }
+      /* WA_CHAT_TABS_FIX_v1 — "can't get back to Recent". This called
+       * renderThreadList(), which redraws ONLY the list, not the tab bar — so the
+       * 'active' highlight never moved off History and the click looked dead.
+       * pill() already called renderThreads(); tabs must too. renderThreads()
+       * re-renders from state and does NOT refetch, so nothing is lost. */
+      onclick: () => { S.tab = key; S.pPage = 1; renderThreads(); }
     }, label, h('span', { class: 'sub' }, sub));
   }
   function renderThreadList() {
@@ -617,9 +701,14 @@
     // tab cutoff. Tab only constrains the date window when a more selective filter
     // (unread/mine/assignee/phone) is active — at which point the cutoff is helpful
     // to keep the list focused.
-    const cutoffMs = (S.filter === 'all')
+    /* WA_CHAT_TABS_FIX_v1 (2026-07-12)
+     * Recent  = active in the last 7 days.
+     * History = EVERYTHING (the archive). It used to mean "last 30 days", which
+     * both hid genuinely old chats and let History come back SMALLER than the
+     * full list — that is where the nonsense "21 conversations" came from. */
+    const cutoffMs = (S.filter === 'all' || S.tab === 'history')
       ? Number.POSITIVE_INFINITY
-      : (S.tab === 'recent' ? 7 : 30) * 86400 * 1000;
+      : 7 * 86400 * 1000;
     const meId = (S.me && S.me.id) || null;
     const q = String(S.search || '').toLowerCase().trim();
 
@@ -638,9 +727,16 @@
       return _ts(b) - _ts(a);
     });
     let rows = _sortedSrc.filter(t => {
-      const last = t.last_activity_at || t.last_msg_at || t.updated_at;
-      if (last) {
-        const age = now - new Date(last).getTime();
+      /* WA_CHAT_TABS_FIX_v1 — the second half of the bad-count bug. This read
+       * `t.last_activity_at || t.last_msg_at || t.updated_at` and never looked at
+       * `last_at` — the field the server actually returns for the last message,
+       * and the one _ts() (used by the sort, just above) reads. So chats were
+       * bucketed into Recent/History by when someone last EDITED THE LEAD, not by
+       * when the chat last had a message. Use the same accessor as the sort so
+       * the tabs and the ordering can never disagree again. */
+      const lastMs = _ts(t);
+      if (lastMs) {
+        const age = now - lastMs;
         if (age > cutoffMs) return false;
       }
       if (S.filter === 'unread' && !Number(t.unread || t.unread_count || 0)) return false;
@@ -656,7 +752,21 @@
 
     if (!rows.length) {
       listEl.appendChild(h('div', { class: 'empty' }, S.threadsRaw.length ? 'No conversations match your filter.' : 'No conversations yet.'));
+      renderPager(0);
       return;
+    }
+
+    /* WA_CHAT_PAGING_FIX_v1 — paginate what's on screen. `rows` is the full,
+     * already-filtered set, so the pager count is always the true number of
+     * conversations in this tab. */
+    const _total = rows.length;
+    if (!S.pPage) S.pPage = 1;
+    const _size = _pSize();
+    if (_size > 0) {
+      const _pages = Math.max(1, Math.ceil(_total / _size));
+      if (S.pPage > _pages) S.pPage = _pages;
+      const _start = (S.pPage - 1) * _size;
+      rows = rows.slice(_start, _start + _size);
     }
 
     // v2.2 — backfill status_name from S.statusById when the API response
@@ -668,6 +778,7 @@
       }
     });
     rows.forEach(t => listEl.appendChild(rowEl(t)));
+    renderPager(_total);   // WA_CHAT_PAGING_FIX_v1
   }
   function rowEl(t) {
     const name = t.lead_name || t.profile_name || t.phone || '—';
