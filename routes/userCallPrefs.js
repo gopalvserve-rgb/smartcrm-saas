@@ -257,6 +257,26 @@ async function api_userCallPrefs_save(token, payload) {
     insVals
   );
 
+  // LEGACY_AUTOLEAD_SYNC_v1 (2026-07-12) — autolead_inbound / autolead_outbound are the
+  // OLD per-user flags. resolveCallPrefs() still bridges from them when
+  // autolead_directions is NULL, which meant a rep whose old flags said YES had an
+  // EFFECTIVE value of in+missed+out while the new checkboxes rendered "None of them".
+  // The screen said no leads; the server made leads. Whenever the new field is written,
+  // drag the legacy flags into agreement so the two can never disagree again.
+  if (Object.prototype.hasOwnProperty.call(patch, 'autolead_directions')) {
+    const i = cols.indexOf('autolead_directions');
+    if (i >= 0 && vals[i] !== null) {
+      const set = String(vals[i]).split(',').filter(Boolean);
+      const inb = (set.indexOf('in') >= 0 || set.indexOf('missed') >= 0) ? 1 : 0;
+      const out = (set.indexOf('out') >= 0) ? 1 : 0;
+      try {
+        await db.query(
+          `UPDATE user_call_prefs SET autolead_inbound = $1, autolead_outbound = $2 WHERE user_id = $3`,
+          [inb, out, uid]);
+      } catch (e) { /* best-effort */ }
+    }
+  }
+
   // CAPTURE_ONE_STORE_v1 — mirror into the legacy users.capture_lead_only column
   // so anything still reading it (and the old Security-modal toggle) stays in step.
   if (Object.prototype.hasOwnProperty.call(patch, 'capture_lead_only')) {
