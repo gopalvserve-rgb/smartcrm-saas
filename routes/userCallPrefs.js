@@ -97,13 +97,31 @@ async function _companyDefaults() {
   };
 }
 
-/** This user's raw row (NULL = inherit). {} when they've never set anything. */
+/** This user's raw row (NULL = inherit). {} when they've never set anything.
+ *
+ *  CAPTURE_ONE_STORE_v1 (2026-07-12): `capture_lead_only` ALSO exists as a column
+ *  on `users` (written by the old "Capture only my CRM-lead calls" toggle that used
+ *  to live in the Security modal). Two stores for one policy is how settings drift
+ *  apart, so this is the single reader: if user_call_prefs has no opinion, fall back
+ *  to the legacy users column, then to the company default. Saving writes BOTH, so
+ *  nothing that still reads the old column goes stale. */
 async function _rawPrefs(userId) {
   await _ensure();
+  let row = {};
   try {
     const { rows } = await db.query('SELECT * FROM user_call_prefs WHERE user_id = $1', [userId]);
-    return rows[0] || {};
-  } catch (e) { return {}; }
+    row = rows[0] || {};
+  } catch (e) { row = {}; }
+
+  if (row.capture_lead_only === null || row.capture_lead_only === undefined) {
+    try {
+      const { rows } = await db.query(
+        'SELECT capture_lead_only FROM users WHERE id = $1', [userId]);
+      const legacy = rows[0] && rows[0].capture_lead_only;
+      if (legacy !== null && legacy !== undefined) row.capture_lead_only = Number(legacy) === 1 ? 1 : 0;
+    } catch (e) { /* column may not exist on older tenants */ }
+  }
+  return row;
 }
 
 /**
@@ -176,6 +194,19 @@ async function api_userCallPrefs_save(token, payload) {
        ON CONFLICT (user_id) DO UPDATE SET ${setStr}, updated_at = NOW()`,
     insVals
   );
+
+  // CAPTURE_ONE_STORE_v1 — mirror into the legacy users.capture_lead_only column
+  // so anything still reading it (and the old Security-modal toggle) stays in step.
+  if (Object.prototype.hasOwnProperty.call(patch, 'capture_lead_only')) {
+    const i = cols.indexOf('capture_lead_only');
+    if (i >= 0) {
+      const v = vals[i];
+      try {
+        await db.query('UPDATE users SET capture_lead_only = $1 WHERE id = $2',
+          [v === null ? null : (Number(v) === 1 ? 1 : 0), uid]);
+      } catch (e) { /* column may not exist */ }
+    }
+  }
   return await api_userCallPrefs_get(token, uid);
 }
 

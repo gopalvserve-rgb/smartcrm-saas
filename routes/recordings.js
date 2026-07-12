@@ -210,6 +210,20 @@ async function api_call_logEvent(token, payload) {
     };
   }
 
+  // CAPTURE_ONE_STORE_v1 (2026-07-12) — "capture only my CRM-lead calls".
+  // This policy has existed as a toggle for a while but NOTHING on the server ever
+  // read it, so it silently did nothing. It is now honoured here, per user (with the
+  // company setting as the fallback): if it's on and the number isn't a lead, the
+  // call is not recorded in the CRM at all.
+  if (!lead) {
+    try {
+      const pref = await require('./userCallPrefs').resolveCallPrefs(me.id);
+      if (pref.capture_lead_only) {
+        return { ok: true, lead_id: null, skipped: true, reason: 'capture_lead_only' };
+      }
+    } catch (e) { /* if prefs are unavailable, fail OPEN and capture the call */ }
+  }
+
   await db.insert('call_events', {
     lead_id: lead ? lead.id : null,
     user_id: me.id,
