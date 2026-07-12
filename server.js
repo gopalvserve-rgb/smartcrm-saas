@@ -127,6 +127,13 @@ try {
       setTimeout(() => tickets.sweepStaleTickets().catch(() => {}), 120_000);
     }
   } catch (_) {}
+  // ERRLOG_RETENTION_v1 — keep only the last 7 days of super-admin error logs.
+  try {
+    if (errorLogs && typeof errorLogs.purgeOldErrorLogs === 'function') {
+      setInterval(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 24 * 60 * 60 * 1000);
+      setTimeout(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 150_000);
+    }
+  } catch (_) {}
 } catch (_) {}
 
 // Combine every SaaS api_* into one dispatch map

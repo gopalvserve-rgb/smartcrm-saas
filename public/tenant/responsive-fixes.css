@@ -178,3 +178,109 @@
   .chart-wrap canvas { max-width: 100%; }
   img, svg, canvas { max-width: 100%; height: auto; }
 }
+
+
+/* =====================================================================
+   RESPONSIVE_FIXES_v2  (2026-07-12)
+   ---------------------------------------------------------------------
+   v1 fixed layout at the CLASS level. But this SPA builds most UI with
+   INLINE styles from JS — h('div', { style: { maxWidth:'900px' } }) — and
+   an inline style ALWAYS beats a class rule. So several v1 rules were
+   being silently overridden in exactly the places that break.
+
+   Measured on main @ aa992d0:
+     • 28 modals carry an inline max-width (up to 900px) → v1's
+       `.modal { max-width: calc(100vw - 20px) }` never applied.
+     • 104 inline grid-template-columns in app.js; the fixed-column ones
+       (e.g. '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', '300px 1fr',
+       '120px 1fr') cannot collapse on a phone.
+   v2 defeats those with narrowly-scoped !important overrides.
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   8. MODALS — override the inline max-width/width set from JS.
+   Also pins the header so the ✕ is always reachable while the body scrolls.
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  .modal,
+  .modal.modal-lg,
+  .modal-bd > div,
+  .modal-backdrop > div {
+    max-width: calc(100vw - 20px) !important;
+    width: auto !important;
+    max-height: 92vh !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-head {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #fff;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   9. INLINE GRIDS — collapse JS-set grids so forms/detail panes stack.
+   Phone: one column. Tablet: fit as many 220px columns as will fit.
+   --------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  #view [style*="grid-template-columns"],
+  .modal [style*="grid-template-columns"],
+  .modal-bd [style*="grid-template-columns"],
+  .modal-backdrop [style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (min-width: 601px) and (max-width: 780px) {
+  #view [style*="grid-template-columns"],
+  .modal [style*="grid-template-columns"] {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   10. FORMS — labels/inputs stack; kill inline fixed widths that clip
+   fields (JS sets width:12rem / 7rem / 300px on filter + form inputs).
+   Checkboxes/radios are excluded so they don't stretch full-width.
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  .f-row, .f-row.full { display: block !important; width: 100% !important; }
+
+  #view input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  #view select,
+  #view textarea,
+  .modal input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  .modal select,
+  .modal textarea,
+  .modal-bd input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  .modal-bd select,
+  .modal-bd textarea {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  /* label above field, never beside it */
+  .modal label, #view label { display: block; }
+}
+
+/* ---------------------------------------------------------------------
+   11. TABLET TIER (481–780) — v1 added a laptop tier; tablets still fell
+   through to the phone layout. Give them back multi-column card grids.
+   --------------------------------------------------------------------- */
+@media (min-width: 481px) and (max-width: 780px) {
+  .cards, .chart-grid, .kpi-row {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)) !important;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   12. LAST-RESORT OVERFLOW GUARD — nothing may drag the document sideways
+   on a phone. (Scroll containers from v1 §3 still scroll internally.)
+   --------------------------------------------------------------------- */
+@media (max-width: 780px) {
+  html, body { overflow-x: hidden; }
+  #view, .main { overflow-x: clip; }
+  .table-wrap, .card { max-width: 100%; }
+}

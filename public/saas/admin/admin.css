@@ -82,3 +82,93 @@ tr:hover { background: var(--bg); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
 .modal h3 { margin: 0; }
 .modal .x { background: none; border: 0; font-size: 1.4rem; cursor: pointer; color: var(--muted); }
+
+
+/* =====================================================================
+   ADMIN_RESPONSIVE_v1  (2026-07-12)
+   ---------------------------------------------------------------------
+   The super-admin console had ZERO media queries — it was desktop-only and
+   broke on tablets/phones. Like the tenant SPA it is built almost entirely
+   from inline styles in admin.js (17 modals with .modal-bd/.modal, most
+   carrying an inline max-width), so class rules must use !important to win.
+
+   Additive + reversible: delete this block to fully undo.
+   ===================================================================== */
+
+/* Shell: sidebar becomes a top strip; content gets the full width. */
+@media (max-width: 1024px) {
+  .shell {
+    display: block !important;
+    grid-template-columns: 1fr !important;
+  }
+  .sidebar {
+    width: 100% !important;
+    height: auto !important;
+    position: static !important;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sidebar a, .sidebar .nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .main {
+    margin-left: 0 !important;
+    padding: 12px !important;
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+/* Wide data tables scroll inside their card instead of widening the page. */
+@media (max-width: 1024px) {
+  html, body { max-width: 100%; overflow-x: hidden; }
+  .card { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+  table { max-width: none; }
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .toolbar > * { min-width: 0; }
+}
+
+/* Modals: beat the inline max-width, keep the ✕ reachable, scroll the body. */
+@media (max-width: 780px) {
+  .modal,
+  .modal-bd > div {
+    max-width: calc(100vw - 20px) !important;
+    width: auto !important;
+    max-height: 92vh !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-head {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #fff;
+  }
+  /* JS-set grids inside modals/pages collapse to one column */
+  .main [style*="grid-template-columns"],
+  .modal [style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Touch targets + no iOS zoom-on-focus. */
+@media (max-width: 780px) {
+  .btn, button.btn, a.btn, .toolbar button {
+    min-height: 44px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]),
+  select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+  input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; }
+}

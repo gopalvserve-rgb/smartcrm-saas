@@ -247,12 +247,31 @@ async function api_saas_errorLogs_purgeResolved(token) {
   return { ok: true, deleted: r.rowCount };
 }
 
+// ERRLOG_RETENTION_v1 — keep only the last 7 days of error logs. Runs daily from
+// server.js. Retention is configurable via ERROR_LOG_RETENTION_DAYS (default 7);
+// 0 disables the purge.
+async function purgeOldErrorLogs() {
+  let days = 7;
+  try {
+    const v = await control.getSetting('ERROR_LOG_RETENTION_DAYS', '');
+    if (v !== '' && v != null && Number.isFinite(Number(v))) days = Math.max(0, Number(v));
+  } catch (_) {}
+  if (!days) return { deleted: 0, skipped: true };
+  const r = await control.query(
+    `DELETE FROM error_logs WHERE last_seen_at < NOW() - ($1 || ' days')::interval`, [String(days)]
+  );
+  const deleted = r.rowCount || 0;
+  if (deleted) console.log('[errorLogs] retention purge — deleted ' + deleted + ' row(s) older than ' + days + ' day(s)');
+  return { deleted, days };
+}
+
 module.exports = {
   // helpers
   logError,
   expressErrorMiddleware,
   expressClientErrorEndpoint,
   // admin API
+  purgeOldErrorLogs,
   api_saas_errorLogs_list,
   api_saas_errorLogs_get,
   api_saas_errorLogs_resolve,
