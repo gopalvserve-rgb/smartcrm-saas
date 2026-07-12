@@ -4398,3 +4398,17 @@ body.focus-mode table.leads-tbl {
   .topbar-right { gap: 3px !important; }
   .topbar-chip { padding: .25rem .5rem !important; }
 }
+
+
+/* MOBILE_UI_v3 (2026-07-12) — mobile-specific hide rules per user request:
+ * hide duplicate left FAB, calendar chip, changelog chip. */
+@media (max-width: 780px) {
+  /* Hide duplicate left FAB (right + New button + right FAB are enough) */
+  #lead-add-fab-mobile, .lead-add-fab-mobile { display: none !important; }
+  /* Hide 📅 calendar (Due today) chip in topbar */
+  .topbar-chip[href="#/duetoday"] { display: none !important; }
+  /* Hide 🎁 New features / What's New changelog button */
+  #btn-changelog { display: none !important; }
+  /* Also hide ⏰ upcoming (user asked earlier for a leaner topbar) */
+  .topbar-chip[href="#/upcoming"] { display: none !important; }
+}
