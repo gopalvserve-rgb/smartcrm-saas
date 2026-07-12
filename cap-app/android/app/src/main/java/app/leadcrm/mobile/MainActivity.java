@@ -95,6 +95,13 @@ public class MainActivity extends BridgeActivity {
         // CALLLOG_AUTOSYNC_v1 — hourly background call-log import (SIM-filtered).
         // Completely separate from the (intentionally disabled) recording bg-sync above.
         try { scheduleCallLogAutoSync(); } catch (Exception e) { Log.w(TAG, "scheduleCallLogAutoSync failed: " + e.getMessage()); }
+        // CALLLOG_SYNC_ON_OPEN_v1 — also sync immediately whenever the app opens.
+        // A PeriodicWorkRequest never runs at enqueue time (first turn can be an hour
+        // away), so on its own it feels broken. This fires a debounced one-shot sync.
+        // CALL-LOG ONLY (number, timestamp, duration, SIM). It performs NO file I/O and
+        // never touches the recording folder or RecordingsBackgroundSyncWorker — so it
+        // cannot cause the hang that made recording auto-sync get disabled.
+        runCallLogSyncNow("app-open");
 
         // PERM_ONBOARDING_v1: launch Runo-style permission onboarding on first run
         // or whenever critical perms (battery whitelist / MANAGE_EXTERNAL_STORAGE / recording folder)
@@ -160,6 +167,10 @@ public class MainActivity extends BridgeActivity {
          * arrived during a slow resume, re-consume it here. Idempotent
          * because handleDeeplink calls intent.removeExtra("deeplink"). */
         try { handleDeeplink(getIntent()); } catch (Exception e) {}
+        // CALLLOG_SYNC_ON_OPEN_v1 — sync the call log every time the app comes to the
+        // foreground. Debounced inside runCallLogSyncNow (max once / 5 min) so opening
+        // the app repeatedly cannot hammer it. Call-log only — no recording fetch.
+        runCallLogSyncNow("app-resume");
     }
 
     /* INCOMING_CARD_OPEN_LEAD_FIX (2026-07-10) — consume the "deeplink"
@@ -1176,6 +1187,49 @@ public class MainActivity extends BridgeActivity {
             Log.i(TAG, "scheduleCallLogAutoSync: hourly worker enqueued");
         } catch (Exception e) {
             Log.w(TAG, "scheduleCallLogAutoSync failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * CALLLOG_SYNC_ON_OPEN_v1 — fire an immediate call-log sync.
+     *
+     * Why: a PeriodicWorkRequest never runs at enqueue time — Android gives it its
+     * first turn somewhere inside the hour, and Doze/OEM battery managers delay it
+     * further. So the hourly worker alone makes "auto sync" look broken on a fresh
+     * install. This runs one straight away when the app opens/resumes.
+     *
+     * SAFETY — why this cannot hang the app (unlike the recording sync):
+     *   • It runs in a WorkManager background thread — never on the UI thread.
+     *   • It reads the CallLog SQLite table only: number, timestamp, duration, SIM.
+     *   • It performs ZERO file I/O. It never opens the recording folder and never
+     *     touches RecordingsBackgroundSyncWorker (which stays disabled).
+     *   • It is watermark-bounded — only rows since the last sync (usually 0-5).
+     *   • Debounced to at most once per 5 minutes, so repeatedly opening the app
+     *     cannot hammer it.
+     */
+    private void runCallLogSyncNow(String reason) {
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+            long last = prefs.getLong("calllog_sync_last_kick", 0L);
+            long now  = System.currentTimeMillis();
+            if (now - last < 5 * 60 * 1000L) {   // debounce — max one kick / 5 min
+                Log.i(TAG, "runCallLogSyncNow skipped (debounced) - " + reason);
+                return;
+            }
+            prefs.edit().putLong("calllog_sync_last_kick", now).apply();
+
+            Constraints constraints = new Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build();
+            OneTimeWorkRequest req = new OneTimeWorkRequest.Builder(CallLogAutoSyncWorker.class)
+                .setConstraints(constraints)
+                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .addTag("calllog-sync-now")
+                .build();
+            WorkManager.getInstance(this).enqueue(req);
+            Log.i(TAG, "runCallLogSyncNow enqueued (" + reason + ")");
+        } catch (Exception e) {
+            Log.w(TAG, "runCallLogSyncNow failed: " + e.getMessage());
         }
     }
 }
