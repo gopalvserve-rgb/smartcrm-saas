@@ -2300,10 +2300,8 @@ api('api_leads_update', lid, { status_id: opt.id })
             width:'30px', height:'30px', background: C.green, borderRadius:'8px',
             display:'flex', alignItems:'center', justifyContent:'center'
           }}, ICON.waLogo('white')),
-          h('div', null,
-            h('div', { style: { fontSize:'16px', fontWeight:'700', lineHeight:'1.1' }}, 'SmartCRM'),
-            h('div', { style: { color: C.green, fontSize:'10px', fontWeight:'500' }}, 'Loading WhatsApp Inbox…')
-          )
+          /* v2_1 — boot: just show a subtle loading tag; no SmartCRM branding */
+          h('div', { style: { color: 'rgba(255,255,255,0.6)', fontSize:'11px', fontWeight:'500' }}, 'Loading…')
         )
       ),
       h('div', { style: {
