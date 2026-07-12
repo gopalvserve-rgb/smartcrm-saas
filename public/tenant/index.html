@@ -217,52 +217,7 @@
            * alongside the desktop v2. The v2 render() delegates to
            * WB_CHAT_V2_MOBILE on viewports <=768px. */
           var wbM = document.createElement('script');
-          wbM.src = 'wbChatV2Mobile.js?v=2026-07-12-wa-mobile-v2-2';
-          document.body.appendChild(wbM);
-          // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — the loaders below were ALSO
-          // dropped when the pack scripts rewrote this block, which is why the
-          // AI features + Modern Leads theme disappeared. Each module self-gates
-          // (config flag / installed pack) at render time, so loading them here
-          // simply restores their prior rollout behaviour. Keep all of these.
-          var wcatJs = document.createElement('script');     // WA_CATALOGUE_v1 (2026-07-06) — WA Catalogue
-          wcatJs.src = 'waCatalogue.js?v=2026-07-08-token-fix'; wcatJs.defer = true;
-          document.body.appendChild(wcatJs);
-          var st = document.createElement('script');          // STU360 — Student 360 (Education pack)
-          st.src = 'student360.js?v=2026-07-06-markpaid-fieldfix'; st.defer = true;
-          document.body.appendChild(st);
-          var cp = document.createElement('script');          // COPILOT_v4 — Proactive AI Coach / AI Assist
-          cp.src = 'copilotProactive.js?v=2026-06-27-restore-v1'; cp.defer = true;
-          document.body.appendChild(cp);
-          var lv = document.createElement('script');          // LEADS_VIEW_V2 — Modern + Inbox lead page theme
-          lv.src = 'leadsV2.js?v=2026-07-09-datefield-switch-v1'; lv.defer = true;
-          document.body.appendChild(lv);
-          var av = document.createElement('script');          // AICALL_v1 — VAPI AI calling config
-          av.src = 'aicallVapi.js?v=2026-06-27-restore-v1'; av.defer = true;
-          document.body.appendChild(av);
-          var oppJs = document.createElement('script');       // OPPORTUNITIES_v1 — Opportunities tab
-          oppJs.src = 'opportunities.js?v=2026-07-05-opp-productid-fix'; oppJs.defer = true;
-          document.body.appendChild(oppJs);
-          var lsJs = document.createElement('script');        // LEAD_SCORING_v1 — Smart AI Lead Score
-          lsJs.src = 'leadScoring.js?v=2026-06-27-restore-v1'; lsJs.defer = true;
-          document.body.appendChild(lsJs);
-          var clsJs = document.createElement('script');       // CALLLOG_SYNC_v1 — device call-log Sync UI + SIM settings
-          clsJs.src = 'callLogSync.js?v=2026-07-05-calllogsync-v5-noupdatemsg'; clsJs.defer = true;
-          document.body.appendChild(clsJs);
-        }
-        if (document.body) injectSpaScripts();
-        else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });
-      }
-    })();
-
-    // Service worker registration is intentionally disabled on tenant
-    // pages for now — SW scope handling under /t/<slug>/ needs a
-    // separate per-tenant manifest + scope, which we'll wire up in a
-    // follow-up. The CRM works fine without offline; only push +
-    // offline shell are deferred.
-  </script>
-</head>
-<body>
-  <div id="app"></div>
+          wbM.src = 'wbChatV2Mobile.js?v=2026-07-12-mobile-filter-min"app"></div>
 
   <!-- SC_IOS_PWA_v1 — install hint banner. Only shows on iOS Safari when
        not already running in standalone mode and not dismissed before. -->

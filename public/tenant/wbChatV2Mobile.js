@@ -540,6 +540,11 @@
         var hay = ((t.lead_name || '') + ' ' + (t.phone || '') + ' ' + (t.company || '') + ' ' + (t.last_msg || '')).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
       }
+      /* MOBILE_FILTER_MIN — apply Filter overlay picks (defensive) */
+      try {
+        if (S.filterUser  && String(t.assigned_to || '')      !== String(S.filterUser))  return false;
+        if (S.filterPhone && String(t.phone_number_id || '') !== String(S.filterPhone)) return false;
+      } catch (_) {}
       return true;
     });
   }
