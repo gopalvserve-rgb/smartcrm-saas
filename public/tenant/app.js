@@ -1707,42 +1707,24 @@ async function openSecurityModal() {
 
     h('hr', { style: { margin: '18px 0', border: '0', borderTop: '1px solid var(--border-light)' } }),
 
-    /* CALL_CAPTURE_LEAD_ONLY_USER_v1 — per-user opt-in: capture only MY CRM-lead calls. */
+    /* CAPTURE_ONE_STORE_v1 (2026-07-12) — the per-user "Capture only my CRM-lead
+       calls" toggle used to live here. It wrote users.capture_lead_only, which
+       NOTHING on the server ever read — so it silently did nothing. The policy is
+       now real (enforced in api_call_logEvent) and lives with every other call
+       setting in Settings → Calls & Mobile, where it can't drift out of sync with
+       the identical company-level setting. */
     (function () {
       const wrap = h('div', {});
-      wrap.appendChild(h('h4', { style: { margin: '4px 0 8px' } }, '\uD83D\uDCDE Capture only my CRM-lead calls'));
-      const state = h('div', {
-        style: {
-          padding: '10px 12px', borderRadius: '6px', display: 'flex',
-          justifyContent: 'space-between', alignItems: 'center', gap: '10px',
-          background: 'var(--bg-alt)', fontWeight: 500
-        }
-      });
-      const label = h('span', {}, 'Loading\u2026');
-      const btn = h('button', { class: 'btn sm primary' }, '\u2026');
-      state.appendChild(label); state.appendChild(btn);
-      wrap.appendChild(state);
-      wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '6px' } },
-        'When ON, your calls to numbers that aren\u2019t a CRM lead \u2014 and their recordings \u2014 aren\u2019t captured at all. Affects only you; other users\u2019 calls are unchanged.'));
-      function paint(enabled) {
-        state.style.background = enabled ? 'var(--ok-soft)' : 'var(--bg-alt)';
-        state.style.color = enabled ? 'var(--ok)' : '';
-        label.textContent = enabled ? '\u2713 Capturing only my CRM-lead calls' : 'Capturing all my calls';
-        btn.textContent = enabled ? 'Turn OFF' : 'Turn ON';
-        btn.dataset.next = enabled ? '0' : '1';
-      }
-      paint(Number(me.capture_lead_only) === 1);
-      btn.onclick = async () => {
-        btn.disabled = true;
-        try {
-          const next = Number(btn.dataset.next);
-          await api('api_users_updateSelf', { capture_lead_only: next });
-          me.capture_lead_only = next;
-          paint(next === 1);
-          toast(next ? 'On \u2014 only your CRM-lead calls will be captured' : 'Off \u2014 all your calls will be captured', 'ok');
-        } catch (e) { toast(e.message, 'err'); }
-        finally { btn.disabled = false; }
+      wrap.appendChild(h('h4', { style: { margin: '4px 0 8px' } }, '\uD83D\uDCDE Call settings'));
+      wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+        'SIM choice, call-log sync, call capture and auto-add-lead are all in one place now.'));
+      const b = h('button', { class: 'btn sm primary', style: { marginTop: '8px' } }, 'Open Calls & Mobile');
+      b.onclick = () => {
+        try { document.querySelector('.modal-backdrop, .modal')?.remove(); } catch (e) {}
+        location.hash = '#/admin';
+        setTimeout(() => { try { window.CRM_openCallSettings(); } catch (e) {} }, 700);
       };
+      wrap.appendChild(b);
       return wrap;
     })()
   ));
@@ -22812,23 +22794,12 @@ VIEWS.callactivity = async (view) => {
           toast('Saved as workspace default', 'ok');
         } catch (e) { toast(e.message, 'err'); }
       } }, '💾 Set as default'));
-    // CALL_CAPTURE_LEAD_ONLY — admin-only, tenant-wide capture gate. When ON,
-    // the system stops STORING personal/unknown calls (and their recordings)
-    // entirely — only calls matched to a CRM lead are captured. Forward-only.
-    const _capChk = h('input', { type: 'checkbox', id: 'ca-capture-leadonly',
-      checked: (CRM.brand && String(CRM.brand.CALL_CAPTURE_LEAD_ONLY) === '1') ? 'checked' : null,
-      onchange: async () => {
-        const v = _capChk.checked ? '1' : '0';
-        try {
-          await api('api_admin_setConfig', { key: 'CALL_CAPTURE_LEAD_ONLY', value: v });
-          CRM.brand = Object.assign(CRM.brand || {}, { CALL_CAPTURE_LEAD_ONLY: v });
-          toast(v === '1' ? 'Now capturing CRM-lead calls only — personal calls won\'t be stored' : 'Capturing all calls', 'ok');
-        } catch (e) { _capChk.checked = !_capChk.checked; toast(e.message, 'err'); }
-      } });
-    toolbar.appendChild(h('label', {
-      style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontSize: '.82rem', marginLeft: '.6rem', color: '#b45309' },
-      title: 'When ON, only calls (and recordings) matching an existing CRM lead are stored. Personal / unknown-number calls are never captured. Applies to new calls going forward. Default OFF — does not affect other tenants.' },
-      _capChk, h('span', {}, '🔒 Capture CRM-lead calls only')));
+    // CAPTURE_ONE_STORE_v1 (2026-07-12) — the '🔒 Capture CRM-lead calls only'
+    // toggle used to sit right here on the Call Activity page, a THIRD copy of the
+    // same policy (the other two were the Security modal and Auto-Assign Rules).
+    // It now lives once, in Settings → Calls & Mobile, and is per user with a
+    // company default. The '📋 CRM leads only' checkbox above stays — that one is
+    // just a view filter, not a capture policy.
     // REC_RETENTION_v1 — admin sets the auto-delete window (days). 0 = keep forever.
     const _retInp = h('input', { type: 'number', min: '0', step: '1', style: { width: '60px', marginLeft: '.3rem' },
       value: String(_retDays()) });
@@ -33649,119 +33620,17 @@ async function adminRules() {
     ));
     wrap.appendChild(aiCard);
 
-    // ---- Call → Lead conversion (mobile app caller-id) ----
-    // CALL_LEAD_DEFAULT_OFF_v1 — default flipped to '0'. Admin must opt in.
-    const callIn  = String(cfg.CALLS_AUTOLEAD_INBOUND  == null ? '0' : cfg.CALLS_AUTOLEAD_INBOUND ) === '1';
-    const _callInWasNull = cfg.CALLS_AUTOLEAD_INBOUND == null;
-    const callOut = String(cfg.CALLS_AUTOLEAD_OUTBOUND == null ? '0' : cfg.CALLS_AUTOLEAD_OUTBOUND) === '1';
-    const callMin = Number(cfg.CALLS_AUTOLEAD_MIN_SECONDS || 5);
-    const callStId = String(cfg.CALLS_AUTOLEAD_STATUS_ID || '');
-    let _statuses = [];
-    try { _statuses = await api('api_statuses_list'); } catch (_) { _statuses = []; }
-    const callCard = h('div', { class: 'card', style: { marginBottom: '1rem' } });
-    callCard.appendChild(h('h4', { style: { marginTop: 0 } }, '📞 Call → Lead conversion (mobile app)'));
-    callCard.appendChild(h('p', { class: 'muted' },
-      'When a rep using the mobile app gets a call (or makes one) from a number that\'s ',
-      h('b', {}, 'not yet in the CRM'),
-      ', auto-create a lead with the chosen status. Inbound is ON by default; outbound is OFF (most outbound calls are to known leads already).'
-    ));
-
-    const inChk = h('input', { type: 'checkbox', checked: callIn ? 'checked' : null });
-    const outChk = h('input', { type: 'checkbox', checked: callOut ? 'checked' : null });
-    const minInp = h('input', { type: 'number', value: callMin, min: 0, step: 1, style: { width: '6rem' } });
-    const stSel = h('select', { style: { minWidth: '14rem' } },
-      h('option', { value: '' }, '— Default (New) —'),
-      ..._statuses.map(st => h('option', {
-        value: String(st.id),
-        selected: String(st.id) === callStId ? 'selected' : null
-      }, st.name))
-    );
-    callCard.appendChild(h('label', { class: 'toggle-row', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.4rem' } },
-      inChk, h('span', {}, 'Convert ', h('b', {}, 'incoming'), ' calls into leads (includes missed calls)')
-    ));
-    callCard.appendChild(h('label', { class: 'toggle-row', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.4rem' } },
-      outChk, h('span', {}, 'Convert ', h('b', {}, 'outgoing'), ' calls into leads')
-    ));
-    callCard.appendChild(h('div', { class: 'field', style: { marginTop: '.5rem' } },
-      h('label', {}, 'Default status for auto-created leads'),
-      stSel,
-      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
-        'Pulled live from your statuses list. If left as "Default", we use the status named "New" (or the first status if no "New" exists).')
-    ));
-    // CALL_DUP_LEAD_v1 (2026-06-04) — what to do when the caller is
-    // already in CRM. Default 'attach' = link the call to the existing
-    // lead. 'duplicate' = create a new lead row marked is_duplicate=1 so
-    // today's call appears as a fresh row in today's leads list.
-    const callDupMode = String(cfg.CALLS_AUTOLEAD_ON_DUPLICATE || 'attach').toLowerCase();
-    const dupSel = h('select', { style: { minWidth: '20rem' } },
-      h('option', { value: 'attach',    selected: callDupMode === 'attach'    ? 'selected' : null }, 'Attach call to the existing lead (default)'),
-      h('option', { value: 'duplicate', selected: callDupMode === 'duplicate' ? 'selected' : null }, 'Create a new duplicate lead row (shows in today\'s list, flagged 🔀 duplicate)')
-    );
-    callCard.appendChild(h('div', { class: 'field', style: { marginTop: '.5rem' } },
-      h('label', {}, 'When the caller is already in CRM'),
-      dupSel,
-      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
-        '\'Attach\' keeps the lead list clean — every call from a repeat caller links to their original lead. ' +
-        '\'Duplicate\' adds a new row every time so reps see today\'s call as a fresh lead (marked as duplicate, linked back to the original).')
-    ));
-    callCard.appendChild(h('div', { class: 'field' },
-      h('label', {}, 'Minimum call duration to count (seconds)'),
-      minInp,
-      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
-        '0 = create on every call (incl. missed). 5 = the rep must answer for at least 5 seconds before a lead is created — useful to avoid spam-dial leads.')
-    ));
-    /* SC_CALL_LEAD_AUTOSAVE_v1 — sa-palss-prop bug: admins unchecked the box but
-       never clicked the dedicated card-level Save button, so the DB never updated
-       and incoming calls kept auto-creating leads. Auto-save every change with a
-       clear status indicator + still expose a manual Save button as belt-and-braces. */
-    const callStatusBadge = h('span', {
-      style: { marginLeft: '.6rem', fontSize: '.82rem', color: '#15803d', fontWeight: 600 }
-    }, '✓ Auto-save enabled');
-
-    let _callSaveTimer = null;
-    const _saveCallCfgNow = async (origin) => {
-      try {
-        callStatusBadge.style.color = '#64748b';
-        callStatusBadge.textContent = '⏳ Saving…';
-        await api('api_admin_setConfig', {
-          CALLS_AUTOLEAD_INBOUND:      inChk.checked  ? '1' : '0',
-          CALLS_AUTOLEAD_OUTBOUND:     outChk.checked ? '1' : '0',
-          CALLS_AUTOLEAD_MIN_SECONDS:  String(Number(minInp.value || 0)),
-          CALLS_AUTOLEAD_STATUS_ID:    stSel.value || '',
-          CALLS_AUTOLEAD_ON_DUPLICATE: dupSel.value || 'attach'
-        });
-        callStatusBadge.style.color = '#15803d';
-        callStatusBadge.textContent = '✓ Saved · ' + new Date().toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
-        if (origin === 'manual') toast('Call → Lead settings saved', 'ok');
-      } catch (e) {
-        callStatusBadge.style.color = '#b91c1c';
-        callStatusBadge.textContent = '✗ Save failed: ' + e.message;
-        toast('Save failed: ' + e.message, 'err');
-      }
-    };
-    const _scheduleCallCfgSave = () => {
-      callStatusBadge.style.color = '#b45309';
-      callStatusBadge.textContent = '⏳ Unsaved changes…';
-      if (_callSaveTimer) clearTimeout(_callSaveTimer);
-      _callSaveTimer = setTimeout(() => _saveCallCfgNow('auto'), 350);
-    };
-    // Wire auto-save to every control on this card
-    inChk.addEventListener('change',  _scheduleCallCfgSave);
-    outChk.addEventListener('change', _scheduleCallCfgSave);
-    minInp.addEventListener('input',  _scheduleCallCfgSave);
-    stSel.addEventListener('change',  _scheduleCallCfgSave);
-    dupSel.addEventListener('change', _scheduleCallCfgSave);
-
-    const callSaveBtn = h('button', { class: 'btn primary', style: { marginTop: '.5rem' } }, '💾 Save now');
-    callSaveBtn.onclick = async () => {
-      callSaveBtn.disabled = true;
-      try { await _saveCallCfgNow('manual'); }
-      finally { callSaveBtn.disabled = false; }
-    };
-    callCard.appendChild(h('div', { style: { marginTop: '.5rem', display: 'flex', alignItems: 'center', flexWrap: 'wrap' } },
-      callSaveBtn, callStatusBadge
-    ));
-    wrap.appendChild(callCard);
+    // CALLS_HUB_v1 (2026-07-12) — the whole 'Call → Lead conversion (mobile app)'
+    // card used to live here, in Auto-Assign Rules, which is nowhere near where
+    // anyone would look for it. It now lives in Settings → Calls & Mobile with the
+    // rest of the call settings, and is PER USER.
+    wrap.appendChild(h('div', { class: 'card', style: { marginBottom: '1rem', background: '#eef2ff', borderLeft: '4px solid #4f46e5' } },
+        h('b', {}, '📱 Moved to Settings → Calls & Mobile'),
+        h('div', { class: 'muted', style: { marginTop: '.25rem', fontSize: '.85rem' } },
+          'Call → Lead conversion, SIM choice, call-log sync and call capture now live in one place, and are set PER USER (each rep has their own phone). '),
+        h('button', { class: 'btn sm primary', style: { marginTop: '.5rem' },
+          onclick: () => { try { window.CRM_openCallSettings(); } catch (e) { location.hash = '#/admin'; } } },
+          'Open Calls & Mobile')));
   } catch (_) { /* config endpoint missing — older deploy, skip silently */ }
 
   const rules = await api('api_rules_list');
