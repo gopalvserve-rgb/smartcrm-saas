@@ -383,3 +383,24 @@
     align-self: stretch !important;
   }
 }
+
+/* ---------------------------------------------------------------------
+   15. LEAD CARD ACTION ROW — touch targets below the 44px floor.
+   Measured on /#/leads @341px: .lc-actions is 268px wide holding SEVEN
+   actions (Call, WA, My-WA, Note, +, Edit, Delete) = ~38px each, under the
+   44x44 WCAG 2.5.5 minimum, with their labels crowding the card edge.
+   Let the row wrap so every action gets a real tap target instead of
+   squeezing them all onto one line.
+   --------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  .lc-actions {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    justify-content: flex-start !important;
+  }
+  .lc-actions > * {
+    flex: 0 0 auto !important;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
