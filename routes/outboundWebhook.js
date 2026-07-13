@@ -200,9 +200,22 @@ async function _renderBody(webhook, lead) {
 
   const tpl = String(webhook.body_template || '').trim();
   if (!tpl) return JSON.stringify(ctx);
+  /* FIX 2026-07-12 — when the template is a JSON body (starts with { or [),
+   * JSON-escape merge values so newlines/tabs/quotes/backslashes in lead
+   * data (very common in `notes`) don't produce
+   *   "Bad control character in string literal in JSON"
+   * on the receiving side. `JSON.stringify(s).slice(1,-1)` gives the
+   * properly-escaped inner content without the outer quotes so the
+   * template's surrounding "..." remains valid. */
+  const isJson = /^[\{\[]/.test(tpl);
   return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, key) => {
-    const v = ctx[key];
-    return v == null ? '' : String(v);
+    const raw = ctx[key];
+    if (raw == null) return '';
+    const str = String(raw);
+    if (isJson) {
+      try { return JSON.stringify(str).slice(1, -1); } catch (_) { return ''; }
+    }
+    return str;
   });
 }
 
