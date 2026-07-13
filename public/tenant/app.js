@@ -7034,8 +7034,19 @@ function renderLeadsMobile(rows) {
     const avatarColor = _avatarColor(l.name || l.phone || l.id);
     const initials    = _initials(l.name);
     const srcBadge    = l.source ? _sourceBadge(l.source) : null;
+    // LEADS_CARD_SELECT_v1 — the card view had NO checkboxes at all, so multi-select
+    // (and therefore selection-aware export/bulk actions) was impossible here; they
+    // only existed in the classic table. Reuse the SAME .row-check/data-id contract
+    // the bulk bar + selectedIds() already understand, so everything just works.
+    const _selBox = h('input', {
+      type: 'checkbox', class: 'row-check lc-check', 'data-id': l.id,
+      title: 'Select this lead',
+      onclick: ev => { ev.stopPropagation(); onRowCheck(); }
+    });
+    if (CRM._selected && CRM._selected.has && CRM._selected.has(Number(l.id))) _selBox.checked = true;
     const card = h('div', { class: cardCls, title: l.tat_violation ? tatViolationTitle(l) : null },
       h('div', { class: 'lc-top' },
+        h('label', { class: 'lc-check-wrap', style: { display: 'flex', alignItems: 'flex-start', paddingRight: '6px' }, onclick: ev => ev.stopPropagation() }, _selBox),
         h('div', { class: 'lc-avatar', style: { background: avatarColor } }, initials),
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
@@ -7196,8 +7207,22 @@ function renderLeadsMobile(rows) {
     return;
   }
 
+  // LEADS_CARD_SELECT_v1 — card view has no table header, so give it its own
+  // "Select all on this page" control. It drives the same .row-check contract.
+  const _selBar = h('label', {
+    class: 'lc-selectall',
+    style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', margin: '0 0 8px',
+             background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px',
+             fontSize: '.84rem', fontWeight: 600, color: '#475569', cursor: 'pointer' } });
+  const _selAllBox = h('input', { type: 'checkbox', id: 'sel-all' });
+  _selAllBox.onclick = (ev) => { selectAll(ev.target.checked); };
+  _selBar.appendChild(_selAllBox);
+  _selBar.appendChild(h('span', {}, 'Select all on this page'));
+  m.appendChild(_selBar);
+
   rows.forEach(l => m.appendChild(_buildMobileLeadCard(l)));
   try { _nukeUnwantedLeadButtons(m); } catch (e) {}
+  try { onRowCheck(); } catch (e) {}
 }
 
 /** Click-to-call.
