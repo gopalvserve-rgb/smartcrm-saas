@@ -6530,6 +6530,7 @@ async function loadLeads(opts) {
       }
     } catch (_) {}
     CRM.cache.lastTotal = res.total || (res.leads || []).length;
+    CRM.cache.lastLeadQuery = Object.assign({}, filters);   // LEADS_EXPORT_SELECTION_v1
     // CALL_DIAL_COUNT_v1 — stamp each lead with its outgoing-dial count for the
     // 📞 badge (Classic view). Best-effort; never blocks the table render.
     try {
@@ -7843,14 +7844,49 @@ function renderCell(col, l, statuses) {
 
 /* --- selection & bulk --- */
 function onRowCheck() {
+  const boxes = $$('.row-check');
   const n = $$('.row-check:checked').length;
   const bar = $('#bulk-bar');
   if (!bar) return;
+  if (n === 0) CRM._selectAllMatching = false;   // LEADS_EXPORT_SELECTION_v1
   // LEADS_BULKBAR_NUCLEAR_v1: three signals for CSS
   bar.hidden = (n === 0);
   bar.setAttribute('aria-hidden', n === 0 ? 'true' : 'false');
   bar.setAttribute('data-empty', n === 0 ? '1' : '0');
-  $('#bulk-count').textContent = `${n} selected`;
+  const total = Number(CRM.cache.lastTotal || 0);
+  $('#bulk-count').textContent = CRM._selectAllMatching
+    ? `All ${total} matching leads selected`
+    : `${n} selected`;
+  _renderSelectAllMatchingLink(n, boxes.length, total);
+}
+
+// LEADS_EXPORT_SELECTION_v1 — the header checkbox only ticks the CURRENT page.
+// When the whole page is ticked and more rows match the filter, offer to extend
+// the selection to every matching lead (used by bulk actions + export).
+function _renderSelectAllMatchingLink(checked, pageCount, total) {
+  const bar = $('#bulk-bar');
+  if (!bar) return;
+  let link = $('#bulk-selectall-link');
+  if (!link) {
+    link = h('a', { id: 'bulk-selectall-link', href: '#',
+      style: { marginLeft: '.6rem', fontSize: '.82rem', fontWeight: '600', color: '#4f46e5', cursor: 'pointer' } });
+    const cnt = $('#bulk-count');
+    if (cnt && cnt.parentNode) cnt.parentNode.insertBefore(link, cnt.nextSibling);
+    else bar.appendChild(link);
+  }
+  const canExtend = !CRM._selectAllMatching && checked > 0 && checked === pageCount && total > pageCount;
+  if (CRM._selectAllMatching) {
+    link.textContent = '✕ Clear — select only this page';
+    link.hidden = false;
+    link.onclick = (e) => { e.preventDefault(); CRM._selectAllMatching = false; onRowCheck(); };
+  } else if (canExtend) {
+    link.textContent = `Select all ${total} matching leads`;
+    link.hidden = false;
+    link.onclick = (e) => { e.preventDefault(); CRM._selectAllMatching = true; onRowCheck(); };
+  } else {
+    link.hidden = true;
+    link.onclick = null;
+  }
 }
 function selectAll(on) {
   $$('.row-check').forEach(c => { c.checked = on; });
@@ -7858,6 +7894,7 @@ function selectAll(on) {
 }
 function clearSelection() {
   const sa = $('#sel-all'); if (sa) sa.checked = false;
+  CRM._selectAllMatching = false;   // LEADS_EXPORT_SELECTION_v1
   selectAll(false);
 }
 function selectedIds() {
@@ -8343,10 +8380,42 @@ async function deleteAllDuplicates() {
 }
 
 /* --- CSV export / upload --- */
-function exportCSV() {
-  const rows = CRM.cache.lastLeads || [];
-  if (!rows.length) return toast('No leads to export', 'warn');
+// LEADS_EXPORT_SELECTION_v1 — export used to dump CRM.cache.lastLeads (the whole
+// CURRENT PAGE) and never looked at the row checkboxes, so a user who ticked a few
+// leads still got everything on the page. Now the export follows the selection:
+//   • "Select all N matching" active → re-fetch every matching lead (all pages)
+//   • some rows ticked              → export exactly those
+//   • nothing ticked                → export the current page (and say so)
+async function exportCSV() {
   const headers = ['id', 'name', 'phone', 'email', 'whatsapp', 'source', 'product_name', 'status_name', 'assigned_name', 'tags', 'city', 'next_followup_at', 'last_status_change_at', 'notes', 'created_at'];
+  const page  = CRM.cache.lastLeads || [];
+  const total = Number(CRM.cache.lastTotal || 0);
+  let rows = [];
+  let msg  = '';
+
+  if (CRM._selectAllMatching) {
+    toast('Fetching all ' + total + ' matching leads…');
+    try {
+      const q = Object.assign({}, CRM.cache.lastLeadQuery || {}, {
+        page: 1, page_size: Math.min(Math.max(total, 1), 5000)
+      });
+      const res = await api('api_leads_list', q);
+      rows = res.leads || [];
+      msg  = 'Exported all ' + rows.length + ' matching lead(s)';
+    } catch (e) { return toast('Export failed: ' + e.message, 'err'); }
+  } else {
+    const ids = selectedIds();
+    if (ids.length) {
+      const set = new Set(ids.map(Number));
+      rows = page.filter(r => set.has(Number(r.id)));
+      msg  = 'Exported ' + rows.length + ' selected lead(s)';
+    } else {
+      rows = page;
+      msg  = 'Exported ' + rows.length + ' lead(s) from this page — tick rows to export just those';
+    }
+  }
+
+  if (!rows.length) return toast('No leads to export', 'warn');
   const csv = [headers.join(',')].concat(rows.map(r => headers.map(k => {
     const v = r[k] == null ? '' : String(r[k]).replace(/"/g, '""');
     return /[",\n]/.test(v) ? `"${v}"` : v;
@@ -8357,6 +8426,7 @@ function exportCSV() {
   a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+  toast(msg, 'ok');
 }
 
 // ─────────────────────────────────────────────────────────────────────
