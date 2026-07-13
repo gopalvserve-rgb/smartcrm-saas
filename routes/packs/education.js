@@ -2984,31 +2984,237 @@ async function api_edu_receipts_list(token, opts) {
   return { items: r.rows };
 }
 
+/* EDU_RECEIPT_REDESIGN_v1 — 2026-07-13
+ * Professional fee receipt: institute letterhead (logo + name + address +
+ * phone + email + GST), student block, enrollment block, payment table,
+ * balance summary, amount in words, authorised-signatory footer.
+ * Falls back gracefully when tenant hasn't set brand fields.               */
+function _amountInWordsINR(n) {
+  n = Math.round(Number(n) || 0);
+  if (n === 0) return 'Zero Rupees Only';
+  const a = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten',
+             'Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen',
+             'Eighteen','Nineteen'];
+  const b = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+  function inWords(num) {
+    if (num < 20) return a[num];
+    if (num < 100) return b[Math.floor(num/10)] + (num%10 ? ' ' + a[num%10] : '');
+    if (num < 1000) return a[Math.floor(num/100)] + ' Hundred' + (num%100 ? ' ' + inWords(num%100) : '');
+    return '';
+  }
+  function toWords(num) {
+    if (num === 0) return '';
+    let out = '';
+    const cr = Math.floor(num / 10000000); num %= 10000000;
+    const lk = Math.floor(num / 100000);   num %= 100000;
+    const th = Math.floor(num / 1000);     num %= 1000;
+    if (cr) out += inWords(cr) + ' Crore ';
+    if (lk) out += inWords(lk) + ' Lakh ';
+    if (th) out += inWords(th) + ' Thousand ';
+    if (num) out += inWords(num);
+    return out.replace(/\s+/g,' ').trim();
+  }
+  return toWords(n) + ' Rupees Only';
+}
+
 async function api_edu_receipts_html(token, id) {
   await authUser(token);
   await _requireEducation();
   await _ensureSchemaV2Fees();
+
   const rc = (await db.query(`SELECT * FROM edu_receipts WHERE id=$1`, [Number(id)])).rows[0];
   if (!rc) throw new Error('Receipt not found');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${rc.receipt_no}</title>
-<style>body{font-family:Inter,system-ui,sans-serif;max-width:700px;margin:20px auto;padding:20px;color:#1c1917}
-.hd{background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;padding:20px;border-radius:10px 10px 0 0}
-.bx{background:#fff;border:1px solid #ddd6fe;border-top:0;border-radius:0 0 10px 10px;padding:20px}
-table{width:100%;border-collapse:collapse;margin:14px 0}
-td{padding:8px;border-bottom:1px solid #eee}
-td:last-child{text-align:right}
-.tot{font-weight:700;font-size:18px;color:#7c3aed}
-.stamp{margin-top:30px;padding:14px;text-align:center;border:2px dashed #16a34a;color:#16a34a;font-weight:700;letter-spacing:2px;border-radius:8px}</style></head>
-<body><div class="hd"><h1 style="margin:0;font-size:22px">OFFICIAL RECEIPT</h1>
-<p style="margin:6px 0 0;opacity:.9">Receipt No: ${rc.receipt_no} &nbsp;·&nbsp; ${new Date(rc.issued_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p></div>
-<div class="bx"><table>
-<tr><td>Student</td><td><b>${_esc(rc.student_name||'—')}</b></td></tr>
-<tr><td>Course</td><td>${_esc(rc.course||'—')}</td></tr>
-<tr><td>Payment Mode</td><td>${_esc(rc.mode||'cash').toUpperCase()}</td></tr>
-${rc.reference ? `<tr><td>Reference</td><td>${_esc(rc.reference)}</td></tr>` : ''}
-<tr><td>Amount</td><td class="tot">₹${Number(rc.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}</td></tr>
-${rc.notes ? `<tr><td>Note</td><td>${_esc(rc.notes)}</td></tr>` : ''}
-</table><div class="stamp">✓ RECEIVED WITH THANKS</div></div></body></html>`;
+
+  /* Enrich — pull lead (phone/email/parent), enrollment (course/batch/total),
+   * installment totals + issuer name. Every join is LEFT so missing rows on
+   * legacy installs do NOT break the receipt. */
+  let lead = {}, enrol = {}, totals = {}, issuer = '';
+  try {
+    if (rc.lead_id) {
+      const lr = await db.query(`SELECT id, name, phone, email, address, city, state, notes FROM leads WHERE id=$1`, [rc.lead_id]);
+      lead = lr.rows[0] || {};
+    }
+  } catch(_) {}
+  try {
+    if (rc.enrollment_id) {
+      const er = await db.query(`SELECT id, course_name, batch_name, total_amount, start_date, branch_id FROM edu_enrollments WHERE id=$1`, [rc.enrollment_id]);
+      enrol = er.rows[0] || {};
+      const tr = await db.query(`
+        SELECT COALESCE(SUM(amount),0) AS billed,
+               COALESCE(SUM(paid_amount),0) AS collected,
+               COALESCE(SUM(amount - paid_amount),0) AS balance,
+               COUNT(*) AS installments_total,
+               COUNT(*) FILTER (WHERE status='paid') AS installments_paid
+          FROM edu_installments WHERE enrollment_id=$1`, [rc.enrollment_id]);
+      totals = tr.rows[0] || {};
+    }
+  } catch(_) {}
+  try {
+    if (rc.issued_by) {
+      const ur = await db.query(`SELECT name FROM users WHERE id=$1`, [rc.issued_by]);
+      issuer = (ur.rows[0] && ur.rows[0].name) || '';
+    }
+  } catch(_) {}
+
+  /* Institute brand — pull config keys directly (edu.js has no admin.js dep). */
+  const inst = { name:'Lead CRM', logo:'', address:'', phone:'', email:'', gst:'' };
+  try {
+    const [name, logo, addr, phone, email, gst] = await Promise.all([
+      db.getConfig('COMPANY_NAME','').catch(()=> ''),
+      db.getConfig('COMPANY_LOGO_URL','').catch(()=> ''),
+      db.getConfig('COMPANY_ADDRESS','').catch(()=> ''),
+      db.getConfig('COMPANY_PHONE','').catch(()=> ''),
+      db.getConfig('COMPANY_EMAIL','').catch(()=> ''),
+      db.getConfig('COMPANY_GST','').catch(()=> '')
+    ]);
+    inst.name    = name  || 'Lead CRM';
+    inst.logo    = logo  || '';
+    inst.address = addr  || '';
+    inst.phone   = phone || '';
+    inst.email   = email || '';
+    inst.gst     = gst   || '';
+  } catch (_) {}
+
+  const dt = new Date(rc.issued_at || Date.now());
+  const dtFmt = dt.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
+              + '  ' + dt.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' });
+  const amt = Number(rc.amount) || 0;
+  const balance = Math.max(0, Number(totals.balance || 0));
+  const collected = Number(totals.collected || 0);
+  const billed = Number(totals.billed || enrol.total_amount || 0);
+  const amtWords = _amountInWordsINR(amt);
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${_esc(rc.receipt_no)}</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:Inter,-apple-system,system-ui,'Segoe UI',sans-serif;max-width:800px;margin:0 auto;padding:0;color:#111827;background:#f3f4f6}
+  .doc{background:#fff;margin:16px auto;box-shadow:0 6px 30px rgba(0,0,0,.08);border-radius:12px;overflow:hidden;position:relative}
+  .doc::before{content:'RECEIPT';position:absolute;top:52%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);font-size:130px;font-weight:900;color:rgba(124,58,237,.05);letter-spacing:20px;pointer-events:none;z-index:0}
+  .head{display:flex;align-items:center;justify-content:space-between;padding:22px 28px;border-bottom:4px solid #7c3aed;position:relative;z-index:1}
+  .head-l{display:flex;align-items:center;gap:14px}
+  .logo{width:70px;height:70px;object-fit:contain;border-radius:8px}
+  .logo-fb{width:70px;height:70px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800}
+  .inst-name{font-size:22px;font-weight:800;color:#111;line-height:1.15;margin:0}
+  .inst-meta{font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5}
+  .head-r{text-align:right}
+  .rc-title{display:inline-block;padding:5px 14px;background:#7c3aed;color:#fff;font-size:11px;font-weight:800;letter-spacing:2px;border-radius:4px}
+  .rc-no{font-size:15px;font-weight:800;margin-top:8px}
+  .rc-date{font-size:11px;color:#6b7280;margin-top:2px}
+  .body{padding:24px 28px;position:relative;z-index:1}
+  .row{display:flex;gap:20px;margin-bottom:18px}
+  .card{flex:1;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;background:#fafafa}
+  .lbl{font-size:10px;color:#6b7280;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
+  .val{font-size:14px;color:#111;font-weight:600}
+  .val-sm{font-size:12px;color:#374151;margin-top:3px}
+  .sec-h{font-size:11px;color:#7c3aed;font-weight:800;letter-spacing:2px;text-transform:uppercase;border-bottom:1px solid #ede9fe;padding-bottom:6px;margin:16px 0 10px}
+  table{width:100%;border-collapse:collapse}
+  th{background:#f9fafb;text-align:left;padding:10px 12px;font-size:11px;color:#374151;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #e5e7eb}
+  td{padding:12px;font-size:14px;color:#111;border-bottom:1px solid #f3f4f6}
+  .right{text-align:right}
+  .amt{font-weight:800;color:#7c3aed;font-size:16px}
+  .grand{background:#faf5ff;border:2px solid #7c3aed;border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+  .grand-lbl{font-size:12px;font-weight:700;color:#6b21a8;text-transform:uppercase;letter-spacing:1px}
+  .grand-val{font-size:26px;font-weight:800;color:#7c3aed}
+  .words{margin-top:10px;padding:10px 14px;background:#fefce8;border-left:3px solid #eab308;border-radius:4px;font-size:12px;color:#713f12}
+  .words b{font-weight:700}
+  .sum{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px}
+  .sum:last-child{border-bottom:0;font-weight:700;color:#111}
+  .foot{padding:18px 28px;background:#fafafa;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:flex-end;font-size:11px;color:#6b7280}
+  .sig{text-align:right}
+  .sig-line{border-top:1px solid #9ca3af;width:180px;margin-bottom:4px;padding-top:24px}
+  .stamp{display:inline-block;padding:6px 14px;border:2px dashed #16a34a;color:#16a34a;font-weight:800;letter-spacing:1.5px;border-radius:6px;font-size:11px;margin-bottom:6px}
+  .print-btn{position:fixed;top:20px;right:20px;padding:10px 18px;background:#7c3aed;color:#fff;border:0;border-radius:8px;cursor:pointer;font-weight:700;box-shadow:0 4px 14px rgba(124,58,237,.4)}
+  @media print{.print-btn{display:none}body{background:#fff}.doc{margin:0;box-shadow:none;border-radius:0}}
+</style></head>
+<body>
+<button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
+<div class="doc">
+  <div class="head">
+    <div class="head-l">
+      ${inst.logo ? `<img class="logo" src="${_esc(inst.logo)}" alt="logo" onerror="this.outerHTML='<div class=logo-fb>${_esc((inst.name||'?').charAt(0).toUpperCase())}</div>'">` : `<div class="logo-fb">${_esc((inst.name||'?').charAt(0).toUpperCase())}</div>`}
+      <div>
+        <h1 class="inst-name">${_esc(inst.name)}</h1>
+        <div class="inst-meta">
+          ${inst.address ? _esc(inst.address) + '<br>' : ''}
+          ${inst.phone ? '☎ ' + _esc(inst.phone) : ''}
+          ${inst.phone && inst.email ? ' · ' : ''}
+          ${inst.email ? '✉ ' + _esc(inst.email) : ''}
+          ${inst.gst ? '<br>GSTIN: ' + _esc(inst.gst) : ''}
+        </div>
+      </div>
+    </div>
+    <div class="head-r">
+      <div class="rc-title">FEE RECEIPT</div>
+      <div class="rc-no">No. ${_esc(rc.receipt_no)}</div>
+      <div class="rc-date">${_esc(dtFmt)}</div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="row">
+      <div class="card">
+        <div class="lbl">Student</div>
+        <div class="val">${_esc(rc.student_name || lead.name || '—')}</div>
+        ${lead.phone ? `<div class="val-sm">📞 ${_esc(lead.phone)}</div>` : ''}
+        ${lead.email ? `<div class="val-sm">✉ ${_esc(lead.email)}</div>` : ''}
+        ${lead.city  ? `<div class="val-sm">📍 ${_esc([lead.city, lead.state].filter(Boolean).join(', '))}</div>` : ''}
+      </div>
+      <div class="card">
+        <div class="lbl">Course / Enrollment</div>
+        <div class="val">${_esc(rc.course || enrol.course_name || '—')}</div>
+        ${enrol.batch_name ? `<div class="val-sm">Batch: ${_esc(enrol.batch_name)}</div>` : ''}
+        ${enrol.start_date ? `<div class="val-sm">Started: ${_esc(new Date(enrol.start_date).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}))}</div>` : ''}
+        ${enrol.id ? `<div class="val-sm">Enrol #: ${_esc(String(enrol.id))}</div>` : ''}
+      </div>
+    </div>
+
+    <div class="sec-h">Payment Details</div>
+    <table>
+      <thead><tr>
+        <th>Description</th><th>Payment Mode</th><th>Reference</th><th class="right">Amount</th>
+      </tr></thead>
+      <tbody><tr>
+        <td>Fee payment${enrol.course_name ? ' — ' + _esc(enrol.course_name) : ''}${rc.notes ? '<br><small style="color:#6b7280">'+_esc(rc.notes)+'</small>' : ''}</td>
+        <td>${_esc((rc.mode || 'CASH').toString().toUpperCase())}</td>
+        <td>${_esc(rc.reference || '—')}</td>
+        <td class="right amt">₹${amt.toLocaleString('en-IN',{minimumFractionDigits:2})}</td>
+      </tr></tbody>
+    </table>
+
+    <div class="grand">
+      <div>
+        <div class="grand-lbl">Amount Received</div>
+        <div style="font-size:11px;color:#6b21a8;margin-top:2px">${_esc(amtWords)}</div>
+      </div>
+      <div class="grand-val">₹${amt.toLocaleString('en-IN',{minimumFractionDigits:2})}</div>
+    </div>
+
+    ${(billed || collected || balance) ? `
+    <div class="sec-h">Fee Summary</div>
+    <div>
+      ${billed ? `<div class="sum"><span>Total Course Fee</span><span>₹${Number(billed).toLocaleString('en-IN',{minimumFractionDigits:2})}</span></div>` : ''}
+      ${collected ? `<div class="sum"><span>Paid to Date (incl. this receipt)</span><span>₹${Number(collected).toLocaleString('en-IN',{minimumFractionDigits:2})}</span></div>` : ''}
+      ${totals.installments_total ? `<div class="sum"><span>Installments</span><span>${totals.installments_paid || 0} of ${totals.installments_total} paid</span></div>` : ''}
+      ${balance > 0 ? `<div class="sum" style="color:#dc2626"><span>Balance Due</span><span>₹${balance.toLocaleString('en-IN',{minimumFractionDigits:2})}</span></div>` : (billed ? `<div class="sum" style="color:#16a34a"><span>Balance Due</span><span>Fully Paid ✓</span></div>` : '')}
+    </div>` : ''}
+
+    <div class="words"><b>In words:</b> ${_esc(amtWords)}</div>
+  </div>
+
+  <div class="foot">
+    <div>
+      <div class="stamp">✓ RECEIVED WITH THANKS</div>
+      <div>This is a computer-generated receipt and does not require a physical signature.</div>
+      <div style="margin-top:4px;color:#9ca3af">Received via ${_esc((rc.mode || 'CASH').toString().toUpperCase())}${rc.reference ? ' · Ref: ' + _esc(rc.reference) : ''}</div>
+    </div>
+    <div class="sig">
+      <div class="sig-line"></div>
+      <div style="font-weight:700;color:#111">${_esc(issuer || 'Authorised Signatory')}</div>
+      <div style="color:#9ca3af">For ${_esc(inst.name)}</div>
+    </div>
+  </div>
+</div>
+</body></html>`;
   return { html, receipt_no: rc.receipt_no };
 }
 
