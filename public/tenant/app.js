@@ -31517,8 +31517,23 @@ function openAutomationModal(existing) {
           }
           if (channel === 'whatsapp' && !subject.startsWith('template:')) missing.push('WhatsApp template');
           if (missing.length) { toast('Fill in: ' + missing.join(', '), 'err'); return; }
+          // AUTOMATION_MEDIA_HEADER_v1 — carry the header media URL (required for
+          // templates whose header is IMAGE/VIDEO/DOCUMENT).
+          const _hdrInp = $('#auto-wa-header-url');
+          const headerMediaUrl = _hdrInp ? String(_hdrInp.value || '').trim() : '';
+          if (channel === 'whatsapp' && _hdrInp && !headerMediaUrl) {
+            toast('This template has a media header — paste the header media URL.', 'err');
+            _hdrInp.focus();
+            return;
+          }
+          if (headerMediaUrl && !/^https:\/\//i.test(headerMediaUrl)) {
+            toast('Header media URL must be a public https:// link.', 'err');
+            if (_hdrInp) _hdrInp.focus();
+            return;
+          }
           const payload = { id: a.id, name, event: eventKey, channel,
-            recipient: recipientFinal, condition, subject, template, is_active: 1 };
+            recipient: recipientFinal, condition, subject, template,
+            header_media_url: headerMediaUrl, is_active: 1 };
           try { await api('api_automations_save', payload); toast('Saved'); modal.remove(); showAdminTab('automations'); }
           catch (e) { toast(e.message, 'err'); }
         } }, 'Save')
@@ -31534,6 +31549,9 @@ function openAutomationModal(existing) {
   // modal is in the DOM (so CRM.cache is fully warmed).
   _wireAutomationConditionBuilder(a.condition || '');
   toggleChannelUI(a.channel);
+  // AUTOMATION_MEDIA_HEADER_v1 — stash the saved header media URL so
+  // renderWaVarsForSelected can prefill the field when editing.
+  try { const _f = $('#auto-form'); if (_f) _f.dataset.headerMediaUrl = a.header_media_url || ''; } catch (_) {}
   // Wire template-select change so variable inputs render when the user
   // picks a different template.
   setTimeout(() => {
@@ -31592,11 +31610,25 @@ function renderWaVarsForSelected() {
   const label = opt ? opt.textContent : '';
   const m = label.match(/(\d+)\s*params/);
   const paramCount = m ? Number(m[1]) : 0;
+  // AUTOMATION_MEDIA_HEADER_v1 — templates with an IMAGE/VIDEO/DOCUMENT header
+  // need the media attached in a header component; ask for its public URL.
+  const _prevUrl = ($('#auto-wa-header-url') || {}).value || (($('#auto-form') || {}).dataset || {}).headerMediaUrl || '';
+  const _hdr = String((opt && opt.getAttribute('data-header')) || '').toUpperCase();
   cont.innerHTML = '';
   if (!sel.value) {
     cont.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } },
       'Pick a template first.'));
     return;
+  }
+  if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(_hdr)) {
+    const kind = _hdr.toLowerCase();
+    cont.appendChild(h('div', { style: { marginBottom: '.6rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '.55rem .7rem' } },
+      h('label', { style: { fontSize: '.78rem', fontWeight: 700, color: '#1e3a8a', display: 'block' } },
+        '🖼 Header ' + kind + ' URL *'),
+      h('div', { class: 'muted', style: { fontSize: '.74rem', margin: '2px 0 .35rem' } },
+        'This template has a ' + _hdr + ' header, so Meta requires the media. Paste a public https:// link to the ' + kind + ' — it is sent with every message from this automation.'),
+      h('input', { id: 'auto-wa-header-url', type: 'url', value: _prevUrl,
+        placeholder: 'https://example.com/banner.jpg', style: { width: '100%' } })));
   }
   if (paramCount === 0) {
     cont.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } },
@@ -31640,7 +31672,7 @@ async function loadWATemplates() {
     }
     templates.forEach(t => {
       const label = `${t.name} (${t.language}${t.body_params ? ', ' + t.body_params + ' params' : ''}) — ${t.status}`;
-      sel.appendChild(h('option', { value: t.name, 'data-lang': t.language }, label));
+      sel.appendChild(h('option', { value: t.name, 'data-lang': t.language, 'data-header': t.header_type || '' }, label));
     });
     if (current) sel.value = current;
   } catch (e) {

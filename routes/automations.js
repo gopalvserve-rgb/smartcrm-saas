@@ -30,8 +30,10 @@ async function api_automations_save(token, payload) {
     recipient: a.recipient || 'lead',
     subject: a.subject || '',
     template: a.template || '',
+    header_media_url: a.header_media_url || '',   // AUTOMATION_MEDIA_HEADER_v1
     is_active: a.is_active == null ? 1 : (a.is_active ? 1 : 0)
   };
+  try { await db.query(`ALTER TABLE automations ADD COLUMN IF NOT EXISTS header_media_url TEXT`); } catch (_) {}
   if (a.id) { await db.update('automations', a.id, row); return { id: Number(a.id) }; }
   row.created_at = db.nowIso();
   const id = await db.insert('automations', row);

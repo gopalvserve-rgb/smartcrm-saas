@@ -1644,6 +1644,9 @@ CREATE INDEX IF NOT EXISTS idx_inv_audit_created ON inv_audit_log(created_at DES
 -- automations. Stores the most recently picked user id per rule so the
 -- next fire advances to the next position in the recipient pool.
 ALTER TABLE automations ADD COLUMN IF NOT EXISTS last_picked_user_id INTEGER;
+-- AUTOMATION_MEDIA_HEADER_v1 — header image/video/document URL for WA templates
+-- whose HEADER is IMAGE/VIDEO/DOCUMENT (Meta requires the media in a header component).
+ALTER TABLE automations ADD COLUMN IF NOT EXISTS header_media_url TEXT;
 
 -- ════════════════════════════════════════════════════════════════════
 -- PAYMENTS_v1 (2026-06-23) — Cashfree + Razorpay payment links

@@ -407,10 +407,28 @@ async function _sendWhatsApp(to, body, ctx, automation) {
           parameters: [{ type: 'text', text: bodyParams[0] || FALLBACK }]
         });
       } else if (headerType && headerType !== 'TEXT') {
-        return {
-          ok: false,
-          error: `Template "${name}" has a ${headerType} header — automations don't support media headers yet. Use a template with a TEXT or no header.`
-        };
+        // AUTOMATION_MEDIA_HEADER_v1 — Meta REQUIRES a header component carrying
+        // the media for IMAGE/VIDEO/DOCUMENT headers. We now attach it from the
+        // automation's `header_media_url` instead of refusing to send.
+        const mediaUrl = String((automation && automation.header_media_url) || '').trim();
+        if (!mediaUrl) {
+          return {
+            ok: false,
+            error: `Template "${name}" has a ${headerType} header. Open this automation and set the "Header ${String(headerType).toLowerCase()} URL" so we can attach the media Meta requires.`
+          };
+        }
+        if (!/^https:\/\//i.test(mediaUrl)) {
+          return {
+            ok: false,
+            error: `Header media URL must be a public https:// link (Meta cannot fetch "${mediaUrl}").`
+          };
+        }
+        const kind = String(headerType).toLowerCase();   // image | video | document
+        const media = { link: mediaUrl };
+        if (kind === 'document') {
+          media.filename = (mediaUrl.split('/').pop() || 'document.pdf').split('?')[0];
+        }
+        components.push({ type: 'header', parameters: [{ type: kind, [kind]: media }] });
       }
       if (bodyParams.length > 0) {
         components.push({
