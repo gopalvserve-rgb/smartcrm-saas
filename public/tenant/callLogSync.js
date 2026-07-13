@@ -41,6 +41,21 @@
   function hasNative() {
     return !!(window.LeadCRMNative && typeof window.LeadCRMNative.syncCallLog === 'function');
   }
+  /* STALE_APK_MSG_v1 (2026-07-13) — inside the app shell but with no LeadCRMNative
+   * bridge means exactly one thing: the installed APK is older than the build that
+   * added syncCallLog. Both the dialog banner and runSync() used to tell the rep to
+   * "open the app on the phone and tap Sync Calls" — which they were ALREADY DOING,
+   * standing inside the app, reading that message. It's advice for desktop web shown
+   * to a phone. Distinguish the two cases and tell a stale build to UPDATE. */
+  function inAppShell() {
+    try {
+      if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+      if (window.Capacitor) return true;
+      if (/Capacitor|CapacitorWebView/i.test(navigator.userAgent || '')) return true;
+    } catch (e) {}
+    return false;
+  }
+  function staleApk() { return inAppShell() && !hasNative(); }
   async function api(fn, arg) {
     var res = await fetch(apiBase(), {
       method: 'POST',
@@ -87,7 +102,9 @@
     var silent = !!opts.silent;
     var say = function (m, t) { if (!silent) toast(m, t); else { try { console.log('[callsync]', m); } catch (e) {} } };
     if (!hasNative()) {
-      say('Call sync runs in the mobile app. Open the app and tap Sync Calls.', 'warn');
+      say(staleApk()
+        ? 'Your app is out of date and cannot read the call log. Please update the app.'
+        : 'Call sync runs in the mobile app. Open the app and tap Sync Calls.', 'warn');
       if (opts.done) opts.done(null);
       return;
     }
@@ -271,7 +288,15 @@
     // SIM box (Model A)
     var simBox = card.querySelector('#cls-sim-box');
     var sims = getSims();
-    if (!hasNative()) {
+    if (staleApk()) {
+      // Out-of-date APK: the rep IS in the app. Telling them to "open the app" is useless.
+      simBox.innerHTML =
+        '<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:.7rem .8rem;font-size:.82rem;line-height:1.5">' +
+          '⚠️ <b>Your app is out of date.</b><br>This version can\'t read your phone\'s call log, so your calls are not reaching the CRM. ' +
+          'Update the app, allow the <b>Call log</b> permission, and your recent calls will sync in automatically.' +
+          '<a href="/LeadCRM.apk" download style="display:block;margin-top:.6rem;background:#dc2626;color:#fff;text-align:center;padding:.5rem;border-radius:7px;text-decoration:none;font-weight:700">⬇ Update the app now</a>' +
+        '</div>';
+    } else if (!hasNative()) {
       simBox.innerHTML = '<div style="background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:.6rem .7rem;font-size:.82rem">📱 Call sync works in the <b>mobile app</b>. Open the app on the rep\'s phone and tap <b>Sync Calls</b> there.</div>';
     } else if (!sims.length) {
       simBox.innerHTML = '<div style="font-size:.82rem;color:#64748b">No SIM info available (grant Phone permission). All calls will be synced.</div>';
@@ -297,6 +322,14 @@
 
     // presets
     var presets = card.querySelector('#cls-presets');
+    /* STALE_APK_MSG_v1 — on a stale build every preset is a no-op (runSync bails at the
+     * native guard). Offering "Today / Yesterday / Last 7 days" that silently do nothing
+     * is exactly what made this look like a broken button rather than an old app. */
+    if (staleApk()) {
+      presets.style.display = 'none';
+      var per = card.querySelector('#cls-presets') && card.querySelector('#cls-presets').previousElementSibling;
+      if (per) per.style.display = 'none';
+    }
     Object.keys(R).forEach(function (k) {
       var b = document.createElement('button');
       b.className = 'btn sm';
