@@ -652,19 +652,28 @@
     lab.className = 'muted'; lab.textContent = 'SIM';
     box.appendChild(lab);
 
-    // SIM_ONLY_DEFAULT_v1 (2026-07-12) — Call Activity now DEFAULTS to showing only
-    // calls that carry a SIM.
+    // SIM_ONLY_DEFAULT_v2 (2026-07-13) — the SIM-only default is now OFF. Read this
+    // before you ever turn it back on.
     //
-    // Why a SIM is the right test: measured on live data, 349/349 rows that came from
-    // the phone's call log have a SIM, and 0/151 rows written by the live receiver do.
-    // So "has a SIM" is an exact proxy for "this really happened on the phone" — the
-    // live receiver's rows are the ones with the wrong timestamps (a Doze-delayed
-    // RINGING broadcast produced a phantom "Missed" call 24 minutes after a call that
-    // was actually answered), no number, and unreliable direction.
+    // v1 defaulted this view to "On SIM", on measured evidence that 349/349 call-log
+    // rows carried a SIM and 0/151 live-receiver rows did — so "has a SIM" looked like
+    // an exact proxy for "a real call from the phone".
     //
-    // This is a VIEW FILTER ONLY. Nothing is deleted, nothing is hidden server-side by
-    // this code, and "All" brings everything straight back — so it can be watched for a
-    // day and reverted instantly if it hides anything it shouldn't.
+    // THAT PREMISE IS FALSE. The SIM slot is read from CallLog.PHONE_ACCOUNT_ID, which
+    // needs the PHONE permission (READ_PHONE_STATE) — separate from the CALL LOG
+    // permission. Grant Call Log but not Phone, and you get perfectly real call-log rows
+    // with sim = null. Neetu (vserve, 2026-07-13) did exactly that: 14 genuine calls,
+    // correct numbers, matched to leads — every one of them hidden by this filter. The
+    // KPI count (server-side) said 14 while the table (client-filtered) showed nothing.
+    // "Count showing, data not showing" is the signature of this bug.
+    //
+    // It is also REDUNDANT: reports.js already restricts Call Activity to
+    // src IN ('calllog','calllog-fix') (CALLLOG_ONLY_v1), so live-receiver rows cannot
+    // reach this table at all. The filter it was written to apply is applied upstream.
+    //
+    // The chips stay for manual SIM 1 / SIM 2 filtering. The DEFAULT is now All.
+    // The storage key is bumped so reps who already have 'sim' saved are reset — a
+    // default change alone would not have reached them.
     var MODES = [
       ['sim',  'On SIM'],     // any SIM  -> the real calls
       ['',     'All']         // everything, incl. rows with no SIM
@@ -686,14 +695,14 @@
         if (ok) shown++; else hidden++;
       });
       hint.textContent = (mode === 'sim' && hidden)
-        ? '(' + hidden + ' hidden — no SIM, not from the phone\'s call log)'
+        ? '(' + hidden + ' hidden — no SIM recorded. Grant the Phone permission on the rep\'s handset to capture SIM.)'
         : '';
-      try { localStorage.setItem('ca_sim_mode', mode); } catch (e) {}
+      try { localStorage.setItem('ca_sim_mode_v2', mode); } catch (e) {}
     }
 
-    var saved = 'sim';
-    try { var v = localStorage.getItem('ca_sim_mode'); if (v !== null) saved = v; } catch (e) {}
-    if (!MODES.some(function (m) { return m[0] === saved; })) saved = 'sim';
+    var saved = '';   // SIM_ONLY_DEFAULT_v2 — default is All
+    try { var v = localStorage.getItem('ca_sim_mode_v2'); if (v !== null) saved = v; } catch (e) {}
+    if (!MODES.some(function (m) { return m[0] === saved; })) saved = '';
 
     var btns = [];
     MODES.forEach(function (o) {
