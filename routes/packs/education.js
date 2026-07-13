@@ -2968,20 +2968,61 @@ async function api_edu_receipts_list(token, opts) {
   const o = opts || {};
   const args = [];
   const w = [];
-  if (o.enrollment_id) { args.push(Number(o.enrollment_id)); w.push(`enrollment_id = $${args.length}`); }
-  if (o.lead_id)       { args.push(Number(o.lead_id));       w.push(`lead_id = $${args.length}`); }
-  if (o.from) { args.push(o.from); w.push(`issued_at >= $${args.length}::date`); }
-  if (o.to)   { args.push(o.to);   w.push(`issued_at < ($${args.length}::date + INTERVAL '1 day')`); }
-  /* FEE_DUES_RECEIPT_AUTO_v1 — include installment_id via edu_payments JOIN
-   * so the SPA can index receipts by installment_id (needed by the Fee Dues
-   * 🧾 Receipt modal). */
+  if (o.enrollment_id) { args.push(Number(o.enrollment_id)); w.push(`r.enrollment_id = $${args.length}`); }
+  if (o.lead_id)       { args.push(Number(o.lead_id));       w.push(`r.lead_id = $${args.length}`); }
+  if (o.from) { args.push(o.from); w.push(`r.issued_at >= $${args.length}::date`); }
+  if (o.to)   { args.push(o.to);   w.push(`r.issued_at < ($${args.length}::date + INTERVAL '1 day')`); }
+  /* EDU_RECEIPTS_UX_v1 — search + mode filter + pagination */
+  if (o.q) {
+    args.push('%' + String(o.q).toLowerCase() + '%');
+    w.push(`(LOWER(COALESCE(r.receipt_no,'')) LIKE $${args.length} OR LOWER(COALESCE(r.student_name,'')) LIKE $${args.length} OR LOWER(COALESCE(r.course,'')) LIKE $${args.length} OR LOWER(COALESCE(r.reference,'')) LIKE $${args.length})`);
+  }
+  if (o.mode) { args.push(String(o.mode).toLowerCase()); w.push(`LOWER(r.mode) = $${args.length}`); }
+  const whereSql = w.length ? 'WHERE ' + w.join(' AND ') : '';
+
+  // total count for pagination
+  const cSql = `SELECT COUNT(*)::int AS n FROM edu_receipts r ${whereSql}`;
+  const cRes = await db.query(cSql, args);
+  const total = (cRes.rows[0] && cRes.rows[0].n) || 0;
+
+  const pageSize = Math.max(1, Math.min(Number(o.page_size || o.limit || 25), 200));
+  const page = Math.max(1, Number(o.page || 1));
+  const offset = (page - 1) * pageSize;
   const sql = `SELECT r.*, p.installment_id
                  FROM edu_receipts r
                  LEFT JOIN edu_payments p ON p.id = r.payment_id
-                 ${w.length ? 'WHERE ' + w.map(x => x.replace(/^([a-z_]+) =/, 'r.$1 =').replace(/^issued_at/, 'r.issued_at')).join(' AND ') : ''}
-                 ORDER BY r.id DESC LIMIT ${Math.min(Number(o.limit||500),2000)}`;
+                 ${whereSql}
+                 ORDER BY r.id DESC
+                 LIMIT ${pageSize} OFFSET ${offset}`;
   const r = await db.query(sql, args);
-  return { items: r.rows };
+  return { items: r.rows, total, page, page_size: pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+/* EDU_RECEIPTS_UX_v1 — edit an existing receipt (admin/manager only).
+ * Editable: student_name, course, amount, mode, reference, notes, issued_at. */
+async function api_edu_receipts_update(token, id, patch) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const rid = Number(id);
+  if (!rid) throw new Error('Receipt id required');
+  const p = patch || {};
+  const sets = [];
+  const args = [];
+  const set = (k, v) => { args.push(v); sets.push(`${k} = $${args.length}`); };
+  if ('student_name' in p) set('student_name', String(p.student_name || ''));
+  if ('course'       in p) set('course',       String(p.course || ''));
+  if ('amount'       in p) set('amount',       Number(p.amount) || 0);
+  if ('mode'         in p) set('mode',         String(p.mode || 'cash'));
+  if ('reference'    in p) set('reference',    String(p.reference || ''));
+  if ('notes'        in p) set('notes',        String(p.notes || ''));
+  if ('issued_at'    in p && p.issued_at)      set('issued_at',    p.issued_at);
+  if (!sets.length) return { ok: true, updated: 0 };
+  args.push(rid);
+  await db.query(`UPDATE edu_receipts SET ${sets.join(', ')} WHERE id = $${args.length}`, args);
+  const row = (await db.query('SELECT * FROM edu_receipts WHERE id=$1', [rid])).rows[0];
+  return { ok: true, updated: 1, item: row };
 }
 
 /* EDU_RECEIPT_REDESIGN_v1 — 2026-07-13
@@ -3575,7 +3616,7 @@ module.exports = {
   api_edu_penalties_apply, api_edu_penalties_waive,
   api_edu_reminders_scheduleForInstallment,
   api_edu_reminders_dueList, api_edu_reminders_markSent, api_edu_reminders_skip,
-  api_edu_receipts_generate, api_edu_receipts_list, api_edu_receipts_html,
+  api_edu_receipts_generate, api_edu_receipts_list, api_edu_receipts_html, api_edu_receipts_update,
   api_edu_dunning_summary,
   /* EDU_PACK_v2 Commit 3 — Reports + AI + Demo Seed */
   api_edu_reports_admissionFunnel, api_edu_reports_batchFillRate,

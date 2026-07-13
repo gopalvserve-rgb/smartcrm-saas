@@ -685,25 +685,88 @@
     body.innerHTML = html;
   }
 
+  function _rcpField(label, id, val, type){
+    type = type || 'text';
+    return '<div style="margin-bottom:12px"><label style="display:block;font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px">'+esc(label)+'</label>'
+         + '<input id="'+id+'" type="'+type+'" value="'+esc(String(val==null?'':val))+'" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px"></div>';
+  }
+
+  /* EDU_RECEIPTS_UX_v1 — filters + pagination + Edit button */
+  var _RCP = { q:'', mode:'', from:'', to:'', page:1, pageSize:25 };
   async function _feesReceipts(body) {
-    var d = await _api('api_edu_receipts_list', { limit: 200 });
-    var html = '<div class="card"><h2>Recent receipts <span class="pill info">'+(d.items||[]).length+'</span></h2>';
-    if (!d.items || !d.items.length) html += '<div class="empty">No receipts yet — generate one from Fees → Enrollment → Mark paid.</div>';
+    var d;
+    try {
+      d = await _api('api_edu_receipts_list', {
+        q: _RCP.q, mode: _RCP.mode, from: _RCP.from, to: _RCP.to,
+        page: _RCP.page, page_size: _RCP.pageSize
+      });
+    } catch (e) {
+      body.innerHTML = '<div class="card"><div class="empty" style="color:#dc2626">'+esc(e.message)+'</div></div>';
+      return;
+    }
+    var items = d.items || [];
+    var total = Number(d.total || items.length);
+    var pages = Number(d.pages || 1);
+    var page  = Number(d.page  || 1);
+
+    var html = '<div class="card">';
+    html += '<h2 style="margin:0 0 12px">Recent receipts <span class="pill info">'+total+'</span></h2>';
+
+    /* Filter bar */
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px">';
+    html += '<input id="rcp-q" placeholder="🔍 Search receipt#, student, course, ref"'
+         +  ' value="'+esc(_RCP.q)+'" style="flex:1;min-width:220px;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">';
+    html += '<select id="rcp-mode" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">'
+         +  '<option value="">All modes</option>'
+         +  ['cash','upi','card','bank','cheque','online','other'].map(function(m){
+              return '<option value="'+m+'"'+(_RCP.mode===m?' selected':'')+'>'+m.toUpperCase()+'</option>';
+            }).join('')
+         +  '</select>';
+    html += '<input id="rcp-from" type="date" value="'+esc(_RCP.from)+'" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">';
+    html += '<input id="rcp-to"   type="date" value="'+esc(_RCP.to)+'"   style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">';
+    html += '<select id="rcp-ps" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">'
+         +  [10,25,50,100].map(function(n){return '<option value="'+n+'"'+(_RCP.pageSize===n?' selected':'')+'>'+n+' / page</option>';}).join('')
+         +  '</select>';
+    html += '<button class="btn primary sm" onclick="EDU_V2._rcpApply()">Apply</button>';
+    html += '<button class="btn ghost sm" onclick="EDU_V2._rcpClear()">Clear</button>';
+    html += '</div>';
+
+    if (!items.length) html += '<div class="empty">No receipts match those filters.</div>';
     else {
-      html += '<table class="tbl"><thead><tr><th>Receipt #</th><th>Date</th><th>Student</th><th>Course</th><th>Mode</th><th>Amount</th><th></th></tr></thead><tbody>';
-      d.items.forEach(function(r) {
-        html += '<tr><td><b>'+esc(r.receipt_no)+'</b></td>' +
-          '<td>'+fmtDate(r.issued_at)+'</td>' +
-          '<td>'+esc(r.student_name||'—')+'</td>' +
-          '<td>'+esc(r.course||'—')+'</td>' +
-          '<td><span class="pill purple">'+esc(String(r.mode||'').toUpperCase())+'</span></td>' +
-          '<td><b>'+fmtMoney(r.amount)+'</b></td>' +
-          '<td><button class="btn sm ghost" onclick="EDU_V2._receiptPreview('+r.id+')">Preview</button></td></tr>';
+      html += '<table class="tbl"><thead><tr><th>Receipt #</th><th>Date</th><th>Student</th><th>Course</th><th>Mode</th><th>Amount</th><th style="width:180px">Actions</th></tr></thead><tbody>';
+      items.forEach(function(r) {
+        html += '<tr>'
+          + '<td><b>'+esc(r.receipt_no)+'</b></td>'
+          + '<td>'+fmtDate(r.issued_at)+'</td>'
+          + '<td>'+esc(r.student_name||'—')+'</td>'
+          + '<td>'+esc(r.course||'—')+'</td>'
+          + '<td><span class="pill purple">'+esc(String(r.mode||'').toUpperCase())+'</span></td>'
+          + '<td><b>'+fmtMoney(r.amount)+'</b></td>'
+          + '<td>'
+          +   '<button class="btn sm ghost" onclick="EDU_V2._receiptPreview('+r.id+')">👁 View</button> '
+          +   '<button class="btn sm ghost" onclick="EDU_V2._receiptEdit('+r.id+')">✏ Edit</button>'
+          + '</td></tr>';
       });
       html += '</tbody></table>';
     }
+
+    /* Pagination footer */
+    if (pages > 1) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:10px;border-top:1px solid #e5e7eb">';
+      html += '<span style="font-size:12px;color:#6b7280">Page <b>'+page+'</b> of <b>'+pages+'</b> · '+items.length+' of '+total+' shown</span>';
+      html += '<div style="display:flex;gap:6px">';
+      html += '<button class="btn sm ghost" '+(page<=1?'disabled':'')+' onclick="EDU_V2._rcpGoto(1)">« First</button>';
+      html += '<button class="btn sm ghost" '+(page<=1?'disabled':'')+' onclick="EDU_V2._rcpGoto('+(page-1)+')">‹ Prev</button>';
+      html += '<button class="btn sm ghost" '+(page>=pages?'disabled':'')+' onclick="EDU_V2._rcpGoto('+(page+1)+')">Next ›</button>';
+      html += '<button class="btn sm ghost" '+(page>=pages?'disabled':'')+' onclick="EDU_V2._rcpGoto('+pages+')">Last »</button>';
+      html += '</div></div>';
+    }
     html += '</div>';
     body.innerHTML = html;
+
+    /* Bind Enter key on search */
+    var qInp = document.getElementById('rcp-q');
+    if (qInp) qInp.onkeydown = function(ev){ if (ev.key === 'Enter') { EDU_V2._rcpApply(); } };
   }
 
   async function _feesCategories(body) {
@@ -852,6 +915,73 @@
     _receiptPreview: async function(id){ try{ var d = await _api('api_edu_receipts_html', id); var w = window.open('','_blank','width=760,height=900'); w.document.write(d.html); w.document.close(); }catch(e){ toast('Failed: '+e.message,'err'); } },
     _catAdd: async function(){ var name = prompt('Category name'); if(!name) return; try{ await _api('api_edu_feeCats_save', {name:name, is_active:1, sort_order:9}); toast('Added'); _renderFeesTab('cats'); }catch(e){ toast('Failed: '+e.message,'err'); } },
     _catDel: async function(id){ if(!confirm('Delete this category?')) return; try{ await _api('api_edu_feeCats_delete', id); toast('Deleted'); _renderFeesTab('cats'); }catch(e){ toast('Failed: '+e.message,'err'); } },
+    /* EDU_RECEIPTS_UX_v1 handlers */
+    _rcpApply: function(){
+      _RCP.q       = (document.getElementById('rcp-q')||{}).value || '';
+      _RCP.mode    = (document.getElementById('rcp-mode')||{}).value || '';
+      _RCP.from    = (document.getElementById('rcp-from')||{}).value || '';
+      _RCP.to      = (document.getElementById('rcp-to')||{}).value || '';
+      _RCP.pageSize= Number((document.getElementById('rcp-ps')||{}).value || 25);
+      _RCP.page    = 1;
+      _renderFeesTab('receipts');
+    },
+    _rcpClear: function(){ _RCP.q=''; _RCP.mode=''; _RCP.from=''; _RCP.to=''; _RCP.page=1; _renderFeesTab('receipts'); },
+    _rcpGoto: function(p){ _RCP.page = Math.max(1, Number(p)||1); _renderFeesTab('receipts'); },
+    _receiptEdit: async function(id){
+      try {
+        /* Load current values */
+        var d = await _api('api_edu_receipts_list', { page:1, page_size:200 });
+        var rc = (d.items||[]).find(function(x){ return Number(x.id) === Number(id); });
+        if (!rc) { toast('Receipt not found','err'); return; }
+        /* Build editor modal */
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;';
+        wrap.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:520px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
+          + '<div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center">'
+          +   '<h3 style="margin:0;color:#111">✏ Edit Receipt <span style="color:#7c3aed">'+esc(rc.receipt_no)+'</span></h3>'
+          +   '<button id="rcp-x" class="btn sm ghost" style="font-size:20px">×</button>'
+          + '</div>'
+          + '<div style="padding:20px" id="rcp-body">'
+          +   _rcpField('Student Name', 'rcp-e-student', rc.student_name || '')
+          +   _rcpField('Course', 'rcp-e-course', rc.course || '')
+          +   _rcpField('Amount (₹)', 'rcp-e-amount', rc.amount || 0, 'number')
+          +   '<div style="margin-bottom:12px"><label style="display:block;font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px">Payment Mode</label>'
+          +     '<select id="rcp-e-mode" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px">'
+          +       ['cash','upi','card','bank','cheque','online','other'].map(function(m){ return '<option value="'+m+'"'+(String(rc.mode||'').toLowerCase()===m?' selected':'')+'>'+m.toUpperCase()+'</option>'; }).join('')
+          +     '</select></div>'
+          +   _rcpField('Reference / Txn #', 'rcp-e-ref', rc.reference || '')
+          +   '<div style="margin-bottom:12px"><label style="display:block;font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px">Note</label>'
+          +     '<textarea id="rcp-e-notes" rows="3" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-family:inherit">'+esc(rc.notes || '')+'</textarea></div>'
+          +   _rcpField('Issued at', 'rcp-e-issued', (rc.issued_at || '').slice(0,16).replace(' ', 'T'), 'datetime-local')
+          + '</div>'
+          + '<div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px">'
+          +   '<button id="rcp-cancel" class="btn ghost">Cancel</button>'
+          +   '<button id="rcp-save" class="btn primary">Save changes</button>'
+          + '</div></div>';
+        document.body.appendChild(wrap);
+        var close = function(){ try { document.body.removeChild(wrap); } catch(_) {} };
+        wrap.querySelector('#rcp-x').onclick = close;
+        wrap.querySelector('#rcp-cancel').onclick = close;
+        wrap.onclick = function(ev){ if (ev.target === wrap) close(); };
+        wrap.querySelector('#rcp-save').onclick = async function(){
+          try {
+            var patch = {
+              student_name: document.getElementById('rcp-e-student').value,
+              course:       document.getElementById('rcp-e-course').value,
+              amount:       Number(document.getElementById('rcp-e-amount').value) || 0,
+              mode:         document.getElementById('rcp-e-mode').value,
+              reference:    document.getElementById('rcp-e-ref').value,
+              notes:        document.getElementById('rcp-e-notes').value,
+              issued_at:    document.getElementById('rcp-e-issued').value
+            };
+            await _api('api_edu_receipts_update', id, patch);
+            toast('Saved');
+            close();
+            _renderFeesTab('receipts');
+          } catch (e) { toast('Failed: '+e.message, 'err'); }
+        };
+      } catch(e) { toast('Failed: '+e.message, 'err'); }
+    },
     _api, _tok
   };
   function _ready(fn) {
