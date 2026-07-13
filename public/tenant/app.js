@@ -507,8 +507,18 @@ try { CRM.isApk = _IS_APK; } catch (_) {}
 // metadata and compare to the installed APK's versionCode. If the server has a
 // newer build, render a yellow banner pinned to the top of the page with a
 // Download button that takes the user to the install flow. No-op on web.
+/* APK_UPDATE_POPUP_OFF_v1 (2026-07-13) — Gopal: "we dont want pop up remove that".
+ * The full-screen "🆕 Update Available" modal is OFF. Everything below is left intact
+ * and unreachable, so re-enabling is a one-line delete of the early return.
+ * Reps are still told about a stale build where it actually matters and where they
+ * have asked for it: the Sync Calls dialog shows a red "Your app is out of date"
+ * banner with a download button (STALE_APK_MSG_v1, callLogSync.js) instead of
+ * interrupting everyone on launch. */
+const APK_UPDATE_POPUP_ENABLED = false;
+
 window._apkUpdateCheck = async function _apkUpdateCheck() {
   try {
+    if (!APK_UPDATE_POPUP_ENABLED) return;   // APK_UPDATE_POPUP_OFF_v1
     if (!_IS_APK) return;
     const App = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
     if (!App || !App.getInfo) return;
@@ -591,6 +601,7 @@ try {
 } catch (_) {}
 
 function _renderApkUpdateBanner(installedCode, meta) {
+  if (!APK_UPDATE_POPUP_ENABLED) return;      // APK_UPDATE_POPUP_OFF_v1 — belt and braces
   // APK_AUTO_UPDATE_v2 (2026-05-31): a centered modal popup is the right UX
   // for an app-update prompt - banners get ignored, modals don't. Shows on
   // app boot AND when the app comes back from background. "Later" dismisses
