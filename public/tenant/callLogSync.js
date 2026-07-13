@@ -180,6 +180,25 @@
     // Window: from the last successful sync (minus 15 min of slack) to now.
     var lastOk = lsGetNum('since');
     var since  = lastOk ? (lastOk - 15 * 60 * 1000) : (now - 7 * DAY);
+
+    /* BACKSYNC_HEAL_v1 (2026-07-13) — the watermark could strand calls FOREVER.
+     * A sync that the server accepts but which stores nothing (because a policy
+     * rejected every row — e.g. sync_directions was empty, or "only CRM leads" hid
+     * a number that only became a lead later) still counted as SUCCESS, so
+     * lsSetNum('since', now) advanced the watermark straight past those calls.
+     * They were never stored server-side and would never be offered again: the
+     * gap was unrecoverable without the rep manually running a date-range sync.
+     * Live case: komal, 12 Jul — 100% of her calls were skipped for ~17 hours.
+     *
+     * So the watermark is now an OPTIMISATION, not a promise: always re-offer the
+     * last MIN_LOOKBACK. The server dedups (`if (dup.length) { skipped++; continue; }`),
+     * so re-sent rows cost one cheap query and insert nothing. Any policy change now
+     * back-fills itself on the rep's next app open, with no manual step.
+     * Still CallLog only — number/time/type/duration/SIM. No recordings, cannot hang. */
+    var MIN_LOOKBACK_MS = 3 * DAY;
+    var reScan = now - MIN_LOOKBACK_MS;
+    if (since > reScan) since = reScan;
+
     var floor  = now - 7 * DAY;                    // never look back further
     if (since < floor) since = floor;
 
