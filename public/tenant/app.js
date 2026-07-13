@@ -18370,6 +18370,58 @@ function startEmbeddedSignup(appId, configId, opts) {
 }
 
 // ---------- Templates ----------
+// WA_TEMPLATE_VIEW_v1 (restored) — full template detail (type, variables,
+// header/body/footer, buttons) parsed from Meta's components array.
+// NOTE: this definition was lost in a concurrent merge that kept the "👁 View"
+// button but dropped the function, throwing "_viewWaTemplate is not defined".
+function _viewWaTemplate(t) {
+  const comps = Array.isArray(t.components) ? t.components : [];
+  const byType = (ty) => comps.find(c => String(c.type || '').toUpperCase() === ty) || null;
+  const header = byType('HEADER'); const bodyC = byType('BODY'); const footer = byType('FOOTER'); const btns = byType('BUTTONS');
+  const bodyText = (bodyC && bodyC.text) || t.body_text || '';
+  const vars = (String(bodyText).match(/\{\{\s*\d+\s*\}\}/g) || []);
+  const esc2 = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+  const hi = (x) => esc2(x).replace(/(\{\{\s*\d+\s*\}\})/g, '<span style="background:#fde68a;color:#92400e;border-radius:4px;padding:0 3px;font-weight:700">$1</span>');
+  const row = (k, v) => h('div', { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: '.4rem .8rem', padding: '4px 0', fontSize: '.85rem' } },
+    h('div', { class: 'muted' }, k), h('div', {}, v));
+  const chip = (txt, col) => h('span', { style: { background: col, color: '#fff', borderRadius: '8px', padding: '2px 8px', fontSize: '.72rem', fontWeight: 700 } }, txt);
+
+  const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } },
+    h('div', { class: 'modal', style: { maxWidth: '640px', width: '96%', maxHeight: '88vh', overflow: 'auto' } },
+      h('div', { class: 'modal-head' }, h('h3', {}, '📋 ' + t.name),
+        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
+      h('div', { style: { padding: '.3rem 0' } },
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '.6rem' } },
+          chip(t.status || '—', t.status === 'APPROVED' ? '#10b981' : (t.status === 'PENDING' ? '#f59e0b' : '#ef4444')),
+          chip(t.category || 'UTILITY', '#6366f1'),
+          chip(t.language || 'en_US', '#0ea5e9'),
+          chip('Header: ' + (header ? String(header.format || 'TEXT') : 'none'), '#64748b')),
+        row('Name', h('code', {}, t.name)),
+        row('Variables', vars.length ? (vars.join('  ') + '  (' + vars.length + ')') : h('span', { class: 'muted' }, 'None')),
+        h('div', { style: { borderTop: '1px solid #eef0f5', margin: '.6rem 0' } }),
+        header ? h('div', { style: { marginBottom: '.5rem' } },
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155' } }, '🧱 Header (' + (header.format || 'TEXT') + ')'),
+          h('div', { style: { fontSize: '.86rem', marginTop: '2px' }, innerHTML: header.text ? hi(header.text) : ('<span class="muted">' + (header.format || 'MEDIA') + ' header — the media is supplied when sending</span>') })) : null,
+        h('div', { style: { marginBottom: '.5rem' } },
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155' } }, '💬 Body'),
+          h('div', { style: { fontSize: '.9rem', marginTop: '2px', whiteSpace: 'pre-wrap', background: '#f8fafc', border: '1px solid #eef0f5', borderRadius: '6px', padding: '.5rem .65rem' }, innerHTML: hi(bodyText) })),
+        footer ? h('div', { style: { marginBottom: '.5rem' } },
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155' } }, '🦶 Footer'),
+          h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '2px' } }, footer.text || '')) : null,
+        (btns && Array.isArray(btns.buttons) && btns.buttons.length) ? h('div', {},
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155', marginBottom: '4px' } }, '🔘 Buttons (' + btns.buttons.length + ')'),
+          ...btns.buttons.map(b => h('div', { style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.4rem .6rem', marginBottom: '5px', fontSize: '.84rem' } },
+            h('b', {}, b.text || '(no label)'), ' ',
+            chip(String(b.type || 'QUICK_REPLY').replace(/_/g, ' '), '#475569'),
+            b.url ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '2px', wordBreak: 'break-all' } }, '🔗 ' + b.url) : null,
+            b.phone_number ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '2px' } }, '📞 ' + b.phone_number) : null))) : null
+      ),
+      h('div', { style: { textAlign: 'right', marginTop: '.5rem' } }, h('button', { class: 'btn primary', onclick: () => modal.remove() }, 'Close'))
+    )
+  );
+  document.body.appendChild(modal);
+}
+
 async function wbTemplates() {
   const wrap = h('div', {});
   const list = await api('api_wb_templates_list').catch(() => []);
