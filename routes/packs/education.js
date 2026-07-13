@@ -3089,8 +3089,7 @@ async function api_edu_receipts_html(token, id) {
   *{box-sizing:border-box}
   body{font-family:Inter,-apple-system,system-ui,'Segoe UI',sans-serif;max-width:800px;margin:0 auto;padding:0;color:#111827;background:#f3f4f6}
   .doc{background:#fff;margin:16px auto;box-shadow:0 6px 30px rgba(0,0,0,.08);border-radius:12px;overflow:hidden;position:relative}
-  .doc::before{content:'RECEIPT';position:absolute;top:52%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);font-size:130px;font-weight:900;color:rgba(124,58,237,.05);letter-spacing:20px;pointer-events:none;z-index:0}
-  .head{display:flex;align-items:center;justify-content:space-between;padding:22px 28px;border-bottom:4px solid #7c3aed;position:relative;z-index:1}
+  .head{display:flex;align-items:center;justify-content:space-between;padding:22px 28px;border-bottom:4px solid #7c3aed}
   .head-l{display:flex;align-items:center;gap:14px}
   .logo{width:70px;height:70px;object-fit:contain;border-radius:8px}
   .logo-fb{width:70px;height:70px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800}
@@ -3100,7 +3099,7 @@ async function api_edu_receipts_html(token, id) {
   .rc-title{display:inline-block;padding:5px 14px;background:#7c3aed;color:#fff;font-size:11px;font-weight:800;letter-spacing:2px;border-radius:4px}
   .rc-no{font-size:15px;font-weight:800;margin-top:8px}
   .rc-date{font-size:11px;color:#6b7280;margin-top:2px}
-  .body{padding:24px 28px;position:relative;z-index:1}
+  .body{padding:24px 28px}
   .row{display:flex;gap:20px;margin-bottom:18px}
   .card{flex:1;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;background:#fafafa}
   .lbl{font-size:10px;color:#6b7280;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
@@ -3123,11 +3122,9 @@ async function api_edu_receipts_html(token, id) {
   .sig{text-align:right}
   .sig-line{border-top:1px solid #9ca3af;width:180px;margin-bottom:4px;padding-top:24px}
   .stamp{display:inline-block;padding:6px 14px;border:2px dashed #16a34a;color:#16a34a;font-weight:800;letter-spacing:1.5px;border-radius:6px;font-size:11px;margin-bottom:6px}
-  .print-btn{position:fixed;top:20px;right:20px;padding:10px 18px;background:#7c3aed;color:#fff;border:0;border-radius:8px;cursor:pointer;font-weight:700;box-shadow:0 4px 14px rgba(124,58,237,.4)}
-  @media print{.print-btn{display:none}body{background:#fff}.doc{margin:0;box-shadow:none;border-radius:0}}
+  @media print{body{background:#fff}.doc{margin:0;box-shadow:none;border-radius:0}}
 </style></head>
 <body>
-<button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
 <div class="doc">
   <div class="head">
     <div class="head-l">
