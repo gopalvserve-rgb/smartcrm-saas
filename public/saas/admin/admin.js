@@ -3562,6 +3562,19 @@ function _tkFmt(ts) {
   } catch (_) { return ts; }
 }
 
+// TKT_LAST_REMARK_AUTHOR_v1 — who wrote the latest remark on a ticket.
+// author_type is 'admin' for our super-admin team, anything else (customer/tenant)
+// is the client. Falls back to support_tickets.last_reply_by when the reply row
+// predates author_name.
+function _tkAuthorLabel(t) {
+  const type = String(t.last_reply_author_type || t.last_reply_by || '').toLowerCase();
+  const name = String(t.last_reply_author_name || '').trim();
+  if (type === 'admin' || type === 'super_admin' || type === 'system') {
+    return { text: '🧑‍💼 Team' + (name ? (' · ' + name) : ''), bg: '#e0e7ff', fg: '#3730a3' };
+  }
+  return { text: '🏢 Tenant' + (name ? (' · ' + name) : ''), bg: '#dcfce7', fg: '#166534' };
+}
+
 VIEWS.tickets = async (view) => {
   const cat = await _loadTkCatalog();
   view.appendChild(h('h1', {}, '🎫 Support Tickets'));
@@ -3730,8 +3743,22 @@ VIEWS.tickets = async (view) => {
         h('td', {}, _tkPrioPill(t.priority, cat)),
         h('td', { style: { fontSize: '.85rem', fontWeight: t.assignee_name ? 600 : 400, color: t.assignee_name ? '#0f172a' : '#94a3b8', whiteSpace: 'nowrap' } }, t.assignee_name ? ('🧑‍💼 ' + t.assignee_name) : 'Unassigned'),
         h('td', { class: 'muted', style: { fontSize: '.82rem', whiteSpace: 'nowrap' } }, _tkFmt(t.created_at)),
-        h('td', { style: { fontSize: '.8rem', color: t.last_reply_body ? '#334155' : '#94a3b8', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: t.last_reply_body || '' },
-          t.last_reply_body ? (String(t.last_reply_body).slice(0, 80) + (String(t.last_reply_body).length > 80 ? '…' : '')) : '—'),
+        // TKT_LAST_REMARK_AUTHOR_v1 — show WHO left the last remark: our team vs the tenant.
+        h('td', { style: { fontSize: '.8rem', maxWidth: '260px' },
+                  title: t.last_reply_body ? ((_tkAuthorLabel(t).text) + ' · ' + t.last_reply_body) : '' },
+          t.last_reply_body
+            ? h('div', {},
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '2px' } },
+                  (function () {
+                    const a = _tkAuthorLabel(t);
+                    return h('span', { style: { background: a.bg, color: a.fg, borderRadius: '6px', padding: '0 6px', fontSize: '.68rem', fontWeight: 700, whiteSpace: 'nowrap' } }, a.text);
+                  })(),
+                  Number(t.last_reply_internal) === 1
+                    ? h('span', { style: { background: '#e5e7eb', color: '#374151', borderRadius: '6px', padding: '0 5px', fontSize: '.66rem', fontWeight: 700 }, title: 'Internal note — not visible to the tenant' }, '🔒')
+                    : null),
+                h('div', { style: { color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                  String(t.last_reply_body).slice(0, 70) + (String(t.last_reply_body).length > 70 ? '…' : '')))
+            : h('span', { class: 'muted' }, '—')),
         h('td', { class: 'muted', style: { fontSize: '.82rem' } }, _tkFmt(t.last_reply_at || t.created_at)),
         h('td', { style: { textAlign: 'center' } }, String(t.reply_count || 0)),
         h('td', {}, h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); openAdminTicketModal(t.id); } }, 'Open →'))

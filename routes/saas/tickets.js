@@ -532,11 +532,23 @@ async function api_saas_tk_admin_listAll(token, filters) {
   }
   const sql = `
     SELECT t.*, te.org_name, sa.name AS assignee_name,
-           (SELECT r.body FROM support_ticket_replies r
-              WHERE r.ticket_id = t.id ORDER BY r.created_at DESC LIMIT 1) AS last_reply_body
+           lr.body        AS last_reply_body,
+           lr.author_type AS last_reply_author_type,
+           lr.author_name AS last_reply_author_name,
+           lr.is_internal AS last_reply_internal,
+           lr.created_at  AS last_reply_created_at
       FROM support_tickets t
       LEFT JOIN tenants     te ON te.id = t.tenant_id
       LEFT JOIN super_admins sa ON sa.id = t.assignee_id
+      -- TKT_LAST_REMARK_AUTHOR_v1 — pull the whole latest reply row (not just the
+      -- body) so the list can show WHO left it: our team vs the tenant.
+      LEFT JOIN LATERAL (
+        SELECT r.body, r.author_type, r.author_name, r.is_internal, r.created_at
+          FROM support_ticket_replies r
+         WHERE r.ticket_id = t.id
+         ORDER BY r.created_at DESC
+         LIMIT 1
+      ) lr ON TRUE
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY COALESCE(t.last_reply_at, t.created_at) DESC
      LIMIT 1000`;
