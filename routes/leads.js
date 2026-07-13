@@ -1322,6 +1322,19 @@ async function api_leads_create(token, payload) {
   // Best-effort: a campaign-routing failure shouldn't roll back the
   // already-committed lead row; we just log + continue.
   let _campaignAssign = null;
+  /* LEAD_UPLOAD_WORKSPACE_COL — accept `workspace` (or legacy `campaign`)
+   * column name from CSV/XLSX upload. Resolves the workspace name
+   * (case-insensitive) to campaign_id BEFORE the auto-match runs. */
+  if (!p.campaign_id) {
+    const wsName = String(p.workspace || p.campaign || '').trim();
+    if (wsName) {
+      try {
+        const camps = (await db.query('SELECT id, name FROM campaigns')).rows || [];
+        const hit = camps.find(c => String(c.name || '').toLowerCase() === wsName.toLowerCase());
+        if (hit && hit.id) p.campaign_id = hit.id;
+      } catch (e) { console.warn('[leads] workspace name lookup failed:', e.message); }
+    }
+  }
   // If caller didn't pin a campaign explicitly, see if any active
   // campaign's match_filter matches this lead — auto-attach if so.
   if (!p.campaign_id) {

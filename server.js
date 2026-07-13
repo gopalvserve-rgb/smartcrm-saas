@@ -2046,6 +2046,8 @@ app.get('/api/sample.csv', async (req, res, next) => {
     'name', 'phone', 'alt_phone', 'whatsapp', 'email',
     // 2. Routing Ã¢ÂÂ status / source / product accepted by NAME, assigned_to by email-or-name-or-id
     'status', 'source', 'source_ref', 'product', 'assigned_to',
+    // 2b. Workspace name — LEAD_UPLOAD_WORKSPACE_COL (blank = none)
+    'workspace',
     // 3. Address
     'address', 'city', 'state', 'pincode', 'country', 'company',
     // 4. Qualification
@@ -2065,6 +2067,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
     const row = {
       name: '', phone: '', alt_phone: '', whatsapp: '', email: '',
       status: '', source: '', source_ref: '', product: '', assigned_to: '',
+      workspace: '',
       address: '', city: '', state: '', pincode: '', country: '', company: '',
       value: '', currency: '', qualified: '', tags: '',
       next_followup_at: '', notes: '',
@@ -2082,6 +2085,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
       email: 'john@example.com',
       status: 'New', source: 'Website', product: 'Basic Plan',
       assigned_to: 'sales1@yourcompany.com',
+      workspace: 'Customers',
       address: '12 MG Road', city: 'Mumbai', state: 'MH',
       pincode: '400001', country: 'India', company: 'Acme Corp',
       value: '50000', currency: 'INR', qualified: '1',
@@ -2128,6 +2132,7 @@ app.get('/api/sample.xls', async (req, res, next) => {
   const baseCols = [
     'name', 'phone', 'alt_phone', 'whatsapp', 'email',
     'status', 'source', 'source_ref', 'product', 'assigned_to',
+    'workspace',
     'address', 'city', 'state', 'pincode', 'country', 'company',
     'value', 'currency', 'qualified', 'tags',
     'next_followup_at', 'notes',
@@ -2142,6 +2147,7 @@ app.get('/api/sample.xls', async (req, res, next) => {
     {
       name: 'Acme Corp', phone: '9876543210', email: 'sales@acme.example',
       status: 'New', source: 'Website', product: 'Premium plan',
+      workspace: 'Customers',
       city: 'Mumbai', country: 'India', value: '50000', currency: 'INR',
       qualified: '1', tags: 'enterprise,priority',
       notes: 'Sample row Ã¢ÂÂ replace with real data'
