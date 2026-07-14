@@ -222,19 +222,22 @@ async function api_tour_summary(/*token*/) {
       COUNT(*)::int                                                  AS bookings_total,
       COUNT(*) FILTER (WHERE status IN ('booked','confirmed','traveling'))::int AS bookings_active,
       COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()))::int    AS bookings_month,
-      COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', now()) THEN total_inr ELSE 0 END),0)::numeric AS revenue_month,
+      COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', now()) THEN COALESCE(total_inr,0) ELSE 0 END),0)::float8 AS revenue_month,
       COUNT(*) FILTER (WHERE status='traveling')::int                          AS travelling_now,
       COUNT(*) FILTER (WHERE travel_start_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days')::int AS upcoming_30d
     FROM tour_bookings
-  `, []);
+  `, []).catch(() => ({ rows: [{}] }));
+  /* HOLIDAY_PACK_FIX_v1 — cast money to ::float8 so pg driver returns real
+   * JS numbers (not strings) — string "NaN" or empty numeric was rendering
+   * as ₹NaN in the KPI tiles. */
   const r2 = await db.query(`
     SELECT
-      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')),0)::numeric AS outstanding,
-      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')
-                                          AND travel_start_date < CURRENT_DATE),0)::numeric AS overdue,
+      COALESCE(SUM(COALESCE(balance_inr,0)) FILTER (WHERE status IN ('booked','confirmed','traveling')),0)::float8 AS outstanding,
+      COALESCE(SUM(COALESCE(balance_inr,0)) FILTER (WHERE status IN ('booked','confirmed','traveling')
+                                          AND travel_start_date < CURRENT_DATE),0)::float8 AS overdue,
       COUNT(*) FILTER (WHERE visa_status='pending')::int                                   AS visa_pending
     FROM tour_bookings
-  `, []);
+  `, []).catch(() => ({ rows: [{ outstanding: 0, overdue: 0, visa_pending: 0 }] }));
   const r3 = await db.query(`
     SELECT COUNT(*)::int AS itin_no_plan
       FROM tour_bookings b
@@ -411,6 +414,11 @@ async function api_tour_booking_setStatus(_token, args) {
 }
 
 async function api_tour_itinerary_byBooking(_token, args) {
+  /* HOLIDAY_PACK_FIX_v1 — self-heal legacy tour_itineraries missing status/etc. */
+  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft'`, []); } catch(_) {}
+  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS pdf_url TEXT`, []); } catch(_) {}
+  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`, []); } catch(_) {}
+  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS title TEXT`, []); } catch(_) {}
   const bid = Number((args && args.booking_id) || 0);
   if (!bid) return { itinerary: null, days: [], activities: [] };
   let it = (await db.query(
@@ -664,6 +672,11 @@ async function api_tour_seedDemo(/*token*/) {
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS source TEXT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'enquiry'`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS cost_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  // HOLIDAY_PACK_FIX_v1 — patch tour_itineraries missing columns on legacy installs
+  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft'`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS pdf_url TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS title TEXT`, []).catch(() => {});
   // Also patch tour_packages — old installs may not have destination_id either.
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS destination_id INT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS kind TEXT`, []).catch(() => {});

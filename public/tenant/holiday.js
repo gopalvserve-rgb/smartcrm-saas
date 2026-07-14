@@ -34,13 +34,14 @@
     const TEAL2 = '#0f766e';
 
     function fmtINR(n) {
-      const v = Number(n || 0);
+      /* HOLIDAY_PACK_FIX_v1 — parseFloat-safe. Rejects NaN, empty, non-numeric. */
+      let v = parseFloat(n); if (!isFinite(v)) v = 0;
       if (v >= 10000000) return '₹' + (v / 10000000).toFixed(2) + ' Cr';
       if (v >= 100000)   return '₹' + (v / 100000).toFixed(2) + ' L';
       return '₹' + Math.round(v).toLocaleString('en-IN');
     }
-    function fmtINRfull(n) { return '₹' + Math.round(Number(n || 0)).toLocaleString('en-IN'); }
-    function num(n) { return Number(n || 0).toLocaleString('en-IN'); }
+    function fmtINRfull(n) { let v = parseFloat(n); if (!isFinite(v)) v = 0; return '₹' + Math.round(v).toLocaleString('en-IN'); }
+    function num(n) { let v = parseFloat(n); if (!isFinite(v)) v = 0; return v.toLocaleString('en-IN'); }
 
     function kpiTile(label, val, sub, color) {
       color = color || TEAL;
@@ -477,7 +478,13 @@
           const card = h('div', {
             style: { background: '#fff', border: '1px solid #ccfbf1', borderRadius: '12px',
               padding: '14px', cursor: 'pointer', transition: 'all .15s' },
-            onclick: function () { /* future: open detail */ }
+            /* HOLIDAY_PACK_FIX_v1 — clickable: open Bookings filtered by this destination. */
+            onclick: function () {
+              try {
+                var dname = encodeURIComponent(d.name || '');
+                window.location.hash = '#/tourbookings?destination_id=' + (d.id||'') + '&destination_name=' + dname;
+              } catch (_) {}
+            }
           },
             h('div', { style: { fontSize: '40px' } }, d.flag || '🌍'),
             h('h3', { style: { margin: '4px 0', fontSize: '15px' } }, d.name),
