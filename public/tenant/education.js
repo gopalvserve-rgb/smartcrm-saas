@@ -107,10 +107,10 @@
       .edu-v2 .enr-stage.active{background:linear-gradient(180deg,#f5f3ff,#fff);border-bottom:3px solid #7c3aed}
       .edu-v2 .enr-stage .em{font-size:24px}
       .edu-v2 .enr-stage .lbl{font-size:11px;font-weight:700;text-transform:uppercase;color:#57534e;margin-top:4px}
-      .edu-v2 .modal-bg{position:fixed;inset:0;background:rgba(28,25,23,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
-      .edu-v2 .modal{background:#fff;border-radius:14px;max-width:680px;width:100%;max-height:90vh;overflow-y:auto;padding:18px;box-shadow:0 30px 60px rgba(0,0,0,.3)}
-      .edu-v2 .modal h2{margin:0 0 12px;font-size:17px}
-      .edu-v2 .modal .modal-actions{display:flex;gap:6px;margin-top:12px;justify-content:flex-end}
+      .edu-v2.modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
+      .edu-v2.modal-bg .modal.edu-v2{background:#fff;border-radius:14px;max-width:680px;width:100%;max-height:90vh;overflow-y:auto;padding:22px;box-shadow:0 30px 60px rgba(0,0,0,.3)}
+      .edu-v2.modal-bg .modal.edu-v2 h2{margin:0 0 14px;font-size:18px;font-weight:800;color:#111}
+      .edu-v2.modal-bg .modal.edu-v2 .modal-actions{display:flex;gap:8px;margin-top:14px;justify-content:flex-end;padding-top:12px;border-top:1px solid #e5e7eb}
       .edu-v2 .empty{padding:30px;text-align:center;color:#78716c}
       .edu-v2 .empty .em{font-size:32px;margin-bottom:6px}
     `;
@@ -143,14 +143,18 @@
 
   // -- modal helpers
   function openModal(html) {
-    var bg = document.createElement('div'); bg.className = 'modal-bg';
+    /* EDU_MODAL_POSITION_FIX — bg element must carry the edu-v2 class
+     * itself (not rely on ancestor .edu-v2 scope) because modal-bg gets
+     * appended to <body>, which is outside every .edu-v2 wrapper.        */
+    var bg = document.createElement('div');
+    bg.className = 'edu-v2 modal-bg';
     bg.innerHTML = '<div class="modal edu-v2">' + html + '</div>';
     bg.addEventListener('click', function(e){ if (e.target===bg) bg.remove(); });
     document.body.appendChild(bg);
     return bg;
   }
   function closeModal() {
-    var bg = document.querySelector('.modal-bg');
+    var bg = document.querySelector('.edu-v2.modal-bg, .modal-bg.edu-v2');
     if (bg) bg.remove();
   }
 
