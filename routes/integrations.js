@@ -292,7 +292,16 @@ async function _internalCreateLead(payload, asUserId) {
   const me = await db.findOneBy('users', 'id', asUserId);
   if (!me) throw new Error('Integration owner missing');
   const _status = await db.findOneBy('statuses', 'name', 'New');
-  const _phone = String(payload.phone || payload.mobile || '').replace(/^'/, '').trim();
+  let _phone = String(payload.phone || payload.mobile || '').replace(/^'/, '').trim();
+  /* PHONE_91_PREFIX_v1 — tenant-wide auto +91 normalization */
+  try {
+    if (String(await db.getConfig('PHONE_91_PREFIX_ENABLED', '0')) === '1') {
+      const { normalize91 } = require('../utils/phone91');
+      _phone = normalize91(_phone);
+      if (payload.whatsapp) payload.whatsapp = normalize91(payload.whatsapp);
+      if (payload.alt_phone) payload.alt_phone = normalize91(payload.alt_phone);
+    }
+  } catch (_) {}
   const _phoneDigits = _phone.replace(/\D/g, '');
   if (!_phoneDigits) throw new Error('No phone');
   const lead = {

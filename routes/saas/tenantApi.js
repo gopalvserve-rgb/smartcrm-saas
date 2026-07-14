@@ -128,6 +128,7 @@ const ROUTE_FILES = [
   'waCatalogue',        /* WA_CATALOGUE_v1 — WhatsApp Catalogue library (Vserve-gated) */
   'setupTour',          /* SETUP_TOUR_v1 — first-run admin setup checklist */
   'phoneFormat',        /* PHONE_FORMAT_v1 — per-webhook phone normalization + backfill */
+  'phone91',            /* PHONE_91_PREFIX_v1 — tenant-wide +91 auto-normalize toggle + backfill */
 ];
 
 const API = {};
