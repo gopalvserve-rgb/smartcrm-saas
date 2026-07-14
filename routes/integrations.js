@@ -1665,12 +1665,45 @@ async function leadSourceWebhook(req, res) {
       });
     } catch (e) { console.warn('[leadsource] cf passthrough failed:', e.message); }
 
+    /* PHONE_FORMAT_v1 — normalize phone per-source rule (best-effort, no-op
+     * if no rule saved for this source). Also stores the raw incoming
+     * string in leads.phone_raw for audit. */
+    let _phFmtRule = null;
+    try {
+      const m = await db.query(`SELECT phone_format FROM lead_source_mapping WHERE source=$1`, [source]);
+      _phFmtRule = (m.rows[0] && m.rows[0].phone_format) || null;
+    } catch (_) {}
+    if (_phFmtRule && _phFmtRule.store_format && _phFmtRule.store_format !== 'raw') {
+      const pfx = require('../utils/phoneFormat');
+      items.forEach(it => {
+        try {
+          if (it.phone) {
+            it._phone_raw = String(it.phone);
+            const n = pfx.normalizePhone(it.phone, _phFmtRule);
+            if (n.value) it.phone = n.value;
+            if (_phFmtRule.apply_to_wa && it.whatsapp) {
+              const nw = pfx.normalizePhone(it.whatsapp, _phFmtRule);
+              if (nw.value) it.whatsapp = nw.value;
+            }
+          }
+        } catch (_) {}
+      });
+    }
+
     const owner = await db.getAll('users').then(us => us.find(u => u.role === 'admin'));
     if (!owner) return res.status(500).json({ error: 'No admin user to own leads' });
 
     const results = [];
     for (const it of items) {
       if (!it.phone && !it.email && !it.name) continue;
+      /* PHONE_FORMAT_v1 — hard-reject if rule requires + phone is invalid */
+      if (_phFmtRule && _phFmtRule.reject_invalid && it.phone) {
+        try {
+          const pfx = require('../utils/phoneFormat');
+          const chk = pfx.parsePhone(it.phone, _phFmtRule);
+          if (!chk.valid) { results.push({ ok: false, name: it.name, error: 'phone invalid — rejected by source rule' }); continue; }
+        } catch (_) {}
+      }
       try {
         const r = await _internalCreateLead(it, owner.id);
         // Update webhook_log row as processed
