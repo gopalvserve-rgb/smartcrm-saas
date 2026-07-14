@@ -177,7 +177,38 @@
           document.body.appendChild(sol);
           // HOLIDAY_PACK_v1 (2026-06-27) — isolated pack SPA
           var hol = document.createElement('script');
-          hol.src = 'holiday.js?v=2026-07-14-holiday-fix-v1"disappeared".
+          hol.src = 'holiday.js?v=2026-07-14-holiday-fix-v1';
+          document.body.appendChild(hol);
+          // RE_PACK_v2 (2026-06-27) — isolated pack SPA
+          var re = document.createElement('script');
+          re.src = 'realestate.js?v=2026-06-27-pack-v17';
+          document.body.appendChild(re);
+          // EDU_PACK_v2 (2026-06-27) — isolated pack SPA
+          var edu = document.createElement('script');
+          edu.src = 'education.js?v=2026-07-13-receipts-ux-v1';
+          document.body.appendChild(edu);
+          // REMINDER_FLOWS_v1 (2026-07-05) — admin flow builder + sidebar link
+          var rf = document.createElement('script');
+          rf.src = 'reminderFlows.js?v=2026-07-05-v8-nofab';
+          document.body.appendChild(rf);
+          // REMINDER_FLOWS_v1 (2026-07-05) — rep-side follow-up flow picker
+          var rp = document.createElement('script');
+          rp.src = 'reminderPicker.js?v=2026-07-09-none-default-v1';
+          document.body.appendChild(rp);
+
+          // DEMO_TOUR_v7 (2026-06-29) — guided tour: draggable+resizable text coach (bottom-left) + bigger draggable+resizable mobile-screen panel (right). Gated to slug 'showcase' / ?demotour=1
+          var dtour = document.createElement('script');
+          dtour.src = 'demoTour.js?v=2026-06-30-demotour-v16';
+          document.body.appendChild(dtour);
+          // SETUP_TOUR_v1 (2026-07-11) — first-run admin Setup Guide: Day-0 welcome
+          // modal → rocket badge ↔ draggable panel → coach-mark spotlight tour over
+          // the real settings pages. Self-gates to role=admin and hides when done.
+          var stour = document.createElement('script');
+          stour.src = 'setupTour.js?v=2026-07-11-setuptour-v4';
+          document.body.appendChild(stour);
+          // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — re-add the 3-column WhatsApp
+          // chat bundle. Its <script> was dropped when the pack scripts
+          // rewrote this block, which is why the redesign "disappeared".
           // Inert unless WB_CHAT_V2_ENABLED='1' (vserve-only beta).
           var wb = document.createElement('script');
           wb.src = 'wbChatV2.js?v=2026-07-12-wa-chat-paging-fix-v2';
