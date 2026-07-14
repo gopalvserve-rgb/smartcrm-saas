@@ -6530,6 +6530,7 @@ async function loadLeads(opts) {
       }
     } catch (_) {}
     CRM.cache.lastTotal = res.total || (res.leads || []).length;
+    CRM.cache.lastLeadQuery = Object.assign({}, filters);   // LEADS_EXPORT_SELECTION_v1
     // CALL_DIAL_COUNT_v1 — stamp each lead with its outgoing-dial count for the
     // 📞 badge (Classic view). Best-effort; never blocks the table render.
     try {
@@ -7033,8 +7034,19 @@ function renderLeadsMobile(rows) {
     const avatarColor = _avatarColor(l.name || l.phone || l.id);
     const initials    = _initials(l.name);
     const srcBadge    = l.source ? _sourceBadge(l.source) : null;
+    // LEADS_CARD_SELECT_v1 — the card view had NO checkboxes at all, so multi-select
+    // (and therefore selection-aware export/bulk actions) was impossible here; they
+    // only existed in the classic table. Reuse the SAME .row-check/data-id contract
+    // the bulk bar + selectedIds() already understand, so everything just works.
+    const _selBox = h('input', {
+      type: 'checkbox', class: 'row-check lc-check', 'data-id': l.id,
+      title: 'Select this lead',
+      onclick: ev => { ev.stopPropagation(); onRowCheck(); }
+    });
+    if (CRM._selected && CRM._selected.has && CRM._selected.has(Number(l.id))) _selBox.checked = true;
     const card = h('div', { class: cardCls, title: l.tat_violation ? tatViolationTitle(l) : null },
       h('div', { class: 'lc-top' },
+        h('label', { class: 'lc-check-wrap', style: { display: 'flex', alignItems: 'flex-start', paddingRight: '6px' }, onclick: ev => ev.stopPropagation() }, _selBox),
         h('div', { class: 'lc-avatar', style: { background: avatarColor } }, initials),
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
@@ -7195,8 +7207,22 @@ function renderLeadsMobile(rows) {
     return;
   }
 
+  // LEADS_CARD_SELECT_v1 — card view has no table header, so give it its own
+  // "Select all on this page" control. It drives the same .row-check contract.
+  const _selBar = h('label', {
+    class: 'lc-selectall',
+    style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', margin: '0 0 8px',
+             background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px',
+             fontSize: '.84rem', fontWeight: 600, color: '#475569', cursor: 'pointer' } });
+  const _selAllBox = h('input', { type: 'checkbox', id: 'sel-all' });
+  _selAllBox.onclick = (ev) => { selectAll(ev.target.checked); };
+  _selBar.appendChild(_selAllBox);
+  _selBar.appendChild(h('span', {}, 'Select all on this page'));
+  m.appendChild(_selBar);
+
   rows.forEach(l => m.appendChild(_buildMobileLeadCard(l)));
   try { _nukeUnwantedLeadButtons(m); } catch (e) {}
+  try { onRowCheck(); } catch (e) {}
 }
 
 /** Click-to-call.
@@ -7843,14 +7869,49 @@ function renderCell(col, l, statuses) {
 
 /* --- selection & bulk --- */
 function onRowCheck() {
+  const boxes = $$('.row-check');
   const n = $$('.row-check:checked').length;
   const bar = $('#bulk-bar');
   if (!bar) return;
+  if (n === 0) CRM._selectAllMatching = false;   // LEADS_EXPORT_SELECTION_v1
   // LEADS_BULKBAR_NUCLEAR_v1: three signals for CSS
   bar.hidden = (n === 0);
   bar.setAttribute('aria-hidden', n === 0 ? 'true' : 'false');
   bar.setAttribute('data-empty', n === 0 ? '1' : '0');
-  $('#bulk-count').textContent = `${n} selected`;
+  const total = Number(CRM.cache.lastTotal || 0);
+  $('#bulk-count').textContent = CRM._selectAllMatching
+    ? `All ${total} matching leads selected`
+    : `${n} selected`;
+  _renderSelectAllMatchingLink(n, boxes.length, total);
+}
+
+// LEADS_EXPORT_SELECTION_v1 — the header checkbox only ticks the CURRENT page.
+// When the whole page is ticked and more rows match the filter, offer to extend
+// the selection to every matching lead (used by bulk actions + export).
+function _renderSelectAllMatchingLink(checked, pageCount, total) {
+  const bar = $('#bulk-bar');
+  if (!bar) return;
+  let link = $('#bulk-selectall-link');
+  if (!link) {
+    link = h('a', { id: 'bulk-selectall-link', href: '#',
+      style: { marginLeft: '.6rem', fontSize: '.82rem', fontWeight: '600', color: '#4f46e5', cursor: 'pointer' } });
+    const cnt = $('#bulk-count');
+    if (cnt && cnt.parentNode) cnt.parentNode.insertBefore(link, cnt.nextSibling);
+    else bar.appendChild(link);
+  }
+  const canExtend = !CRM._selectAllMatching && checked > 0 && checked === pageCount && total > pageCount;
+  if (CRM._selectAllMatching) {
+    link.textContent = '✕ Clear — select only this page';
+    link.hidden = false;
+    link.onclick = (e) => { e.preventDefault(); CRM._selectAllMatching = false; onRowCheck(); };
+  } else if (canExtend) {
+    link.textContent = `Select all ${total} matching leads`;
+    link.hidden = false;
+    link.onclick = (e) => { e.preventDefault(); CRM._selectAllMatching = true; onRowCheck(); };
+  } else {
+    link.hidden = true;
+    link.onclick = null;
+  }
 }
 function selectAll(on) {
   $$('.row-check').forEach(c => { c.checked = on; });
@@ -7858,6 +7919,7 @@ function selectAll(on) {
 }
 function clearSelection() {
   const sa = $('#sel-all'); if (sa) sa.checked = false;
+  CRM._selectAllMatching = false;   // LEADS_EXPORT_SELECTION_v1
   selectAll(false);
 }
 function selectedIds() {
@@ -8343,10 +8405,42 @@ async function deleteAllDuplicates() {
 }
 
 /* --- CSV export / upload --- */
-function exportCSV() {
-  const rows = CRM.cache.lastLeads || [];
-  if (!rows.length) return toast('No leads to export', 'warn');
+// LEADS_EXPORT_SELECTION_v1 — export used to dump CRM.cache.lastLeads (the whole
+// CURRENT PAGE) and never looked at the row checkboxes, so a user who ticked a few
+// leads still got everything on the page. Now the export follows the selection:
+//   • "Select all N matching" active → re-fetch every matching lead (all pages)
+//   • some rows ticked              → export exactly those
+//   • nothing ticked                → export the current page (and say so)
+async function exportCSV() {
   const headers = ['id', 'name', 'phone', 'email', 'whatsapp', 'source', 'product_name', 'status_name', 'assigned_name', 'tags', 'city', 'next_followup_at', 'last_status_change_at', 'notes', 'created_at'];
+  const page  = CRM.cache.lastLeads || [];
+  const total = Number(CRM.cache.lastTotal || 0);
+  let rows = [];
+  let msg  = '';
+
+  if (CRM._selectAllMatching) {
+    toast('Fetching all ' + total + ' matching leads…');
+    try {
+      const q = Object.assign({}, CRM.cache.lastLeadQuery || {}, {
+        page: 1, page_size: Math.min(Math.max(total, 1), 5000)
+      });
+      const res = await api('api_leads_list', q);
+      rows = res.leads || [];
+      msg  = 'Exported all ' + rows.length + ' matching lead(s)';
+    } catch (e) { return toast('Export failed: ' + e.message, 'err'); }
+  } else {
+    const ids = selectedIds();
+    if (ids.length) {
+      const set = new Set(ids.map(Number));
+      rows = page.filter(r => set.has(Number(r.id)));
+      msg  = 'Exported ' + rows.length + ' selected lead(s)';
+    } else {
+      rows = page;
+      msg  = 'Exported ' + rows.length + ' lead(s) from this page — tick rows to export just those';
+    }
+  }
+
+  if (!rows.length) return toast('No leads to export', 'warn');
   const csv = [headers.join(',')].concat(rows.map(r => headers.map(k => {
     const v = r[k] == null ? '' : String(r[k]).replace(/"/g, '""');
     return /[",\n]/.test(v) ? `"${v}"` : v;
@@ -8357,6 +8451,7 @@ function exportCSV() {
   a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+  toast(msg, 'ok');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -18370,6 +18465,58 @@ function startEmbeddedSignup(appId, configId, opts) {
 }
 
 // ---------- Templates ----------
+// WA_TEMPLATE_VIEW_v1 (restored) — full template detail (type, variables,
+// header/body/footer, buttons) parsed from Meta's components array.
+// NOTE: this definition was lost in a concurrent merge that kept the "👁 View"
+// button but dropped the function, throwing "_viewWaTemplate is not defined".
+function _viewWaTemplate(t) {
+  const comps = Array.isArray(t.components) ? t.components : [];
+  const byType = (ty) => comps.find(c => String(c.type || '').toUpperCase() === ty) || null;
+  const header = byType('HEADER'); const bodyC = byType('BODY'); const footer = byType('FOOTER'); const btns = byType('BUTTONS');
+  const bodyText = (bodyC && bodyC.text) || t.body_text || '';
+  const vars = (String(bodyText).match(/\{\{\s*\d+\s*\}\}/g) || []);
+  const esc2 = (x) => String(x == null ? '' : x).replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+  const hi = (x) => esc2(x).replace(/(\{\{\s*\d+\s*\}\})/g, '<span style="background:#fde68a;color:#92400e;border-radius:4px;padding:0 3px;font-weight:700">$1</span>');
+  const row = (k, v) => h('div', { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: '.4rem .8rem', padding: '4px 0', fontSize: '.85rem' } },
+    h('div', { class: 'muted' }, k), h('div', {}, v));
+  const chip = (txt, col) => h('span', { style: { background: col, color: '#fff', borderRadius: '8px', padding: '2px 8px', fontSize: '.72rem', fontWeight: 700 } }, txt);
+
+  const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } },
+    h('div', { class: 'modal', style: { maxWidth: '640px', width: '96%', maxHeight: '88vh', overflow: 'auto' } },
+      h('div', { class: 'modal-head' }, h('h3', {}, '📋 ' + t.name),
+        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
+      h('div', { style: { padding: '.3rem 0' } },
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '.6rem' } },
+          chip(t.status || '—', t.status === 'APPROVED' ? '#10b981' : (t.status === 'PENDING' ? '#f59e0b' : '#ef4444')),
+          chip(t.category || 'UTILITY', '#6366f1'),
+          chip(t.language || 'en_US', '#0ea5e9'),
+          chip('Header: ' + (header ? String(header.format || 'TEXT') : 'none'), '#64748b')),
+        row('Name', h('code', {}, t.name)),
+        row('Variables', vars.length ? (vars.join('  ') + '  (' + vars.length + ')') : h('span', { class: 'muted' }, 'None')),
+        h('div', { style: { borderTop: '1px solid #eef0f5', margin: '.6rem 0' } }),
+        header ? h('div', { style: { marginBottom: '.5rem' } },
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155' } }, '🧱 Header (' + (header.format || 'TEXT') + ')'),
+          h('div', { style: { fontSize: '.86rem', marginTop: '2px' }, html: header.text ? hi(header.text) : ('<span class="muted">' + (header.format || 'MEDIA') + ' header — the media is supplied when sending</span>') })) : null,
+        h('div', { style: { marginBottom: '.5rem' } },
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155' } }, '💬 Body'),
+          h('div', { style: { fontSize: '.9rem', marginTop: '2px', whiteSpace: 'pre-wrap', background: '#f8fafc', border: '1px solid #eef0f5', borderRadius: '6px', padding: '.5rem .65rem' }, html: hi(bodyText) })),
+        footer ? h('div', { style: { marginBottom: '.5rem' } },
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155' } }, '🦶 Footer'),
+          h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '2px' } }, footer.text || '')) : null,
+        (btns && Array.isArray(btns.buttons) && btns.buttons.length) ? h('div', {},
+          h('div', { style: { fontWeight: 700, fontSize: '.8rem', color: '#334155', marginBottom: '4px' } }, '🔘 Buttons (' + btns.buttons.length + ')'),
+          ...btns.buttons.map(b => h('div', { style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.4rem .6rem', marginBottom: '5px', fontSize: '.84rem' } },
+            h('b', {}, b.text || '(no label)'), ' ',
+            chip(String(b.type || 'QUICK_REPLY').replace(/_/g, ' '), '#475569'),
+            b.url ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '2px', wordBreak: 'break-all' } }, '🔗 ' + b.url) : null,
+            b.phone_number ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '2px' } }, '📞 ' + b.phone_number) : null))) : null
+      ),
+      h('div', { style: { textAlign: 'right', marginTop: '.5rem' } }, h('button', { class: 'btn primary', onclick: () => modal.remove() }, 'Close'))
+    )
+  );
+  document.body.appendChild(modal);
+}
+
 async function wbTemplates() {
   const wrap = h('div', {});
   const list = await api('api_wb_templates_list').catch(() => []);
@@ -31517,8 +31664,23 @@ function openAutomationModal(existing) {
           }
           if (channel === 'whatsapp' && !subject.startsWith('template:')) missing.push('WhatsApp template');
           if (missing.length) { toast('Fill in: ' + missing.join(', '), 'err'); return; }
+          // AUTOMATION_MEDIA_HEADER_v1 — carry the header media URL (required for
+          // templates whose header is IMAGE/VIDEO/DOCUMENT).
+          const _hdrInp = $('#auto-wa-header-url');
+          const headerMediaUrl = _hdrInp ? String(_hdrInp.value || '').trim() : '';
+          if (channel === 'whatsapp' && _hdrInp && !headerMediaUrl) {
+            toast('This template has a media header — paste the header media URL.', 'err');
+            _hdrInp.focus();
+            return;
+          }
+          if (headerMediaUrl && !/^https:\/\//i.test(headerMediaUrl)) {
+            toast('Header media URL must be a public https:// link.', 'err');
+            if (_hdrInp) _hdrInp.focus();
+            return;
+          }
           const payload = { id: a.id, name, event: eventKey, channel,
-            recipient: recipientFinal, condition, subject, template, is_active: 1 };
+            recipient: recipientFinal, condition, subject, template,
+            header_media_url: headerMediaUrl, is_active: 1 };
           try { await api('api_automations_save', payload); toast('Saved'); modal.remove(); showAdminTab('automations'); }
           catch (e) { toast(e.message, 'err'); }
         } }, 'Save')
@@ -31534,6 +31696,9 @@ function openAutomationModal(existing) {
   // modal is in the DOM (so CRM.cache is fully warmed).
   _wireAutomationConditionBuilder(a.condition || '');
   toggleChannelUI(a.channel);
+  // AUTOMATION_MEDIA_HEADER_v1 — stash the saved header media URL so
+  // renderWaVarsForSelected can prefill the field when editing.
+  try { const _f = $('#auto-form'); if (_f) _f.dataset.headerMediaUrl = a.header_media_url || ''; } catch (_) {}
   // Wire template-select change so variable inputs render when the user
   // picks a different template.
   setTimeout(() => {
@@ -31592,11 +31757,25 @@ function renderWaVarsForSelected() {
   const label = opt ? opt.textContent : '';
   const m = label.match(/(\d+)\s*params/);
   const paramCount = m ? Number(m[1]) : 0;
+  // AUTOMATION_MEDIA_HEADER_v1 — templates with an IMAGE/VIDEO/DOCUMENT header
+  // need the media attached in a header component; ask for its public URL.
+  const _prevUrl = ($('#auto-wa-header-url') || {}).value || (($('#auto-form') || {}).dataset || {}).headerMediaUrl || '';
+  const _hdr = String((opt && opt.getAttribute('data-header')) || '').toUpperCase();
   cont.innerHTML = '';
   if (!sel.value) {
     cont.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } },
       'Pick a template first.'));
     return;
+  }
+  if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(_hdr)) {
+    const kind = _hdr.toLowerCase();
+    cont.appendChild(h('div', { style: { marginBottom: '.6rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '.55rem .7rem' } },
+      h('label', { style: { fontSize: '.78rem', fontWeight: 700, color: '#1e3a8a', display: 'block' } },
+        '🖼 Header ' + kind + ' URL *'),
+      h('div', { class: 'muted', style: { fontSize: '.74rem', margin: '2px 0 .35rem' } },
+        'This template has a ' + _hdr + ' header, so Meta requires the media. Paste a public https:// link to the ' + kind + ' — it is sent with every message from this automation.'),
+      h('input', { id: 'auto-wa-header-url', type: 'url', value: _prevUrl,
+        placeholder: 'https://example.com/banner.jpg', style: { width: '100%' } })));
   }
   if (paramCount === 0) {
     cont.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } },
@@ -31640,7 +31819,7 @@ async function loadWATemplates() {
     }
     templates.forEach(t => {
       const label = `${t.name} (${t.language}${t.body_params ? ', ' + t.body_params + ' params' : ''}) — ${t.status}`;
-      sel.appendChild(h('option', { value: t.name, 'data-lang': t.language }, label));
+      sel.appendChild(h('option', { value: t.name, 'data-lang': t.language, 'data-header': t.header_type || '' }, label));
     });
     if (current) sel.value = current;
   } catch (e) {
@@ -37238,41 +37417,19 @@ async function syncRecordings(opts) {
       if (ids.length === 1) matchedLeadId = ids[0];
     }
 
-    /* REC_TIME_MATCH_v1 (2026-07-14) — THE FIX FOR THE RECORDING OUTAGE.
+    /* REC_TIME_MATCH_v2 (2026-07-14) — recordings stopped uploading to EVERY tenant after
+     * 7 Jul because this gate let the FILENAME decide: if no phone/contact/last-4 could be
+     * parsed out of it, the file was dropped and never sent. Many OEM recorders write no
+     * number and no name at all ("Record_20260714.amr"). The server was never even called.
      *
-     * Everything below used to hinge on the FILENAME: if we couldn't pull a phone
-     * number, a contact name or a last-4 out of it, the file was dropped and never
-     * uploaded. That is why zero recordings reached any tenant after 7 Jul — plenty of
-     * OEM recorders name files with no number and no name at all ("Record_20260714.amr"),
-     * and every one of those was silently thrown away. The server never even saw them:
-     * /api/recordings has never logged a single error, because it was never called.
-     *
-     * But the CRM already knows who the rep was on the phone with at that moment —
-     * call_events is complete and correct (it's what Call Activity is built on). So
-     * before giving up, ASK. The server answers from the call log, which cannot lie
-     * about who was called, and cannot be broken by a handset's naming scheme.
-     *
-     * The "skip personal calls" policy still holds: api_recordings_callAtTime only
-     * returns matched:true when the call at that moment belongs to a CRM lead. A call
-     * to a non-lead number comes back matched:false and is still skipped — now decided
-     * by WHO was really called, not by what the file happened to be named. */
-    /* REC_TIME_MATCH_v2 (2026-07-14) — PHONE AND LEAD MUST COME FROM THE SAME SOURCE.
-     *
-     * v1 mis-attached 43 of 249 recordings (17%). The phone and the lead were decided by
-     * two DIFFERENT pickers: the client's callAtTime took the call CLOSEST IN TIME, while
-     * the server (when no phone was supplied) took the MOST RECENT call in the window
-     * (ORDER BY created_at DESC → rows[0]). A rep dialling several numbers in a few minutes
-     * makes those two land on different calls — so a recording got one call's phone and a
-     * different call's lead, and turned up under the wrong customer.
-     *
-     * The time match is a LAST RESORT, not an override:
-     *   • filename HAS a number  → that number decides, full stop. If it isn't a CRM lead,
-     *     it's a personal call and we skip it. We do NOT go looking for some other call
-     *     that happens to sit nearby in time — that is how you attach a recording of one
-     *     customer to another.
-     *   • filename has NO number → ask the call log, and take BOTH the phone and the lead
-     *     from that ONE call, so the two can never disagree.
-     */
+     * The CRM already knows who the rep was on the phone with at that moment (call_events),
+     * so ask it — but ONLY as a last resort, and only when the filename tells us NOTHING:
+     *   • filename HAS a number → that number decides the lead, full stop. Not a CRM lead?
+     *     Personal call, skip. We do NOT go hunting for some other call nearby in time —
+     *     that is how a recording of one customer ends up on another (v1 did exactly that
+     *     and mis-attached 108 recordings).
+     *   • filename has NO number → take the phone AND the lead from that ONE call, so the
+     *     two can never disagree. */
     if (!includeUnmatched && !matchedLeadId && !digits) {
       try {
         const at = await api('api_recordings_callAtTime', {
@@ -37282,7 +37439,7 @@ async function syncRecordings(opts) {
         });
         if (at && at.matched && at.lead_id) {
           matchedLeadId  = at.lead_id;
-          meta.phone     = at.phone || '';                 // SAME call as the lead — never mixed
+          meta.phone     = at.phone || '';
           meta.direction = at.direction || meta.direction;
           console.log('[leadcrm] matched by CALL LOG (filename carried no number):', f.name,
                       '→ lead', at.lead_id, at.lead_name || '', at.phone || '');
@@ -37317,12 +37474,9 @@ async function syncRecordings(opts) {
     // The call_event check is only used as a fallback when the phone
     // doesn't match any lead but DOES match a knownTail (alt-format
     // shorthand). Helps catch typos / saved-without-country-code cases.
-    /* REC_TIME_MATCH_v1 — this second gate asked api_call_hasRecentEvent(phone, 30),
-     * i.e. "did this number call in the last 30 MINUTES". For a manual/bulk sync of
-     * files that are hours or days old that is always false, so it dropped them too.
-     * The call-log match above is strictly better (it checks the actual call time, not
-     * "recently"), so only run this legacy check when we still have no lead AND the
-     * call-log lookup didn't get a chance to run. */
+    /* REC_TIME_MATCH_v2 — this asked "did this number call in the last 30 MINUTES", which is
+     * always false for a bulk sync of files that are hours or days old, so it dropped them
+     * too. Skip it when the call-log match above already resolved the lead. */
     if (!includeUnmatched && !lead && !matchedLeadId && digits) {
       try {
         const hr = await api('api_call_hasRecentEvent', meta.phone, 30);
