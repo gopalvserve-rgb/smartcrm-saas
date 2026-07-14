@@ -521,7 +521,13 @@ async function expressPublicDownload(req, res) {
     // Look up the tenant + its settings WITHOUT going through authUser (this is a
     // tenant-scoped public endpoint guarded by the per-tenant token).
     const tenantPool = require('../utils/tenantPool');
-    const tenantDb = require('../db/tenantDb');
+    /* GCONV_TENANTDB_FIX_v1 (2026-07-14) — there is no db/tenantDb module. The one that
+     * exports tenantStorage is db/pg (line 18 of this very file already requires it).
+     * So the public CSV endpoint threw "Cannot find module '../db/tenantDb'" on EVERY
+     * request — the "Public download URL" in the export settings has never worked.
+     * It went unnoticed because the route itself was also missing from server.js since
+     * the 27-June gutting, so the 500 was masked by a 404. */
+    const tenantDb = db;
     const t = await tenantPool.findActiveTenant(slug);
     if (!t) return res.status(404).type('text').send('Tenant not found');
     const pool = tenantPool.poolFor(t);
