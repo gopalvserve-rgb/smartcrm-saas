@@ -1121,6 +1121,65 @@ async function api_recordings_filenamesPresent(token, opts) {
   return { present: Array.from(present) };
 }
 
+
+/* REC_RELINK_v1 (2026-07-14) — repair recordings that were attached to the WRONG lead.
+ *
+ * REC_TIME_MATCH_v1 let the phone and the lead come from two different calls (see
+ * REC_TIME_MATCH_v2). Result: 43 of 249 recordings on vserve sat under a customer they
+ * had nothing to do with. The damage is fully repairable because each row still carries
+ * its OWN phone number — so we can just re-derive the correct lead from it.
+ *
+ * Dry-run by default. Pass { apply: true } to write. Admins only — this rewrites data.
+ */
+async function api_recordings_relink(token, opts) {
+  const me = await authUser(token);
+  if (String(me.role || '') !== 'admin') throw new Error('Admins only');
+  const p = opts || {};
+  const apply = p.apply === true || p.apply === 1 || p.apply === '1';
+  const sinceIso = p.since ? new Date(p.since).toISOString()
+                           : new Date(Date.now() - 30 * 86400 * 1000).toISOString();
+
+  const { rows } = await db.query(
+    `SELECT r.id, r.phone, r.lead_id, r.user_id, r.created_at,
+            l.name AS current_lead_name
+       FROM lead_recordings r
+       LEFT JOIN leads l ON l.id = r.lead_id
+      WHERE r.created_at >= $1
+        AND COALESCE(r.phone,'') <> ''
+      ORDER BY r.id DESC
+      LIMIT 2000`,
+    [sinceIso]
+  );
+
+  const fixed = [], orphaned = [];
+  for (const r of rows) {
+    let lead = null;
+    try { lead = await _findLeadByPhone(r.phone); } catch (_) { lead = null; }
+    if (!lead) {
+      // Its number isn't a CRM lead at all — it should never have been attached to one.
+      if (r.lead_id) orphaned.push({ id: r.id, phone: r.phone, was_lead: r.lead_id });
+      continue;
+    }
+    if (Number(lead.id) === Number(r.lead_id)) continue;   // already correct
+    fixed.push({ id: r.id, phone: r.phone, from_lead: r.lead_id,
+                 from_name: r.current_lead_name || null, to_lead: lead.id });
+    if (apply) {
+      await db.query('UPDATE lead_recordings SET lead_id = $1 WHERE id = $2', [lead.id, r.id]);
+      // keep the call_events pointer honest too
+      await db.query(
+        `UPDATE call_events SET lead_id = $1 WHERE recording_id = $2 AND COALESCE(lead_id,0) <> $1`,
+        [lead.id, r.id]
+      ).catch(() => {});
+    }
+  }
+  return {
+    ok: true, apply, scanned: rows.length,
+    misattached: fixed.length, repaired: apply ? fixed.length : 0,
+    not_a_lead_anymore: orphaned.length,
+    sample: fixed.slice(0, 15)
+  };
+}
+
 module.exports = {
   maybeAutoCreateLeadFromCall,   // AUTOLEAD_WIRE_v1
   api_call_logEvent,
@@ -1141,5 +1200,6 @@ module.exports = {
   _getAutoleadCfg,
   api_recording_recentInsights,
   api_recordings_callAtTime,        // REC_TIME_MATCH_v1
-  api_recordings_filenamesPresent   // REC_FILENAME_DEDUP_FIX_v1
+  api_recordings_filenamesPresent,  // REC_FILENAME_DEDUP_FIX_v1
+  api_recordings_relink             // REC_RELINK_v1
 };
