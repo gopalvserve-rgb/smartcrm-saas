@@ -2278,6 +2278,69 @@ a{color:#4338ca;text-decoration:none}
 </script>`);
   }
   const t = tenant;
+  /* TENANT_SUSPENDED_UX (2026-07-14) — proper suspended / deleted UI so a
+   * paying customer sees a clear billing message, not "still being wired up".
+   */
+  if (t.status === 'suspended' || t.status === 'deleted') {
+    const isDel = t.status === 'deleted';
+    return res.type('html').send(`<!doctype html><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>${safe(t.org_name)} — ${isDel ? 'Deleted' : 'Suspended'} — SmartCRM</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:24px 20px;color:#0f172a;background:#0b1220;min-height:100vh;line-height:1.55}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:24px}
+  .brand-mark{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:18px}
+  .brand-name{font-size:15px;color:#e2e8f0;font-weight:700}
+  .hero{background:#fff;border-radius:16px;padding:28px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);text-align:center;margin-bottom:16px}
+  .icon{width:80px;height:80px;border-radius:50%;background:${isDel ? '#fef2f2' : '#fefce8'};display:flex;align-items:center;justify-content:center;font-size:40px;margin:0 auto 18px}
+  h1{font-size:22px;margin:0 0 8px;color:#0f172a;font-weight:800}
+  .tag{display:inline-block;padding:4px 10px;background:${isDel ? '#dc2626' : '#ca8a04'};color:#fff;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-radius:6px;margin-bottom:12px}
+  .org{font-size:14px;color:#64748b;margin-bottom:20px}
+  .msg{background:${isDel ? '#fef2f2' : '#fefce8'};border:1px solid ${isDel ? '#fecaca' : '#fef08a'};border-radius:10px;padding:14px 16px;text-align:left;color:${isDel ? '#7f1d1d' : '#713f12'};font-size:13.5px;margin-bottom:18px}
+  .msg b{display:block;margin-bottom:6px;font-size:14px}
+  .next{background:#f8fafc;border-radius:10px;padding:14px 16px;text-align:left;font-size:13px;color:#334155;margin-bottom:18px}
+  .next h3{margin:0 0 8px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:800}
+  .next ol{margin:0;padding-left:18px}
+  .next li{margin-bottom:4px}
+  .btn{display:block;width:100%;padding:12px 16px;border-radius:10px;font-weight:700;font-size:14px;text-decoration:none;text-align:center;margin-bottom:8px;transition:all .15s;border:none;cursor:pointer}
+  .btn-primary{background:#7c3aed;color:#fff}
+  .btn-primary:hover{background:#6d28d9}
+  .btn-ghost{background:#f3f4f6;color:#374151;border:1px solid #d1d5db}
+  .contact{margin-top:18px;padding-top:14px;border-top:1px solid #e5e7eb;font-size:12px;color:#94a3b8;text-align:center}
+  .contact a{color:#7c3aed;font-weight:600;text-decoration:none}
+  .contact a:hover{text-decoration:underline}
+</style>
+<div class="brand">
+  <div class="brand-mark">S</div>
+  <div class="brand-name">SmartCRM</div>
+</div>
+<div class="hero">
+  <div class="icon">${isDel ? '🗑️' : '⏸️'}</div>
+  <div class="tag">${isDel ? 'Workspace Deleted' : 'Workspace Suspended'}</div>
+  <h1>${safe(t.org_name)}</h1>
+  <div class="org">Workspace <code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:12px">/t/${safe(t.slug)}</code></div>
+  <div class="msg">
+    <b>${isDel ? 'This workspace has been removed.' : 'Access to this workspace is temporarily paused.'}</b>
+    ${isDel
+      ? 'The workspace and its data have been deleted. If this was a mistake, contact support within 30 days to request restoration.'
+      : 'This usually happens when a subscription is unpaid, expired, or has been manually paused by the account owner. All your data is safe and will return the moment access is restored.'}
+  </div>
+  <div class="next">
+    <h3>What to do next</h3>
+    <ol>
+      ${isDel
+        ? '<li>Contact your account admin if you believe this was an error.</li><li>Email support with the workspace name below to request restoration.</li>'
+        : '<li>If you\'re the <b>account admin</b>, check your billing status &amp; renew your plan.</li><li>Otherwise, contact your account admin to reactivate.</li><li>Reach out to support if you need help.</li>'}
+    </ol>
+  </div>
+  <a class="btn btn-primary" href="mailto:support@smartcrmsolution.com?subject=${encodeURIComponent((isDel ? 'Restore deleted workspace: ' : 'Reactivate suspended workspace: ') + t.org_name + ' (/t/' + t.slug + ')')}">✉ Email Support</a>
+  <a class="btn btn-ghost" href="/">Back to SmartCRM home</a>
+  <div class="contact">
+    Need immediate help? Email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a>
+  </div>
+</div>`);
+  }
   res.type('html').send(`<!doctype html><meta charset="utf-8"/>
 <title>${safe(t.org_name)} Ã¢ÂÂ SmartCRM</title>
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.55}
