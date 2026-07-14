@@ -67,6 +67,7 @@ const announcements = require('./routes/saas/announcements');
 const copilotKb = require('./routes/saas/copilotKb'); // COPILOT_KB_v1
 const saasWhatsapp = require('./routes/saas/saasWhatsapp'); // SAAS_WA_EMBEDDED_v1
 const dbVolume = require('./routes/saas/dbVolume'); // DB_VOLUME_v1 — tenant storage usage
+const transactions = require('./routes/saas/transactions'); // SAAS_TXN_v1
 const customReqs = require('./routes/saas/customRequirements');
 const webhookLogs = require('./routes/saas/webhookLogs');
 const cashfreeWebhook = require('./routes/saas/cashfreeWebhook');
@@ -119,6 +120,20 @@ try {
     // First snapshot after 90 seconds (let the server settle)
     setTimeout(() => social._runAdDailySnapshot().catch(() => {}), 90_000);
   }
+  // TKT_AUTOCLOSE_v1 — support tickets: remind tenant at 24h, auto-close at 48h.
+  try {
+    if (tickets && typeof tickets.sweepStaleTickets === 'function') {
+      setInterval(() => tickets.sweepStaleTickets().catch(() => {}), 60 * 60 * 1000);
+      setTimeout(() => tickets.sweepStaleTickets().catch(() => {}), 120_000);
+    }
+  } catch (_) {}
+  // ERRLOG_RETENTION_v1 — keep only the last 7 days of super-admin error logs.
+  try {
+    if (errorLogs && typeof errorLogs.purgeOldErrorLogs === 'function') {
+      setInterval(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 24 * 60 * 60 * 1000);
+      setTimeout(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 150_000);
+    }
+  } catch (_) {}
 } catch (_) {}
 
 // Combine every SaaS api_* into one dispatch map
@@ -130,7 +145,7 @@ const SAAS_API = {};
   tenantModules, demoTenant,
   tickets,
   finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth,
-  copilotKb, saasWhatsapp, dbVolume
+  copilotKb, saasWhatsapp, dbVolume, transactions
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -345,29 +360,19 @@ async function _runAsTenant(slug, req, res, handler) {
  * least one row when the tenant owns the record. params bind into it.
  */
 /* TENANT_IN_TOKEN_v1 (2026-07-14) — resolve the tenant for a TENANT USER TOKEN.
- *
  * The old way, at 7 native endpoints:
  *     _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 ...', [uid])
- * ...which returns the FIRST tenant (ORDER BY id ASC) whose users table has that
- * id. User ids are per-tenant serials, so id 3 exists in almost every tenant. A
- * rep's recording upload could therefore be written into a DIFFERENT COMPANY'S
- * DATABASE. It has not bitten us only because the app posts tenant-scoped URLs on
- * the happy path — the moment anything falls back to this lookup, it can.
- *
- * Order of trust:
- *   1. `t` claim in the token  → the tenant is STATED. Verify the user really is
- *      in it (a token can't point at a tenant it doesn't belong to).
- *   2. Legacy token (no `t`)   → look up on id AND EMAIL, not id alone. Email is
- *      already in every token and is effectively unique per person.
- *   3. Still more than one hit → REFUSE. Returning null (→ 404) is strictly better
- *      than silently writing a rep's call recording into someone else's CRM.
- */
+ * ...which returns the FIRST tenant (ORDER BY id ASC) whose users table has that id.
+ * User ids are PER-TENANT SERIALS (id 3 is Babita in `jay`, Neetu in `vserve`), so a
+ * rep's upload could be written into a DIFFERENT COMPANY'S DATABASE.
+ *   1. `t` claim in the token → the tenant is STATED. Verify the user is in it.
+ *   2. Legacy token (no `t`)  → look up on id AND EMAIL, not id alone.
+ *   3. Still ambiguous        → REFUSE. A 404 beats writing into the wrong CRM. */
 async function _findTenantForUser(decoded) {
   const uid = Number(decoded && decoded.id);
   if (!uid) return null;
   const email = String((decoded && decoded.email) || '').trim().toLowerCase();
 
-  // 1. The token names its tenant.
   const claimed = String((decoded && decoded.t) || '').trim();
   if (claimed) {
     try {
@@ -380,10 +385,9 @@ async function _findTenantForUser(decoded) {
           if (hit.rowCount > 0) return t;
         }
       }
-    } catch (_) { /* fall through to the legacy path */ }
+    } catch (_) { /* fall through */ }
   }
 
-  // 2. Legacy token: id + email. Collect ALL matches — do not stop at the first.
   const r = await controlDb.query(
     `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
   );
@@ -397,19 +401,15 @@ async function _findTenantForUser(decoded) {
     try {
       const hit = email
         ? await pool.query(
-            `SELECT 1 FROM users
-              WHERE id = $1 AND LOWER(COALESCE(email,'')) = $2
-                AND COALESCE(is_active, 1) = 1 LIMIT 1`, [uid, email])
+            `SELECT 1 FROM users WHERE id = $1 AND LOWER(COALESCE(email,'')) = $2
+               AND COALESCE(is_active, 1) = 1 LIMIT 1`, [uid, email])
         : await pool.query(
             'SELECT 1 FROM users WHERE id = $1 AND COALESCE(is_active, 1) = 1 LIMIT 1', [uid]);
       if (hit.rowCount > 0) matches.push(t);
-    } catch (_) { /* table missing — skip */ }
-    if (matches.length > 1) break;   // already ambiguous, stop scanning
+    } catch (_) {}
+    if (matches.length > 1) break;
   }
-
   if (matches.length === 1) return matches[0];
-
-  // 3. Ambiguous (or nothing). Never guess.
   if (matches.length > 1) {
     console.error('[_findTenantForUser] AMBIGUOUS token — user id', uid, 'email', email || '(none)',
                   'matches', matches.map(m => m.slug).join(','), '— refusing to guess');
@@ -1286,11 +1286,10 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           } catch (e) { console.warn('[/api/recordings] call_event lookup failed:', e.message); }
         }
         /* REC_LEAD_AUTHORITY_v1 (2026-07-14) — the PHONE is the authority, not the client.
-         * This used to be `if (!leadId && phone)`, i.e. a lead_id sent by the client won
-         * even when the recording's own phone number said otherwise. The client's lead came
-         * from a TIME match and the phone from a different pick, so the two could disagree —
-         * and 43 of 249 recordings landed on the wrong customer. If we have a number, the
-         * lead it belongs to is the lead, full stop. */
+         * Was `if (!leadId && phone)`: a client-supplied lead_id won even when the recording's
+         * own number said otherwise. The client's lead came from a TIME match and the phone
+         * from a different pick, so they could disagree — 108 recordings landed on the wrong
+         * customer. If we have a number, the lead it belongs to IS the lead. */
         if (phone) {
           const lead = await recRoutes._findLeadByPhone(phone);
           if (lead && Number(lead.id) !== Number(leadId || 0)) {
@@ -1391,24 +1390,14 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           }
         } catch (_) {}
         /* REC_INSERT_CONFLICT_FIX_v1 (2026-07-14) — "lead_recordings insert returned no id".
-         *
-         * This used to end with:
-         *     ON CONFLICT (user_id, dedup_key) DO NOTHING
-         * but the unique index this code self-heals into existence is PARTIAL:
-         *     CREATE UNIQUE INDEX ... ON lead_recordings(user_id, dedup_key)
-         *       WHERE dedup_key IS NOT NULL
-         * Postgres cannot infer a PARTIAL index from a bare `ON CONFLICT (cols)` — it
-         * raises "there is no unique or exclusion constraint matching the ON CONFLICT
-         * specification". That exception was then SWALLOWED by `catch { console.error }`,
-         * leaving id = null, and the request died with the useless generic message.
-         * Every upload on tenant `jay` failed this way (41/41) while `vserve` worked,
-         * because vserve carries an older non-partial index — so the bug was invisible
-         * on the tenant we always test on.
-         *
-         * Fix: don't depend on the index SHAPE at all. Plain INSERT ... RETURNING id, and
-         * treat a genuine duplicate (SQLSTATE 23505) as the race it is — go find the row
-         * that won. Works whether the index is partial, full, or absent. And the real
-         * Postgres error is now reported instead of being hidden. */
+         * Was: ON CONFLICT (user_id, dedup_key) DO NOTHING. But the unique index this code
+         * self-heals is PARTIAL (WHERE dedup_key IS NOT NULL), and Postgres cannot infer a
+         * partial index from a bare ON CONFLICT (cols) — it raises "no unique or exclusion
+         * constraint matching the ON CONFLICT specification". That was SWALLOWED by
+         * catch{console.error}, leaving id=null. Every upload on tenant `jay` failed (41/41)
+         * while `vserve` worked (older non-partial index) — invisible on our test tenant.
+         * Fix: don't depend on the index SHAPE. Plain INSERT ... RETURNING id; a real
+         * duplicate (SQLSTATE 23505) is handled as the race it is; the true error is reported. */
         let _ins = null, _insErr = null;
         try {
           _ins = await db.query(
@@ -1476,7 +1465,6 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
               });
             }
           } catch (_) {}
-          // Not a duplicate we can point at — surface the ACTUAL cause, don't hide it.
           throw new Error(
             'lead_recordings insert failed: ' +
             (_insErr ? ((_insErr.code ? _insErr.code + ' ' : '') + _insErr.message) : 'no id returned')
@@ -2133,6 +2121,8 @@ app.get('/api/sample.csv', async (req, res, next) => {
     'name', 'phone', 'alt_phone', 'whatsapp', 'email',
     // 2. Routing Ã¢ÂÂ status / source / product accepted by NAME, assigned_to by email-or-name-or-id
     'status', 'source', 'source_ref', 'product', 'assigned_to',
+    // 2b. Workspace name — LEAD_UPLOAD_WORKSPACE_COL (blank = none)
+    'workspace',
     // 3. Address
     'address', 'city', 'state', 'pincode', 'country', 'company',
     // 4. Qualification
@@ -2152,6 +2142,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
     const row = {
       name: '', phone: '', alt_phone: '', whatsapp: '', email: '',
       status: '', source: '', source_ref: '', product: '', assigned_to: '',
+      workspace: '',
       address: '', city: '', state: '', pincode: '', country: '', company: '',
       value: '', currency: '', qualified: '', tags: '',
       next_followup_at: '', notes: '',
@@ -2169,6 +2160,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
       email: 'john@example.com',
       status: 'New', source: 'Website', product: 'Basic Plan',
       assigned_to: 'sales1@yourcompany.com',
+      workspace: 'Customers',
       address: '12 MG Road', city: 'Mumbai', state: 'MH',
       pincode: '400001', country: 'India', company: 'Acme Corp',
       value: '50000', currency: 'INR', qualified: '1',
@@ -2215,6 +2207,7 @@ app.get('/api/sample.xls', async (req, res, next) => {
   const baseCols = [
     'name', 'phone', 'alt_phone', 'whatsapp', 'email',
     'status', 'source', 'source_ref', 'product', 'assigned_to',
+    'workspace',
     'address', 'city', 'state', 'pincode', 'country', 'company',
     'value', 'currency', 'qualified', 'tags',
     'next_followup_at', 'notes',
@@ -2229,6 +2222,7 @@ app.get('/api/sample.xls', async (req, res, next) => {
     {
       name: 'Acme Corp', phone: '9876543210', email: 'sales@acme.example',
       status: 'New', source: 'Website', product: 'Premium plan',
+      workspace: 'Customers',
       city: 'Mumbai', country: 'India', value: '50000', currency: 'INR',
       qualified: '1', tags: 'enterprise,priority',
       notes: 'Sample row Ã¢ÂÂ replace with real data'
@@ -2252,6 +2246,23 @@ app.get('/api/sample.xls', async (req, res, next) => {
 // Set APK_DOWNLOAD_URL in Railway environment variables to a direct-
 // download link (Google Drive, S3, Cloudflare R2, etc.) and the button
 // works immediately.  Fallback: place LeadCRM.apk in public/ (Git LFS).
+/* APK_UPDATE_FIX_v2 (2026-07-10) — serve the version metadata JSON so the
+ * SPA _apkUpdateCheck() actually receives a response. Before this, the
+ * endpoint 404 silently for every client and the update banner NEVER
+ * appeared. Root cause of the update-doesnt-work bug. */
+app.get('/LeadCRM.apk.version.json', (req, res) => {
+  const _fs = require('fs');
+  const filePath = path.join(__dirname, 'public', 'LeadCRM.apk.version.json');
+  res.type('application/json');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  _fs.stat(filePath, (err) => {
+    if (err) return res.status(404).json({ error: 'version file missing' });
+    res.sendFile(filePath);
+  });
+});
+
 app.get('/LeadCRM.apk', (req, res) => {
   const cdnUrl = process.env.APK_DOWNLOAD_URL;
   if (cdnUrl) return res.redirect(302, cdnUrl);
@@ -2342,6 +2353,69 @@ a{color:#4338ca;text-decoration:none}
 </script>`);
   }
   const t = tenant;
+  /* TENANT_SUSPENDED_UX (2026-07-14) — proper suspended / deleted UI so a
+   * paying customer sees a clear billing message, not "still being wired up".
+   */
+  if (t.status === 'suspended' || t.status === 'deleted') {
+    const isDel = t.status === 'deleted';
+    return res.type('html').send(`<!doctype html><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>${safe(t.org_name)} — ${isDel ? 'Deleted' : 'Suspended'} — SmartCRM</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:24px 20px;color:#0f172a;background:#0b1220;min-height:100vh;line-height:1.55}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:24px}
+  .brand-mark{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:18px}
+  .brand-name{font-size:15px;color:#e2e8f0;font-weight:700}
+  .hero{background:#fff;border-radius:16px;padding:28px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);text-align:center;margin-bottom:16px}
+  .icon{width:80px;height:80px;border-radius:50%;background:${isDel ? '#fef2f2' : '#fefce8'};display:flex;align-items:center;justify-content:center;font-size:40px;margin:0 auto 18px}
+  h1{font-size:22px;margin:0 0 8px;color:#0f172a;font-weight:800}
+  .tag{display:inline-block;padding:4px 10px;background:${isDel ? '#dc2626' : '#ca8a04'};color:#fff;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-radius:6px;margin-bottom:12px}
+  .org{font-size:14px;color:#64748b;margin-bottom:20px}
+  .msg{background:${isDel ? '#fef2f2' : '#fefce8'};border:1px solid ${isDel ? '#fecaca' : '#fef08a'};border-radius:10px;padding:14px 16px;text-align:left;color:${isDel ? '#7f1d1d' : '#713f12'};font-size:13.5px;margin-bottom:18px}
+  .msg b{display:block;margin-bottom:6px;font-size:14px}
+  .next{background:#f8fafc;border-radius:10px;padding:14px 16px;text-align:left;font-size:13px;color:#334155;margin-bottom:18px}
+  .next h3{margin:0 0 8px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:800}
+  .next ol{margin:0;padding-left:18px}
+  .next li{margin-bottom:4px}
+  .btn{display:block;width:100%;padding:12px 16px;border-radius:10px;font-weight:700;font-size:14px;text-decoration:none;text-align:center;margin-bottom:8px;transition:all .15s;border:none;cursor:pointer}
+  .btn-primary{background:#7c3aed;color:#fff}
+  .btn-primary:hover{background:#6d28d9}
+  .btn-ghost{background:#f3f4f6;color:#374151;border:1px solid #d1d5db}
+  .contact{margin-top:18px;padding-top:14px;border-top:1px solid #e5e7eb;font-size:12px;color:#94a3b8;text-align:center}
+  .contact a{color:#7c3aed;font-weight:600;text-decoration:none}
+  .contact a:hover{text-decoration:underline}
+</style>
+<div class="brand">
+  <div class="brand-mark">S</div>
+  <div class="brand-name">SmartCRM</div>
+</div>
+<div class="hero">
+  <div class="icon">${isDel ? '🗑️' : '⏸️'}</div>
+  <div class="tag">${isDel ? 'Workspace Deleted' : 'Workspace Suspended'}</div>
+  <h1>${safe(t.org_name)}</h1>
+  <div class="org">Workspace <code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:12px">/t/${safe(t.slug)}</code></div>
+  <div class="msg">
+    <b>${isDel ? 'This workspace has been removed.' : 'Access to this workspace is temporarily paused.'}</b>
+    ${isDel
+      ? 'The workspace and its data have been deleted. If this was a mistake, contact support within 30 days to request restoration.'
+      : 'This usually happens when a subscription is unpaid, expired, or has been manually paused by the account owner. All your data is safe and will return the moment access is restored.'}
+  </div>
+  <div class="next">
+    <h3>What to do next</h3>
+    <ol>
+      ${isDel
+        ? '<li>Contact your account admin if you believe this was an error.</li><li>Email support with the workspace name below to request restoration.</li>'
+        : '<li>If you\'re the <b>account admin</b>, check your billing status &amp; renew your plan.</li><li>Otherwise, contact your account admin to reactivate.</li><li>Reach out to support if you need help.</li>'}
+    </ol>
+  </div>
+  <a class="btn btn-primary" href="mailto:support@smartcrmsolution.com?subject=${encodeURIComponent((isDel ? 'Restore deleted workspace: ' : 'Reactivate suspended workspace: ') + t.org_name + ' (/t/' + t.slug + ')')}">✉ Email Support</a>
+  <a class="btn btn-ghost" href="/">Back to SmartCRM home</a>
+  <div class="contact">
+    Need immediate help? Email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a>
+  </div>
+</div>`);
+  }
   res.type('html').send(`<!doctype html><meta charset="utf-8"/>
 <title>${safe(t.org_name)} Ã¢ÂÂ SmartCRM</title>
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.55}
@@ -2534,6 +2608,89 @@ app.get('/api/wa-catalogue-file/:token', (req, res) => {
         return res.end(row.bytes);
       } catch (e) {
         console.error('[wa-catalogue-file] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'read failed' });
+      }
+    });
+});
+
+/* FIN_DOC_UPLOAD_v1 (2026-07-08) — Finance pack doc-checklist file upload.
+ * POST /api/fin-doc-upload  (multipart, field 'file' + form field 'doc_id')
+ *   → stores bytes in fin_doc_media (BYTEA), sets file_url/file_name/status
+ *     on the fin_doc_checklist row, returns { ok, url }.
+ * GET  /api/fin-doc-file/:token  → authenticated download / inline view.
+ * Wired to attachTenant so /api/* resolves the caller's tenant. */
+const _finDocUpload = _multer({ storage: _multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+app.post('/api/fin-doc-upload', _finDocUpload.single('file'), (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const me = await authUser(token);
+        if (!req.file) return res.status(400).json({ error: 'file required (multipart field "file")' });
+        const docId = Number(req.body && req.body.doc_id || 0);
+        if (!docId) return res.status(400).json({ error: 'doc_id required' });
+        // Confirm the doc exists (and get lead_id for the media row)
+        const dx = await tenantDb.query(`SELECT id, lead_id FROM fin_doc_checklist WHERE id=$1`, [docId]);
+        if (!dx.rows.length) return res.status(404).json({ error: 'doc not found' });
+        // Idempotent schema — same ALTERs as routes/packs/finance.js
+        await tenantDb.query(`CREATE TABLE IF NOT EXISTS fin_doc_media (
+          token TEXT PRIMARY KEY, mime TEXT, filename TEXT, size BIGINT, bytes BYTEA,
+          doc_id INTEGER, lead_id INTEGER,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        // Drop any previously attached file on this checklist row (single latest wins)
+        await tenantDb.query(`DELETE FROM fin_doc_media WHERE doc_id=$1`, [docId]).catch(()=>{});
+        const tok = require('crypto').randomBytes(18).toString('hex');
+        await tenantDb.query(
+          `INSERT INTO fin_doc_media (token, mime, filename, size, bytes, doc_id, lead_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [tok, req.file.mimetype || 'application/octet-stream', req.file.originalname || '',
+           req.file.size || 0, req.file.buffer, docId, dx.rows[0].lead_id || null]
+        );
+        const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+        const host  = req.get('host');
+        const url = proto + '://' + host + '/t/' + req.tenantSlug + '/api/fin-doc-file/' + tok;
+        // Stamp the checklist row + auto-mark status='received'
+        await tenantDb.query(
+          `UPDATE fin_doc_checklist SET
+             file_url=$1, file_mime=$2, file_size=$3, file_name=$4, file_token=$5,
+             uploaded_at=NOW(), uploaded_by=$6,
+             status = CASE WHEN status='pending' THEN 'received' ELSE status END,
+             updated_at=NOW()
+           WHERE id=$7`,
+          [url, req.file.mimetype || 'application/octet-stream', req.file.size || 0,
+           req.file.originalname || '', tok, me.id, docId]);
+        return res.json({ ok: true, url, token: tok, doc_id: docId,
+                          mime_type: req.file.mimetype || 'application/octet-stream',
+                          filename: req.file.originalname || '', size: req.file.size || 0 });
+      } catch (e) {
+        console.error('[fin-doc-upload] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'upload failed' });
+      }
+    });
+});
+app.get('/api/fin-doc-file/:token', (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const hdrTok = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const authTok = hdrTok || req.query.tok || '';
+        try { await authUser(authTok); } catch (_) { return res.status(401).json({ error: 'auth required' }); }
+        const tok = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
+        if (!tok) return res.status(404).end();
+        const r = await tenantDb.query(`SELECT mime, bytes, filename FROM fin_doc_media WHERE token=$1`, [tok]);
+        if (!r.rows.length) return res.status(404).json({ error: 'file not found' });
+        const row = r.rows[0];
+        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        if (row.filename) res.setHeader('Content-Disposition', 'inline; filename="' + row.filename.replace(/["\\]/g, '') + '"');
+        return res.end(row.bytes);
+      } catch (e) {
+        console.error('[fin-doc-file] error:', e && e.message);
         return res.status(500).json({ error: e && e.message || 'read failed' });
       }
     });
