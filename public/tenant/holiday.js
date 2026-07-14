@@ -506,6 +506,71 @@
       refresh();
     };
 
+
+    /* HOLIDAY_ITIN_UX_v1 — proper modal form helper */
+    function _showItinModal(opts) {
+      /* opts: { title, fields:[{name,label,type,value,placeholder,options,required}], onSubmit(values), submitLabel } */
+      return new Promise(function (resolve) {
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;';
+        var card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:14px;max-width:540px;width:100%;max-height:92vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.35);';
+        card.innerHTML = '<div style="padding:16px 22px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;border-radius:14px 14px 0 0">'
+          + '<h3 style="margin:0;font-size:16px;font-weight:800">' + (opts.title || 'Form') + '</h3>'
+          + '<button id="_itm_x" style="background:rgba(255,255,255,.2);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:18px;line-height:1">×</button>'
+          + '</div><div style="padding:18px 22px" id="_itm_body"></div>'
+          + '<div style="padding:14px 22px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#f9fafb;border-radius:0 0 14px 14px">'
+          +   '<button id="_itm_cancel" style="padding:8px 16px;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;font-weight:600">Cancel</button>'
+          +   '<button id="_itm_save"   style="padding:8px 18px;background:#0f766e;color:#fff;border:0;border-radius:8px;cursor:pointer;font-weight:700">' + (opts.submitLabel || 'Save') + '</button>'
+          + '</div>';
+        wrap.appendChild(card);
+        var body = card.querySelector('#_itm_body');
+        (opts.fields || []).forEach(function (f) {
+          var row = document.createElement('div'); row.style.cssText = 'margin-bottom:14px;';
+          var lbl = document.createElement('label');
+          lbl.style.cssText = 'display:block;font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;letter-spacing:.5px;';
+          lbl.textContent = f.label + (f.required ? ' *' : '');
+          row.appendChild(lbl);
+          var inp;
+          if (f.type === 'select') {
+            inp = document.createElement('select');
+            (f.options || []).forEach(function (o) {
+              var op = document.createElement('option');
+              op.value = o.value; op.textContent = o.label;
+              if (String(f.value) === String(o.value)) op.selected = true;
+              inp.appendChild(op);
+            });
+          } else if (f.type === 'textarea') {
+            inp = document.createElement('textarea'); inp.rows = 3;
+            inp.value = f.value || '';
+          } else {
+            inp = document.createElement('input'); inp.type = f.type || 'text';
+            inp.value = f.value || '';
+          }
+          inp.name = f.name;
+          if (f.placeholder) inp.placeholder = f.placeholder;
+          inp.style.cssText = 'width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box;';
+          row.appendChild(inp);
+          body.appendChild(row);
+        });
+        document.body.appendChild(wrap);
+        var firstInp = body.querySelector('input,select,textarea');
+        if (firstInp) firstInp.focus();
+        function close(val) { try { document.body.removeChild(wrap); } catch(_) {} resolve(val); }
+        card.querySelector('#_itm_x').onclick     = function () { close(null); };
+        card.querySelector('#_itm_cancel').onclick = function () { close(null); };
+        wrap.onclick = function (ev) { if (ev.target === wrap) close(null); };
+        card.querySelector('#_itm_save').onclick = function () {
+          var out = {};
+          body.querySelectorAll('input,select,textarea').forEach(function (el) { out[el.name] = el.value; });
+          /* required-field check */
+          var missing = (opts.fields || []).find(function (f) { return f.required && !String(out[f.name] || '').trim(); });
+          if (missing) { alert(missing.label + ' is required'); return; }
+          close(out);
+        };
+      });
+    }
+
     // ════════════════════════════════════════════════════════════════
     //  ITINERARY BUILDER
     // ════════════════════════════════════════════════════════════════
@@ -591,44 +656,179 @@
         days.forEach(function (d) {
           const dayActs = acts.filter(function (a) { return a.day_id === d.id; });
           const dayCard = h('div', { style: { background: '#fff',
-            border: '1px solid #ccfbf1', borderRadius: '10px',
-            padding: '14px', marginBottom: '10px' } },
-            h('div', { style: { display: 'flex', justifyContent: 'space-between',
-              alignItems: 'center', marginBottom: '8px' } },
-              h('h4', { style: { margin: 0, fontSize: '14px' } },
-                'Day ' + d.day_no + ' · ' + (d.city || '—')),
-              h('span', { style: { fontSize: '12px', color: '#64748b' } },
-                (d.hotel_name || 'No hotel') + ' · ' + (d.meal_plan || 'no meal'))),
-            h('div', {}, dayActs.length
-              ? dayActs.map(function (a) {
-                  return h('div', { style: { display: 'flex', gap: '10px',
-                    padding: '6px 0', borderBottom: '1px solid #ecfdf5', fontSize: '12.5px' } },
-                    h('div', { style: { color: TEAL2, fontWeight: 600, minWidth: '70px' } }, a.time_str || ''),
-                    h('div', { style: { fontSize: '14px' } }, kindEmoji(a.kind)),
-                    h('div', { style: { flex: 1 } },
-                      h('b', {}, a.title),
-                      a.detail ? h('div', { style: { color: '#64748b', fontSize: '11.5px' } }, a.detail) : null)
-                  );
-                })
-              : h('div', { style: { color: '#64748b', fontSize: '12px', fontStyle: 'italic' } }, 'No activities planned for this day.'))
+            border: '1px solid #ccfbf1', borderRadius: '12px',
+            padding: '0', marginBottom: '12px', overflow: 'hidden',
+            boxShadow: '0 1px 3px rgba(0,0,0,.05)' } });
+          /* Header row — pretty pill for day# + city + meta + edit/delete */
+          const dayHeader = h('div', { style: { display: 'flex',
+            justifyContent: 'space-between', alignItems: 'center',
+            padding: '12px 16px', background: 'linear-gradient(135deg,#f0fdfa,#ecfdf5)',
+            borderBottom: '1px solid #ccfbf1' } },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+              h('span', { style: { background: TEAL, color: '#fff',
+                borderRadius: '6px', padding: '3px 10px', fontSize: '11px',
+                fontWeight: 800, letterSpacing: '.5px' } }, 'DAY ' + d.day_no),
+              h('div', {},
+                h('div', { style: { fontSize: '15px', fontWeight: 700, color: '#0f172a' } },
+                  d.city || 'No city set'),
+                h('div', { style: { fontSize: '11.5px', color: '#64748b', marginTop: '2px' } },
+                  (d.day_date ? new Date(d.day_date).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) + ' · ' : '')
+                  + (d.hotel_name || 'Hotel not set')
+                  + (d.room_type ? ' · ' + d.room_type : '')
+                  + ' · ' + (d.meal_plan ? d.meal_plan.toUpperCase() : 'No meal'))
+              )
+            ),
+            h('div', { style: { display: 'flex', gap: '6px' } },
+              h('button', { style: { padding: '4px 10px', background: '#fff',
+                border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer',
+                fontSize: '11px', fontWeight: 600, color: '#374151' },
+                onclick: function () { _editDay(d); } }, '✏ Edit'),
+              h('button', { style: { padding: '4px 10px', background: '#fff',
+                border: '1px solid #fca5a5', borderRadius: '6px', cursor: 'pointer',
+                fontSize: '11px', fontWeight: 600, color: '#dc2626' },
+                onclick: function () { _delDay(d); } }, '🗑 Delete')
+            )
           );
+          dayCard.appendChild(dayHeader);
+          /* Activities table */
+          const body = h('div', { style: { padding: '12px 16px' } });
+          if (dayActs.length) {
+            dayActs.forEach(function (a) {
+              body.appendChild(h('div', { style: { display: 'flex', gap: '12px',
+                alignItems: 'flex-start', padding: '8px 0',
+                borderBottom: '1px solid #f1f5f9', fontSize: '13px' } },
+                h('div', { style: { color: TEAL2, fontWeight: 700, minWidth: '80px',
+                  fontSize: '12.5px' } }, a.time_str || '—'),
+                h('div', { style: { fontSize: '18px', minWidth: '24px' } }, kindEmoji(a.kind)),
+                h('div', { style: { flex: 1 } },
+                  h('div', { style: { fontWeight: 600, color: '#0f172a' } }, a.title),
+                  a.detail ? h('div', { style: { color: '#64748b', fontSize: '12px', marginTop: '2px' } }, a.detail) : null
+                ),
+                h('button', { style: { padding: '2px 8px', background: 'transparent',
+                  border: '1px solid #fca5a5', borderRadius: '4px', cursor: 'pointer',
+                  fontSize: '11px', color: '#dc2626' },
+                  onclick: function () { _delAct(a); } }, '×')
+              ));
+            });
+          } else {
+            body.appendChild(h('div', { style: { color: '#94a3b8', fontSize: '12.5px',
+              fontStyle: 'italic', padding: '6px 0' } }, 'No activities yet — click "+ Add Activity"'));
+          }
+          body.appendChild(h('div', { style: { marginTop: '10px' } },
+            h('button', { style: { padding: '6px 12px', background: '#fff',
+              border: '1px dashed ' + TEAL, color: TEAL2, borderRadius: '6px',
+              cursor: 'pointer', fontSize: '12px', fontWeight: 700 },
+              onclick: function () { _addAct(d); } }, '+ Add Activity')
+          ));
+          dayCard.appendChild(body);
           wrap.appendChild(dayCard);
         });
 
-        // Add day button
+        // Big Add Day button
         const addDayBtn = h('div', { style: { marginTop: '14px' } },
-          btn('+ Add Day', async function () {
-            const dayNo = days.length + 1;
-            const city = prompt('City for Day ' + dayNo, days.length ? days[days.length - 1].city : '');
-            if (!city) return;
-            try {
-              await api('api_tour_itinerary_upsertDay',
-                { itinerary_id: itn.id, day_no: dayNo, city: city });
-              toast('Day added');
-              load();
-            } catch (e) { toast(e.message); }
-          }, 'primary'));
+          btn('+ Add Day', function () { _addDay(); }, 'primary'));
         wrap.appendChild(addDayBtn);
+
+        /* ── HOLIDAY_ITIN_UX_v1 — modal handlers ── */
+        function _addDay() {
+          var dayNo = days.length + 1;
+          var lastCity = days.length ? days[days.length - 1].city || '' : '';
+          _showItinModal({
+            title: '➕ Add Day ' + dayNo,
+            submitLabel: 'Add Day',
+            fields: [
+              { name:'day_date',   label:'Date',        type:'date',  value:'' },
+              { name:'city',       label:'City',        type:'text',  value:lastCity, placeholder:'e.g. Zurich', required:true },
+              { name:'hotel_name', label:'Hotel',       type:'text',  value:'',       placeholder:'e.g. Marriott Downtown' },
+              { name:'room_type',  label:'Room Type',   type:'text',  value:'',       placeholder:'e.g. Deluxe Double' },
+              { name:'meal_plan',  label:'Meal Plan',   type:'select', value:'bb',
+                options:[
+                  {value:'',    label:'— none —'},
+                  {value:'bb',  label:'BB (Breakfast only)'},
+                  {value:'hb',  label:'HB (Half Board)'},
+                  {value:'fb',  label:'FB (Full Board)'},
+                  {value:'ai',  label:'AI (All-Inclusive)'}
+                ] },
+              { name:'notes',      label:'Notes',       type:'textarea', value:'', placeholder:'Anything special about this day…' }
+            ]
+          }).then(function (v) {
+            if (!v) return;
+            api('api_tour_itinerary_upsertDay', Object.assign({
+              itinerary_id: itn.id, day_no: dayNo
+            }, v)).then(function () {
+              toast('✓ Day added'); load();
+            }).catch(function (e) { toast(e.message); });
+          });
+        }
+        function _editDay(d) {
+          _showItinModal({
+            title: '✏ Edit Day ' + d.day_no,
+            submitLabel: 'Save Changes',
+            fields: [
+              { name:'day_date',   label:'Date',        type:'date',  value:(d.day_date || '').slice(0,10) },
+              { name:'city',       label:'City',        type:'text',  value:d.city || '', required:true },
+              { name:'hotel_name', label:'Hotel',       type:'text',  value:d.hotel_name || '' },
+              { name:'room_type',  label:'Room Type',   type:'text',  value:d.room_type || '' },
+              { name:'meal_plan',  label:'Meal Plan',   type:'select', value:d.meal_plan || '',
+                options:[
+                  {value:'',    label:'— none —'},
+                  {value:'bb',  label:'BB (Breakfast only)'},
+                  {value:'hb',  label:'HB (Half Board)'},
+                  {value:'fb',  label:'FB (Full Board)'},
+                  {value:'ai',  label:'AI (All-Inclusive)'}
+                ] },
+              { name:'notes',      label:'Notes',       type:'textarea', value:d.notes || '' }
+            ]
+          }).then(function (v) {
+            if (!v) return;
+            api('api_tour_itinerary_upsertDay', Object.assign({
+              id: d.id, itinerary_id: itn.id, day_no: d.day_no
+            }, v)).then(function () {
+              toast('✓ Day updated'); load();
+            }).catch(function (e) { toast(e.message); });
+          });
+        }
+        function _delDay(d) {
+          if (!confirm('Delete Day ' + d.day_no + ' (' + (d.city || 'no city') + ')? All activities on this day will also be deleted.')) return;
+          api('api_tour_itinerary_deleteDay', { id: d.id })
+            .then(function () { toast('✓ Day deleted'); load(); })
+            .catch(function (e) { toast(e.message); });
+        }
+        function _addAct(d) {
+          _showItinModal({
+            title: '➕ Add Activity to Day ' + d.day_no,
+            submitLabel: 'Add Activity',
+            fields: [
+              { name:'time_str', label:'Time',   type:'text', value:'', placeholder:'e.g. 09:00 AM' },
+              { name:'kind',     label:'Type',   type:'select', value:'sightseeing',
+                options:[
+                  {value:'sightseeing', label:'🏛️ Sightseeing'},
+                  {value:'meal',        label:'🍽️ Meal'},
+                  {value:'transfer',    label:'🚗 Transfer'},
+                  {value:'arrival',     label:'✈️ Arrival'},
+                  {value:'departure',   label:'🛫 Departure'},
+                  {value:'leisure',     label:'🌴 Leisure'},
+                  {value:'adventure',   label:'🪂 Adventure'},
+                  {value:'shopping',    label:'🛍️ Shopping'}
+                ] },
+              { name:'title',    label:'Title',  type:'text', value:'', placeholder:'e.g. Visit Eiffel Tower', required:true },
+              { name:'detail',   label:'Detail', type:'textarea', value:'', placeholder:'More info, meeting point, ticket price…' }
+            ]
+          }).then(function (v) {
+            if (!v) return;
+            api('api_tour_itinerary_addActivity', Object.assign({
+              day_id: d.id, seq: (dayActs.length || 0) + 1
+            }, v)).then(function () {
+              toast('✓ Activity added'); load();
+            }).catch(function (e) { toast(e.message); });
+          });
+        }
+        function _delAct(a) {
+          if (!confirm('Delete this activity?')) return;
+          api('api_tour_itinerary_deleteActivity', { id: a.id })
+            .then(function () { toast('✓ Deleted'); load(); })
+            .catch(function (e) { toast(e.message); });
+        }
       }
       function statusBadge(s) {
         if (s === 'acknowledged') return pill('✓ Acknowledged', 'ok');

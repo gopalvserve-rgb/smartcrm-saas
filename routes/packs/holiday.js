@@ -483,6 +483,33 @@ async function api_tour_itinerary_addActivity(_token, args) {
   return { ok: true, id: r.rows[0].id };
 }
 
+/* HOLIDAY_ITIN_UX_v1 — delete + reorder helpers */
+async function api_tour_itinerary_deleteDay(_token, args) {
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM tour_itinerary_activities WHERE day_id = $1`, [id]).catch(()=>{});
+  await db.query(`DELETE FROM tour_itinerary_days WHERE id = $1`, [id]);
+  return { ok: true };
+}
+
+async function api_tour_itinerary_deleteActivity(_token, args) {
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM tour_itinerary_activities WHERE id = $1`, [id]);
+  return { ok: true };
+}
+
+async function api_tour_itinerary_updateActivity(_token, args) {
+  args = args || {};
+  const id = Number(args.id || 0);
+  if (!id) throw new Error('id required');
+  await db.query(
+    `UPDATE tour_itinerary_activities SET time_str = $1, kind = $2, title = $3, detail = $4 WHERE id = $5`,
+    [args.time_str || null, args.kind || 'sightseeing', args.title || '', args.detail || null, id]
+  );
+  return { ok: true };
+}
+
 async function api_tour_payment_record(_token, args) {
   args = args || {};
   const bid = Number(args.booking_id || 0);
@@ -891,6 +918,9 @@ module.exports = {
   api_tour_itinerary_byBooking,
   api_tour_itinerary_upsertDay,
   api_tour_itinerary_addActivity,
+  api_tour_itinerary_deleteDay,
+  api_tour_itinerary_deleteActivity,
+  api_tour_itinerary_updateActivity,
   api_tour_payment_record,
   api_tour_payment_list,
   api_tour_report_upcoming,
