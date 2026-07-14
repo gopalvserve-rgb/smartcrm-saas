@@ -391,6 +391,8 @@ async function api_leads_recordings(token, leadId) {
  *  simply no longer shown as a call. The phone's call log remains the truth. */
 async function api_call_history(token, limit) {
   const me = await authUser(token);
+  // CALL_EVENT_COLS_TENANT_FIX_v1 — reads ce.src; ensure the column exists on THIS tenant.
+  await require('../utils/callEventCols').ensureCallEventCols();
   const lim = Math.min(Number(limit) || 100, 500);
   const isAdminish = ['admin','manager','team_leader'].includes(String(me.role||''));
   if (isAdminish) {

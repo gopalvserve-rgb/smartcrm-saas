@@ -22,20 +22,16 @@ const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 const { _findLeadByPhone, maybeAutoCreateLeadFromCall } = require('./recordings');
 
-// Lazy, idempotent column add. Runs once per process; safe on every tenant.
-let _cols = false;
-async function _ensureCols() {
-  if (_cols) return;
-  try {
-    await db.query(
-      `ALTER TABLE call_events
-         ADD COLUMN IF NOT EXISTS sim_slot  INTEGER,
-         ADD COLUMN IF NOT EXISTS sim_label TEXT,
-         ADD COLUMN IF NOT EXISTS src       TEXT`
-    );
-  } catch (e) { /* best-effort */ }
-  _cols = true;
-}
+/* CALL_EVENT_COLS_TENANT_FIX_v1 (2026-07-13) — this used to be:
+ *
+ *     let _cols = false;
+ *     async function _ensureCols() { if (_cols) return; ...ALTER...; _cols = true; }
+ *
+ * ...which is a PER-PROCESS flag in a ONE-DB-PER-TENANT app. The first tenant to sync
+ * set it for everybody, so no other tenant's DB ever got sim_slot/sim_label/src, and
+ * any tenant that then opened Call Activity got "column ce.src does not exist".
+ * The guard is now keyed by tenant and shared with every route that reads the columns. */
+const { ensureCallEventCols: _ensureCols } = require('../utils/callEventCols');
 
 /**
  * payload = {

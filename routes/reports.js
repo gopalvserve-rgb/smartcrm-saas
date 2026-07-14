@@ -935,6 +935,13 @@ async function api_reports_aiCostEstimator(token, opts) {
 
 async function api_reports_callActivity(token, filters) {
   const me = await authUser(token);
+  /* CALL_EVENT_COLS_TENANT_FIX_v1 (2026-07-13) — this query reads ce.src, but the
+   * self-healing ALTER used to live only in callLogSync.js behind a PER-PROCESS flag.
+   * A tenant that had never run a call-log sync (or that booted after another tenant
+   * had already flipped the flag) simply did not have the column, and Call Activity
+   * died with "column ce.src does not exist" (live: tenant `learnimo`). Every reader
+   * of these columns must ensure them, not just the writer. */
+  await require('../utils/callEventCols').ensureCallEventCols();
   filters = filters || {};
   // Default window: last 30 days
   const to   = filters.to   ? new Date(filters.to)   : new Date();
