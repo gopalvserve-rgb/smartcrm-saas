@@ -1015,6 +1015,112 @@ async function api_recording_recentInsights(token, opts) {
   }
 }
 
+
+/* ============================================================================
+ * REC_TIME_MATCH_v1 (2026-07-14) — why recordings stopped uploading.
+ *
+ * THE OUTAGE: zero recordings reached ANY tenant after 7 Jul 13:02. The server was
+ * never at fault — a manual test POST to /api/recordings returned 200 and mapped to
+ * the right lead. The phones simply never called it: syncRecordings() in app.js
+ * refuses to upload a file it cannot tie to a lead *from the filename*:
+ *
+ *     if (!includeUnmatched && !matchedLeadId) { skippedNoMatch++; continue; }
+ *
+ * The filename is the WORST source of truth we have. OEMs name files however they
+ * like — plenty carry no number and no contact name at all ("Record_20260714.amr"),
+ * and then every recording is silently dropped. Meanwhile the CRM already knows
+ * exactly who the rep was talking to at that moment: call_events, which the call-log
+ * sync keeps complete (Babita: 137 calls; vserve reps: hundreds).
+ *
+ * The upload endpoint has ALWAYS matched by time (call_events within ±5 min of
+ * started_at). It just never got the chance, because the client threw the file away
+ * first. So: expose that same lookup so the client can ask BEFORE it decides.
+ *
+ * The "no personal calls" policy is preserved — and is now actually stronger. We only
+ * report a match when the call at that moment belongs to a CRM lead. A call to a
+ * number that isn't a lead (family, courier, OTP) still returns matched:false and is
+ * still skipped — but now on the basis of who was really called, not on whether the
+ * handset happened to write a number into the filename.
+ * ========================================================================== */
+async function api_recordings_callAtTime(token, opts) {
+  const me = await authUser(token);
+  const p = opts || {};
+  const startedMs = p.started_at ? new Date(p.started_at).getTime() : Number(p.started_at_ms) || 0;
+  if (!startedMs || isNaN(startedMs)) return { matched: false, reason: 'no_started_at' };
+
+  // A recording's timestamp comes from the filename or the file's mtime, so it can sit
+  // anywhere between the call's start and its end. Default ±10 min covers both ends of
+  // a long call plus clock skew, and is still far too tight to grab a different call.
+  const winMin = Math.max(1, Math.min(Number(p.window_min) || 10, 60));
+  const from = new Date(startedMs - winMin * 60000).toISOString();
+  const to   = new Date(startedMs + winMin * 60000).toISOString();
+  const hint = String(p.last_four || '').replace(/\D/g, '');
+
+  const { rows } = await db.query(
+    `SELECT ce.id, ce.phone, ce.lead_id, ce.direction, ce.duration_s, ce.created_at,
+            l.name AS lead_name
+       FROM call_events ce
+       LEFT JOIN leads l ON l.id = ce.lead_id
+      WHERE ce.user_id = $1
+        AND ce.created_at BETWEEN $2 AND $3
+        AND COALESCE(ce.event,'') NOT IN ('dial_requested', 'autodial_requested', 'incoming_ringing')
+        AND COALESCE(ce.phone,'') <> ''
+      ORDER BY ABS(EXTRACT(EPOCH FROM (ce.created_at - $4::timestamptz))) ASC
+      LIMIT 20`,
+    [me.id, from, to, new Date(startedMs).toISOString()]
+  );
+  if (!rows.length) return { matched: false, reason: 'no_call_at_that_time' };
+
+  // Samsung-style filenames often carry only the last 4 digits — use them to
+  // disambiguate when the rep made several calls inside the window.
+  let pick = null;
+  if (hint.length >= 3 && hint.length <= 5) {
+    pick = rows.find(r => String(r.phone || '').replace(/\D/g, '').endsWith(hint));
+  }
+  // Prefer a call that IS a lead over one that isn't; otherwise take the closest in time.
+  if (!pick) pick = rows.find(r => r.lead_id) || rows[0];
+
+  if (!pick.lead_id) {
+    // A real call, but not to a CRM lead → personal call. Skip, as the policy intends.
+    return { matched: false, reason: 'not_a_crm_lead', phone: pick.phone || '' };
+  }
+  return {
+    matched: true,
+    lead_id: pick.lead_id,
+    lead_name: pick.lead_name || null,
+    phone: pick.phone || '',
+    direction: pick.direction || 'out',
+    duration_s: Number(pick.duration_s) || 0,
+    call_at: pick.created_at
+  };
+}
+
+/* REC_FILENAME_DEDUP_FIX_v1 (2026-07-14) — the SPA has been calling this on EVERY
+ * sync since 28 June and it DID NOT EXIST: 4,959 × "Unknown function: 
+ * api_recordings_filenamesPresent" (404) in the error log. The call is wrapped in a
+ * try/catch so it failed silently, which is exactly why nobody noticed — the
+ * server-side dedup has simply never worked, leaving the client relying on a
+ * localStorage watermark that a reinstall or a cache clear wipes. */
+async function api_recordings_filenamesPresent(token, opts) {
+  const me = await authUser(token);
+  const names = ((opts && opts.filenames) || []).filter(Boolean).map(String).slice(0, 500);
+  if (!names.length) return { present: [] };
+  const keys = names.map(n => 'p:' + n);
+  const { rows } = await db.query(
+    `SELECT device_path, dedup_key FROM lead_recordings
+      WHERE user_id = $1
+        AND (device_path = ANY($2) OR dedup_key = ANY($3))`,
+    [me.id, names, keys]
+  ).catch(() => ({ rows: [] }));
+  const present = new Set();
+  rows.forEach(r => {
+    if (r.device_path && names.includes(r.device_path)) present.add(r.device_path);
+    const dk = String(r.dedup_key || '');
+    if (dk.startsWith('p:') && names.includes(dk.slice(2))) present.add(dk.slice(2));
+  });
+  return { present: Array.from(present) };
+}
+
 module.exports = {
   maybeAutoCreateLeadFromCall,   // AUTOLEAD_WIRE_v1
   api_call_logEvent,
@@ -1033,5 +1139,7 @@ module.exports = {
   api_recording_rate,
   _findLeadByPhone,
   _getAutoleadCfg,
-  api_recording_recentInsights
+  api_recording_recentInsights,
+  api_recordings_callAtTime,        // REC_TIME_MATCH_v1
+  api_recordings_filenamesPresent   // REC_FILENAME_DEDUP_FIX_v1
 };
