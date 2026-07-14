@@ -1285,9 +1285,21 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
             }
           } catch (e) { console.warn('[/api/recordings] call_event lookup failed:', e.message); }
         }
-        if (!leadId && phone) {
+        /* REC_LEAD_AUTHORITY_v1 (2026-07-14) — the PHONE is the authority, not the client.
+         * This used to be `if (!leadId && phone)`, i.e. a lead_id sent by the client won
+         * even when the recording's own phone number said otherwise. The client's lead came
+         * from a TIME match and the phone from a different pick, so the two could disagree —
+         * and 43 of 249 recordings landed on the wrong customer. If we have a number, the
+         * lead it belongs to is the lead, full stop. */
+        if (phone) {
           const lead = await recRoutes._findLeadByPhone(phone);
-          if (lead) leadId = lead.id;
+          if (lead && Number(lead.id) !== Number(leadId || 0)) {
+            if (leadId) {
+              console.warn('[/api/recordings] lead_id override:', leadId, '→', lead.id,
+                           'phone', phone, 'wins over the client-supplied lead');
+            }
+            leadId = lead.id;
+          }
         }
         // ---- Auto-create-lead policy ----
         // CALL_LEAD_DEFAULT_OFF_v1 — route through the shared helper so
