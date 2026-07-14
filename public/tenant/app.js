@@ -37256,7 +37256,24 @@ async function syncRecordings(opts) {
      * returns matched:true when the call at that moment belongs to a CRM lead. A call
      * to a non-lead number comes back matched:false and is still skipped — now decided
      * by WHO was really called, not by what the file happened to be named. */
-    if (!includeUnmatched && !matchedLeadId) {
+    /* REC_TIME_MATCH_v2 (2026-07-14) — PHONE AND LEAD MUST COME FROM THE SAME SOURCE.
+     *
+     * v1 mis-attached 43 of 249 recordings (17%). The phone and the lead were decided by
+     * two DIFFERENT pickers: the client's callAtTime took the call CLOSEST IN TIME, while
+     * the server (when no phone was supplied) took the MOST RECENT call in the window
+     * (ORDER BY created_at DESC → rows[0]). A rep dialling several numbers in a few minutes
+     * makes those two land on different calls — so a recording got one call's phone and a
+     * different call's lead, and turned up under the wrong customer.
+     *
+     * The time match is a LAST RESORT, not an override:
+     *   • filename HAS a number  → that number decides, full stop. If it isn't a CRM lead,
+     *     it's a personal call and we skip it. We do NOT go looking for some other call
+     *     that happens to sit nearby in time — that is how you attach a recording of one
+     *     customer to another.
+     *   • filename has NO number → ask the call log, and take BOTH the phone and the lead
+     *     from that ONE call, so the two can never disagree.
+     */
+    if (!includeUnmatched && !matchedLeadId && !digits) {
       try {
         const at = await api('api_recordings_callAtTime', {
           started_at: new Date(meta.startedAt).toISOString(),
@@ -37264,14 +37281,13 @@ async function syncRecordings(opts) {
           last_four: meta.lastFour || ''
         });
         if (at && at.matched && at.lead_id) {
-          matchedLeadId = at.lead_id;
-          if (!meta.phone) meta.phone = at.phone || '';
-          if (at.direction) meta.direction = at.direction;
-          console.log('[leadcrm] matched by CALL LOG (filename was useless):', f.name,
+          matchedLeadId  = at.lead_id;
+          meta.phone     = at.phone || '';                 // SAME call as the lead — never mixed
+          meta.direction = at.direction || meta.direction;
+          console.log('[leadcrm] matched by CALL LOG (filename carried no number):', f.name,
                       '→ lead', at.lead_id, at.lead_name || '', at.phone || '');
         }
       } catch (e) {
-        // Server unreachable / old build → fall through to the old filename behaviour.
         console.warn('[leadcrm] callAtTime lookup failed (falling back):', e.message);
       }
     }
