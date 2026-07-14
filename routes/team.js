@@ -207,17 +207,58 @@ async function api_team_liveStatus(token, _payload) {
     }
     // 2. On-call detection
     else if (lastCall && /^(outgoing_call|incoming_ringing|call_answered|dial_requested|answered|dialing|ringing)$/.test(String(lastCall.event))) {
-      const newerEnd = calls.find(e =>
-        new Date(e.created_at).getTime() > new Date(lastCall.created_at).getTime()
-        && /^(call_ended|ended|missed|hangup|completed|disconnected)$/.test(String(e.event))
-      );
-      /* TEAM_ON_CALL_MAX_AGE_v1 (2026-07-06) — cap "on_call" at 20 min so
-       * rep isn't stuck on the dashboard when the mobile app fails to emit
-       * call_ended (kill, no network, etc). */
-      const _ageMin = (now - new Date(lastCall.created_at).getTime()) / 60000;
-      if (!newerEnd && _ageMin < 20) {
+      /* TEAM_ON_CALL_STUCK_FIX_v1 (2026-07-14)
+       * ------------------------------------
+       * Reps were stuck showing "On Call" for the full 20-minute cap long after they
+       * had hung up (live: Neetu, 17 min after the call ended). TWO causes, both here:
+       *
+       * (a) THE END ROW IS OLDER THAN THE START ROW. `newerEnd` demanded an end event
+       *     STRICTLY NEWER than the dial/ring row. But since CALLLOG_SYNC the end row
+       *     comes from the phone's call log, and its created_at is the call's START
+       *     time (that back-dating is deliberate and correct — see CALLLOG_IS_TRUTH).
+       *     A `dial_requested` is written when the rep TAPS Call, which is a second or
+       *     two BEFORE the call actually starts... but after a repair/insert the row can
+       *     land either side of it. When it lands earlier, it can never satisfy
+       *     "strictly newer", so the hang-up was invisible and the rep stayed On Call.
+       *     Fix: an end row ALSO counts if it is for the SAME NUMBER within a few
+       *     minutes, regardless of which side of the dial row its timestamp falls.
+       *
+       * (b) A TAP IS NOT A CALL. `dial_requested` is an INTENT — the rep pressed Call
+       *     in the CRM. If the call never connected, or the receiver is throttled by
+       *     Doze/battery optimisation (Neetu: only 4 of 109 calls produced a live row;
+       *     komal's phone managed 94), NOTHING ever confirms or ends it, and the intent
+       *     alone held the rep "On Call" for 20 minutes. An unconfirmed intent now
+       *     expires in 5 minutes. A CONFIRMED call (the phone actually told us it was
+       *     ringing/answered) still gets the full 20.
+       *
+       * Nothing is deleted and no row is written — this is read-only display logic.
+       */
+      const _digits = v => String(v || '').replace(/[^0-9]/g, '');
+      const _END_RE = /^(call_ended|ended|missed|hangup|completed|disconnected|no_answer)$/;
+
+      const lastMs   = new Date(lastCall.created_at).getTime();
+      const lastTail = _digits(lastCall.phone).slice(-10);
+
+      const endedIt = calls.find(e => {
+        if (!_END_RE.test(String(e.event))) return false;
+        const t = new Date(e.created_at).getTime();
+        if (t > lastMs) return true;                       // (a) a genuinely newer end
+        if (!lastTail) return false;
+        const eTail = _digits(e.phone).slice(-10);
+        // (a) same number, end row back-dated by the call-log sync to the call's start
+        return eTail && eTail === lastTail && t >= (lastMs - 10 * 60 * 1000);
+      });
+
+      /* (b) TEAM_ON_CALL_MAX_AGE_v1 (2026-07-06) capped this at 20 min so a rep isn't
+       * stuck when the app never emits call_ended (kill, no network, Doze). Keep 20 for
+       * a call the PHONE confirmed; an unconfirmed tap gets 5. */
+      const _isIntentOnly = /^(dial_requested|dialing)$/.test(String(lastCall.event));
+      const _capMin = _isIntentOnly ? 5 : 20;
+      const _ageMin = (now - lastMs) / 60000;
+
+      if (!endedIt && _ageMin < _capMin) {
         state = 'on_call';
-        since = new Date(lastCall.created_at).getTime();
+        since = lastMs;
         sub = lastCall.phone || '';
       }
     }
