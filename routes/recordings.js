@@ -1136,6 +1136,10 @@ async function api_recordings_relink(token, opts) {
   if (String(me.role || '') !== 'admin') throw new Error('Admins only');
   const p = opts || {};
   const apply = p.apply === true || p.apply === 1 || p.apply === '1';
+  // Detach recordings whose number belongs to no lead at all (default ON — leaving a
+  // stranger's recording on a customer's file is worse than leaving it unattached).
+  const detachOrphans = (p.detach_orphans === undefined) ? true
+                        : (p.detach_orphans === true || p.detach_orphans === 1 || p.detach_orphans === '1');
   const sinceIso = p.since ? new Date(p.since).toISOString()
                            : new Date(Date.now() - 30 * 86400 * 1000).toISOString();
 
@@ -1156,8 +1160,22 @@ async function api_recordings_relink(token, opts) {
     let lead = null;
     try { lead = await _findLeadByPhone(r.phone); } catch (_) { lead = null; }
     if (!lead) {
-      // Its number isn't a CRM lead at all — it should never have been attached to one.
-      if (r.lead_id) orphaned.push({ id: r.id, phone: r.phone, was_lead: r.lead_id });
+      /* Its number belongs to NO lead — a personal / unknown-number call that got stapled
+       * to a customer by the old time-matcher. Leaving it there is the visible bug: a
+       * recording of a totally different number showing under someone's lead (live: rec
+       * 3818, phone 9820525328, sitting on lead 3668 "Sasta Market", phone 7973033983).
+       * Detach it — the audio is kept, it just stops pretending to belong to that lead.
+       * DETACH is the conservative move: nothing is deleted, and _findLeadByPhone already
+       * checks phone / whatsapp / alt_phone, so a null result means it really is nobody's. */
+      if (r.lead_id) {
+        orphaned.push({ id: r.id, phone: r.phone, was_lead: r.lead_id,
+                        was_name: r.current_lead_name || null });
+        if (apply && detachOrphans) {
+          await db.query('UPDATE lead_recordings SET lead_id = NULL WHERE id = $1', [r.id]);
+          await db.query('UPDATE call_events SET lead_id = NULL WHERE recording_id = $1', [r.id])
+            .catch(() => {});
+        }
+      }
       continue;
     }
     if (Number(lead.id) === Number(r.lead_id)) continue;   // already correct
@@ -1173,10 +1191,11 @@ async function api_recordings_relink(token, opts) {
     }
   }
   return {
-    ok: true, apply, scanned: rows.length,
+    ok: true, apply, detach_orphans: detachOrphans, scanned: rows.length,
     misattached: fixed.length, repaired: apply ? fixed.length : 0,
-    not_a_lead_anymore: orphaned.length,
-    sample: fixed.slice(0, 15)
+    not_a_lead: orphaned.length, detached: (apply && detachOrphans) ? orphaned.length : 0,
+    sample: fixed.slice(0, 10),
+    orphan_sample: orphaned.slice(0, 10)
   };
 }
 
