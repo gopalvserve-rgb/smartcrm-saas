@@ -877,16 +877,8 @@ async function api_leads_create(token, payload) {
   }
 
   // Normalize phone — strip Excel artefacts (leading apostrophe used to force text)
-  let cleanPhone = String(p.phone || '').trim().replace(/^'/, '');
-  let cleanWA    = String(p.whatsapp || cleanPhone || '').trim().replace(/^'/, '');
-  /* PHONE_91_PREFIX_v1 — tenant-wide auto +91 normalization (toggle in Admin > Settings) */
-  try {
-    if (String(await db.getConfig('PHONE_91_PREFIX_ENABLED', '0')) === '1') {
-      const { normalize91 } = require('../utils/phone91');
-      cleanPhone = normalize91(cleanPhone);
-      cleanWA    = normalize91(cleanWA);
-    }
-  } catch (_) {}
+  const cleanPhone = String(p.phone || '').trim().replace(/^'/, '');
+  const cleanWA    = String(p.whatsapp || cleanPhone || '').trim().replace(/^'/, '');
 
   // Resolve status_id: prefer numeric `status_id`, otherwise look up `status`
   // by NAME (the natural shape of CSV imports). Auto-creates missing statuses.
@@ -1511,16 +1503,6 @@ async function api_leads_update(token, id, patch) {
   const lead = await db.findById('leads', id);
   if (!lead) throw new Error('Not found');
   if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
-  /* PHONE_91_PREFIX_v1 — tenant-wide auto +91 normalization on phone edits */
-  try {
-    if (patch && (patch.phone || patch.whatsapp || patch.alt_phone) &&
-        String(await db.getConfig('PHONE_91_PREFIX_ENABLED', '0')) === '1') {
-      const { normalize91 } = require('../utils/phone91');
-      if (patch.phone)     patch.phone     = normalize91(patch.phone);
-      if (patch.whatsapp)  patch.whatsapp  = normalize91(patch.whatsapp);
-      if (patch.alt_phone) patch.alt_phone = normalize91(patch.alt_phone);
-    }
-  } catch (_) {}
 
   // SALES_REASSIGN_PERM_v1 (2026-06-04) — gate the assigned_to field for
   // the Sales role. By default Sales cannot reassign leads. Admin can grant
