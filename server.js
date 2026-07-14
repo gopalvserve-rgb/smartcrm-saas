@@ -3174,6 +3174,85 @@ setTimeout(() => {
   catch (e) { console.warn('[WA_CATALOGUE_v1] auto-enable hook skipped:', e && e.message); }
 }, 8000);
 
+
+/* ============================================================================
+ * GCONV_SWEEP_RESTORE_v1 (2026-07-14) — the Google Ads conversion export had not
+ * run since the night of 26 June.
+ *
+ * Not a logic bug: the worker was simply GONE. server.js was gutted on 27 June (same
+ * incident as SOLAR_PACK_REGRESSION_FIX_v1 and the "restore truncated tenantApi.js"
+ * hotfix) and ~1,700 lines went with it, including this sweep, its _sweepAllow helper,
+ * its timers, and the two public /exports/google-conv routes. Manual "Push now to Sheet"
+ * kept working, which is exactly why nobody noticed the nightly one had stopped: the
+ * feature LOOKED alive.
+ *
+ * Restored verbatim from 2e323aa (PERF_FIX_v7, the last commit that had it).
+ * Allowlist default stays 'test' — edit saas_settings.SWEEP_GCONV_TENANTS (CSV of slugs)
+ * in super-admin → Settings → Performance to add paying tenants.
+ * ========================================================================== */
+let _sweepAllowCache = {};
+let _sweepAllowCachedAt = 0;
+
+async function _sweepAllow(key, defaultCsv) {
+  const now = Date.now();
+  if (now - _sweepAllowCachedAt > 60_000) { _sweepAllowCache = {}; _sweepAllowCachedAt = now; }
+  if (_sweepAllowCache[key] === undefined) {
+    let csv = defaultCsv;
+    try {
+      const r = await controlDb.query("SELECT value FROM saas_settings WHERE key = $1 LIMIT 1", [key]);
+      if (r.rows.length && r.rows[0].value !== null) csv = r.rows[0].value;
+    } catch (_) {}
+    _sweepAllowCache[key] = csv;
+  }
+  return new Set(String(_sweepAllowCache[key] || '').split(',').map(s => s.trim()).filter(Boolean));
+}
+
+async function _runGoogleConvForAllTenants() {
+  // PERF_FIX_v2 — only iterate tenants in the allowlist (default: vserve only).
+  // Edit saas_settings.SWEEP_GCONV_TENANTS (CSV of slugs) via super-admin UI.
+  // PERF_FIX_v7: default-allow only the 'test' tenant (was 'vserve').
+  const allow = await _sweepAllow('SWEEP_GCONV_TENANTS', 'test');
+  if (allow.size === 0) return;
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
+      [Array.from(allow)]
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[gconv] tenant list failed:', e.message); return; }
+  let gconv;
+  try { gconv = require('./routes/googleConvExport'); } catch (e) { return; }
+  if (!gconv._maybeDailyTickForCurrentTenant) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => gconv._maybeDailyTickForCurrentTenant(row.slug)
+      );
+    } catch (e) { console.warn(`[gconv] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runGoogleConvForAllTenants().catch(e => console.error('[gconv] cycle failed:', e.message));
+}, 3 * 60_000);
+setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
+console.log('[gconv] Google Ads conversion export daily worker started (restored)');
+
+/* Public per-tenant CSV endpoints — the URL shown in the tenant's export settings.
+ * Also lost in the 27-June gutting, so the "Public download URL" in the UI was dead. */
+try {
+  const googleConvExport = require('./routes/googleConvExport');
+  if (googleConvExport && googleConvExport.expressPublicDownload) {
+    app.get('/exports/google-conv/:slug.csv', googleConvExport.expressPublicDownload);
+    app.get('/exports/google-conv/:slug',     googleConvExport.expressPublicDownload);
+    console.log('[gconv] public export routes registered (restored)');
+  }
+} catch (e) { console.warn('[gconv] could not register public export routes:', e.message); }
+
 app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
 boot().catch
