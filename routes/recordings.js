@@ -230,12 +230,31 @@ async function maybeAutoCreateLeadFromCall(me, opts) {
   } catch (_) { allowDirs = null; }
 
   const dir = (direction === 'outgoing') ? 'out' : direction;
+
+  /* AUTOLEAD_ISINBOUND_FIX_v1 (2026-07-15) — THE reason "Create auto lead" did nothing.
+   *
+   * These two were declared with `const` INSIDE the else-branch below. DIRECTION_SETS_v1
+   * added `allowDirs`, so on every modern tenant the `if (allowDirs)` branch runs and the
+   * else NEVER executes — leaving `isInbound` undefined at the point it is used further
+   * down to build the lead's source label:
+   *
+   *     const sourceLabel = isInbound ? ... : 'Outbound Call';   // ReferenceError
+   *
+   * That throw lands in this function's own `catch (e) { return null; }`, and the caller
+   * in callLogSync.js swallows it again ("never fail a sync because of lead creation").
+   * So: settings say incoming+missed+outgoing ON, the direction gate PASSES, and then the
+   * lead insert dies silently. Zero leads, no error anywhere the user can see.
+   * Live proof: tenant `mahajan`, autolead_directions ["in","missed","out"], mode auto,
+   * min 0s — 165 unlinked calls in Call Activity and not one auto-created lead.
+   *
+   * Hoisted to function scope so BOTH branches (and the label code below) can see them. */
+  const isInbound  = dir === 'in' || dir === 'missed';
+  const isOutbound = dir === 'out';
+
   if (allowDirs) {
     if (allowDirs.indexOf(dir) < 0) return null;
   } else {
     // Fallback for a tenant whose prefs are unavailable.
-    const isInbound  = dir === 'in' || dir === 'missed';
-    const isOutbound = dir === 'out';
     if (!((isInbound && cfg.inbound) || (isOutbound && cfg.outbound))) return null;
   }
 
