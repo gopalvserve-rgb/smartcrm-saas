@@ -264,6 +264,136 @@ async function _demoteLiveTwins(userId, tail, startMs, durationS, keepId) {
  * which read call_events raw and do not filter on src -- keep working untouched.
  * Reversible: UPDATE call_events SET src=NULL WHERE src='live-dup'.
  */
+/**
+ * AUTOLEAD_BACKFILL_v1 (2026-07-15)
+ * =================================
+ * Create the leads that SHOULD have been auto-created, for calls that were synced while
+ * AUTOLEAD_ISINBOUND_FIX_v1 was broken.
+ *
+ * Auto-lead only ever fires as a call ARRIVES, so fixing the bug does nothing for calls
+ * already in the table — tenant `mahajan` was left with 433 unlinked calls across 153
+ * distinct numbers, none of which will ever be offered again by the phone.
+ *
+ * DESIGN — the two things that matter:
+ *
+ * 1. ONE SOURCE OF POLICY TRUTH. This does NOT re-implement the "should this become a
+ *    lead" rules. It calls maybeAutoCreateLeadFromCall(), the same function the live sync
+ *    uses, so direction sets / auto-vs-manual mode / min-seconds / duplicate handling can
+ *    never drift between live and backfill. (Two matchers for one fact is exactly what put
+ *    108 recordings on the wrong customer — see REC_LEAD_AUTHORITY_v1. Not repeating it.)
+ *
+ * 2. PER-REP, NOT PER-ADMIN. Each call is evaluated as its OWNER (`{ id: row.user_id }`),
+ *    so a rep's own auto-lead settings apply and the new lead is assigned to the rep who
+ *    actually made the call — not to whoever clicked Backfill.
+ *
+ * Grouped by last-10-digits, so 12 calls to one number produce ONE lead and 12 linked
+ * call rows — not 12 leads. Dry-run by default; admins only.
+ */
+async function api_call_autoleadBackfill(token, payload) {
+  const me = await authUser(token);
+  if (String(me.role || '') !== 'admin') throw new Error('Admins only');
+  await _ensureCols();
+
+  const p = payload || {};
+  const apply = p.apply === true || p.apply === 1 || p.apply === '1';
+  const sinceIso = p.since ? new Date(p.since).toISOString()
+                           : new Date(Date.now() - 30 * 86400 * 1000).toISOString();
+  const maxLeads = Math.max(1, Math.min(Number(p.max) || 500, 2000));
+
+  // Only real, trustworthy call rows. dial_requested is an INTENT, not a call.
+  const { rows } = await db.query(
+    `SELECT id, user_id, phone, direction, duration_s, created_at
+       FROM call_events
+      WHERE created_at >= $1
+        AND COALESCE(lead_id, 0) = 0
+        AND COALESCE(phone, '') <> ''
+        AND COALESCE(event,'') NOT IN ('dial_requested', 'autodial_requested', 'incoming_ringing')
+        AND COALESCE(src,'') <> 'live-dup'
+        AND user_id IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT 5000`,
+    [sinceIso]
+  );
+
+  const tail = v => String(v || '').replace(/\D/g, '').slice(-10);
+  const created = [], skipped = {};
+  const leadForTail = new Map();
+  let linked = 0, examined = 0;
+
+  for (const r of rows) {
+    const t = tail(r.phone);
+    if (!t) continue;
+    examined++;
+
+    // Already resolved this number in this run?
+    let leadId = leadForTail.get(t) || null;
+
+    if (!leadId) {
+      // Does a lead already exist for it? (someone may have added it by hand)
+      let existing = null;
+      try { existing = await _findLeadByPhone(r.phone); } catch (_) { existing = null; }
+      if (existing) {
+        leadId = existing.id;
+        leadForTail.set(t, leadId);
+      }
+    }
+
+    if (!leadId) {
+      if (created.length >= maxLeads) { skipped.max_reached = (skipped.max_reached || 0) + 1; continue; }
+      if (!apply) {
+        // Dry run: report what WOULD be created, without touching anything.
+        leadForTail.set(t, -1);
+        created.push({ phone: r.phone, direction: r.direction, duration_s: r.duration_s,
+                       user_id: r.user_id, at: r.created_at });
+        continue;
+      }
+      // Evaluate as the REP who made the call — their prefs, their assignment.
+      let newId = null;
+      try {
+        newId = await maybeAutoCreateLeadFromCall({ id: r.user_id }, {
+          phone: r.phone, direction: r.direction,
+          duration_s: Number(r.duration_s) || 0,
+          started_at: new Date(r.created_at).getTime()
+        });
+      } catch (e) {
+        skipped['error: ' + e.message] = (skipped['error: ' + e.message] || 0) + 1;
+        continue;
+      }
+      if (!newId) {
+        // The policy said no (direction not ticked / too short / manual mode). Correct — not an error.
+        skipped.policy_declined = (skipped.policy_declined || 0) + 1;
+        continue;
+      }
+      leadId = newId;
+      leadForTail.set(t, leadId);
+      created.push({ lead_id: newId, phone: r.phone, direction: r.direction, user_id: r.user_id });
+    }
+
+    if (apply && leadId && leadId > 0) {
+      // Link EVERY unlinked call for this number to the lead, so the history shows up on it.
+      const up = await db.query(
+        `UPDATE call_events SET lead_id = $1
+          WHERE COALESCE(lead_id,0) = 0
+            AND user_id = $2
+            AND RIGHT(regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g'), 10) = $3`,
+        [leadId, r.user_id, t]
+      );
+      linked += up.rowCount || 0;
+    }
+  }
+
+  return {
+    ok: true, apply,
+    call_rows_examined: examined,
+    unique_numbers: leadForTail.size,
+    leads_created: apply ? created.length : 0,
+    leads_would_create: apply ? undefined : created.length,
+    call_rows_linked: linked,
+    skipped,
+    sample: created.slice(0, 12)
+  };
+}
+
 async function api_call_cleanupGhosts(token, payload) {
   const me = await authUser(token);
   if (String(me.role || '') !== 'admin') throw new Error('Admins only');
@@ -303,4 +433,5 @@ async function api_call_cleanupGhosts(token, payload) {
   return { dry_run: false, demoted: rowCount, breakdown: found };
 }
 
-module.exports = { api_call_logSyncBatch, api_call_cleanupGhosts, _demoteLiveTwins };
+module.exports = { api_call_logSyncBatch, api_call_cleanupGhosts, _demoteLiveTwins,
+                   api_call_autoleadBackfill /* AUTOLEAD_BACKFILL_v1 */ };
