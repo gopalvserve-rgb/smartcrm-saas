@@ -163,6 +163,13 @@
 .wsh-card td{padding:7px 13px;border-bottom:1px solid #f1f5f9}
 .wsh-card tr:last-child td{border-bottom:0}
 .wsh-clk{cursor:pointer}
+.wsh-kpi-clk{cursor:pointer;transition:transform .08s,box-shadow .08s}
+.wsh-kpi-clk:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(99,102,241,.18);border-color:#c7d2fe}
+.wsh-kpi-clk:active{transform:none}
+.wsh-kpi-clk .l::after{content:' ↗';opacity:.45;font-size:9px}
+.wsh-st-clk{cursor:pointer;border-radius:5px}
+.wsh-st-clk:hover{background:#f1f5f9}
+.wsh-st-clk:hover .wsh-nm{color:var(--b)}
 .wsh-clk:hover{background:#f8fafc}
 .wsh-who{display:flex;align-items:center;gap:7px}
 .wsh-av{width:23px;height:23px;border-radius:50%;color:#fff;display:grid;place-items:center;font-size:10px;font-weight:800;flex:0 0 23px}
@@ -329,6 +336,19 @@
     return '<div class="wsh-kpi' + (cls || '') + '"><div class="l">' + label + '</div>' +
            '<div class="v">' + val + '</div><div class="d">' + (sub || '&nbsp;') + '</div></div>';
   }
+  /* A KPI you can click. `filter` = null means "this number can't be expressed as a lead
+   * filter", and then we deliberately DON'T fake a link — a card that navigates to the
+   * wrong list is worse than one that doesn't move. */
+  function kpiNode(label, val, sub, cls, filter) {
+    const n = el('div', { class: 'wsh-kpi' + (cls || '') + (filter ? ' wsh-kpi-clk' : '') },
+      '<div class="l">' + label + '</div><div class="v">' + val + '</div>' +
+      '<div class="d">' + (sub || '&nbsp;') + '</div>');
+    if (filter) {
+      n.title = 'Click → these leads in the Leads list';
+      n.onclick = () => openLeads(filter);
+    }
+    return n;
+  }
 
   /* ================= OVERVIEW ================= */
   async function tabOverview(body) {
@@ -339,15 +359,24 @@
     // "Re-churnable" = not in a final status. leads_pullable comes from the list API.
     const churnable = Math.max(0, total - num(k.final));
 
-    body.innerHTML =
-      '<div class="wsh-kpis">' +
-        kpiCard('Total leads', total, num(w.lead_count) ? ('all-time: ' + num(w.lead_count)) : '&nbsp;', ' hi') +
-        kpiCard('Unassigned', num(k.unassigned), num(k.unassigned) ? 'needs pull' : 'all assigned') +
-        kpiCard('Assigned', num(k.assigned), pct(num(k.assigned), total) + '%') +
-        kpiCard('Won', num(k.won), num(k.conv_pct) + '% conv') +
-        kpiCard('Lost / Junk', num(k.lost), pct(num(k.lost), total) + '%') +
-        kpiCard('Re-churnable', churnable, 'not final') +
-      '</div>';
+    const ss = sets();
+    const agentIds = (r.user_rows || []).map(u => Number(u.assigned_to)).filter(Boolean);
+    body.innerHTML = '';
+    const kw = el('div', { class: 'wsh-kpis' });
+    kw.appendChild(kpiNode('Total leads', total,
+      num(w.lead_count) ? ('all-time: ' + num(w.lead_count)) : '&nbsp;', ' hi', {}));
+    kw.appendChild(kpiNode('Unassigned', num(k.unassigned),
+      num(k.unassigned) ? 'needs pull' : 'all assigned', '',
+      num(k.unassigned) ? { assigned_tos: [0] } : null));
+    kw.appendChild(kpiNode('Assigned', num(k.assigned), pct(num(k.assigned), total) + '%', '',
+      agentIds.length ? { assigned_tos: agentIds } : null));
+    kw.appendChild(kpiNode('Won', num(k.won), num(k.conv_pct) + '% conv', '',
+      (ss.won || []).length ? { status_ids: ss.won } : null));
+    kw.appendChild(kpiNode('Lost / Junk', num(k.lost), pct(num(k.lost), total) + '%', '',
+      (ss.lost || []).length ? { status_ids: ss.lost } : null));
+    kw.appendChild(kpiNode('Re-churnable', churnable, 'not final', '',
+      (ss.open || []).length ? { status_ids: ss.open } : null));
+    body.appendChild(kw);
 
     // funnel
     const fn = (r.funnel || []);
@@ -355,14 +384,30 @@
       const c = el('div', { class: 'wsh-card' });
       c.appendChild(el('h3', {}, '🔻 Funnel <span class="sub"><span class="wsh-tag">reportAdvanced → funnel</span></span>'));
       const box = el('div', { class: 'wsh-fn' });
+      const ssf = sets();
+      const agentIdsF = (r.user_rows || []).map(u => Number(u.assigned_to)).filter(Boolean);
+      /* Map each funnel stage to the filter that reproduces its number. Stages we can't
+       * express (e.g. "Contacted" has no lead-filter equivalent) stay non-clickable
+       * rather than link somewhere that shows a different count. */
+      const stageFilter = st => {
+        const n = String(st || '').toLowerCase();
+        if (n.indexOf('total') >= 0)                      return {};
+        if (n.indexOf('assign') >= 0 && agentIdsF.length) return { assigned_tos: agentIdsF };
+        if (n.indexOf('won') >= 0 && (ssf.won || []).length)     return { status_ids: ssf.won };
+        if (n.indexOf('final') >= 0 && (ssf.final || []).length) return { status_ids: ssf.final };
+        return null;
+      };
       fn.forEach((f, i) => {
         const p = num(f.pct_from_top);
         const last = i === fn.length - 1;
-        box.appendChild(el('div', { class: 'wsh-st' },
+        const filt = stageFilter(f.stage);
+        const row = el('div', { class: 'wsh-st' + (filt ? ' wsh-st-clk' : '') },
           '<div class="wsh-nm">' + esc(f.stage) + '</div>' +
           '<div class="wsh-tr"><div class="wsh-fl" style="width:' + Math.max(p, 2) + '%' +
             (last ? ';background:linear-gradient(90deg,#059669,#34d399)' : '') + '">' + num(f.cnt) + '</div></div>' +
-          '<div class="wsh-pc">' + p + '%</div>'));
+          '<div class="wsh-pc">' + p + '%</div>');
+        if (filt) { row.title = 'Click → these leads'; row.onclick = () => openLeads(filt); }
+        box.appendChild(row);
       });
       c.appendChild(box);
       body.appendChild(c);
@@ -373,8 +418,10 @@
     g.appendChild(miniTable('🎯 Status-wise', 'reportAdvanced → status_rows',
       (r.status_rows || []).slice(0, 6).map(s => [esc(s.status_name || '—'), num(s.cnt), pct(num(s.cnt), total)]), total,
       (row, i) => { const s = (r.status_rows || [])[i]; if (s) openLeads({ status_id: s.status_id }); }));
+    const srcRows = (r.source_rows || []).slice(0, 6);
     g.appendChild(miniTable('🔗 Source-wise', 'reportAdvanced → source_rows',
-      (r.source_rows || []).slice(0, 6).map(s => [esc(s.source || '—'), num(s.cnt), pct(num(s.cnt), total)]), total, null));
+      srcRows.map(s => [esc(s.source || '—'), num(s.cnt), pct(num(s.cnt), total)]), total,
+      (row, i) => { const sr = srcRows[i]; if (sr && sr.source) openLeads({ sources: [sr.source] }); }));
     body.appendChild(g);
   }
 
@@ -460,15 +507,33 @@
     body.appendChild(c);
   }
 
-  /* Deep-link into the existing Leads view, pre-filtered to this workspace. */
+  /* Deep-link into the Leads view, pre-filtered to this workspace + the visible date range.
+   *
+   * WORKSPACE_DRILLDOWN_v1 — the first cut of this wrote localStorage.crm_filters and
+   * called navigateTo(). That does NOT work in-session: app.js parses crm_filters into
+   * CRM.prefs.filters ONCE at page load, so the Leads view would render the OLD filters
+   * and the click would silently land on an unfiltered list. window.applyLeadFilters()
+   * (app.js) sets the in-memory object too — same thing the saved-filter loader does.
+   *
+   * The date range is carried through on purpose: if the card says "Won: 38" for This
+   * month, the list must show those 38 — not every Won lead ever. A drill-down that
+   * shows a different number than the card you clicked is worse than no drill-down. */
   function openLeads(extra) {
-    try {
-      const f = Object.assign({ campaign_ids: [Number(S.wsId)] }, extra || {});
-      localStorage.setItem('crm_filters', JSON.stringify(f));
-    } catch (_) {}
-    if (typeof window.navigateTo === 'function') window.navigateTo('leads');
-    else location.hash = '#/leads';
+    const dr = dateRange();
+    const f = Object.assign({ campaign_ids: [Number(S.wsId)] }, extra || {});
+    if (S.range !== 'all') { f.from = dr.from; f.to = dr.to; }
+    if (typeof window.applyLeadFilters === 'function') return window.applyLeadFilters(f);
+    // Fallback for an app.js that predates the helper: persist + hard-navigate so the
+    // filters are re-parsed on load.
+    try { localStorage.setItem('crm_filters', JSON.stringify(f)); } catch (_) {}
+    location.href = location.origin + (slug() ? '/t/' + slug() : '') + '/#/leads';
+    location.reload();
   }
+
+  /* Status-id sets the SERVER used for its Won/Lost/Final KPIs (reportAdvanced →
+   * status_sets). Never re-derive these here — the won/lost rule is a name list that
+   * lives server-side and would drift the moment either copy changed. */
+  function sets() { return (S.rep && S.rep.status_sets) || { final: [], won: [], lost: [], open: [] }; }
 
   /* ================= UPLOAD ================= */
   async function tabUpload(body) {

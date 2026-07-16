@@ -42613,6 +42613,33 @@ VIEWS.campaigns = async (view) => {
  * Expose it so the hub's Settings tab renders the real CRUD instead of an error box. */
 try { window.adminCampaigns = adminCampaigns; } catch (_) {}
 
+/* WORKSPACE_DRILLDOWN_v1 (2026-07-15) — apply a filter set to the Leads view and go there.
+ *
+ * The hub is a separate <script>, so it cannot see `CRM` (module-scoped in app.js — the
+ * same trap as PACK_GLOBALS_FIX_v1). Writing localStorage.crm_filters alone does NOT
+ * work: CRM.prefs.filters is parsed from localStorage ONCE at page load (top of this
+ * file), so an in-session navigateTo('leads') would render the OLD filters and the
+ * drill-down would silently land on an unfiltered list.
+ *
+ * This mirrors exactly what the saved-filter loader already does: set the in-memory
+ * object AND persist AND navigate.
+ *
+ * Accepted keys (verified against api_leads_list): campaign_ids[], status_ids[]/status_id,
+ * assigned_tos[]/assigned_to, sources[]/source, from, to, q. */
+window.applyLeadFilters = function (fObj) {
+  try {
+    const f = Object.assign({}, fObj || {});
+    CRM.prefs.filters = f;
+    try { localStorage.setItem('crm_filters', JSON.stringify(f)); } catch (_) {}
+    try { CRM._leadsPage = 1; } catch (_) {}
+    navigateTo('leads');
+    return true;
+  } catch (e) {
+    console.warn('[applyLeadFilters] failed:', e && e.message);
+    return false;
+  }
+};
+
 
 
 async function openRecordingSyncDebug() {
