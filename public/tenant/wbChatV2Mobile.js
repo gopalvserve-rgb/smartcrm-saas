@@ -1537,33 +1537,32 @@
       } catch (_) {}
     }, 0);
   }
+  /* WA_CHAT_TPL_VARS_v1 (2026-07-16) — mobile had the same two bugs as the desktop module
+   * (it says so itself: "per the desktop module" — the broken call was copied over):
+   *   1. No variable inputs and no header-media input.
+   *   2. api_wb_chat_send has NO template support at all (routes/whatsbot.js:2162) and
+   *      rejects anything without text/media_url/media_id, so every tap died on
+   *      "Empty message". The `payload` object built below it was never even used.
+   * Delegate to app.js's openInitiateChatModal — the same one the desktop chat now uses.
+   * It is responsive: .init-chat-grid collapses to one column and .modal caps at
+   * 100vw-20px under 780px (styles.css:388, responsive-fixes.css:161), so it is usable
+   * on a phone. One composer, one behaviour, everywhere. */
   function sendTemplate(tpl) {
     var t = S.activeThread;
     if (!t) return toast('No thread selected', 'err');
-    var payload = {
-      phone: t.phone,
-      template_id: tpl.id,
-      variables: {}
-    };
-    var pid = S.sendFromId || t.phone_number_id;
-    if (pid) payload.phone_id = pid;
-    /* v1.1 — chat_send is the real endpoint; pass templateName +
-     * templateLanguage per the desktop module. */
-    api('api_wb_chat_send', {
-      phone: t.phone,
-      templateName: tpl.name || tpl.template_name,
-      templateLanguage: tpl.language || 'en_US',
-      from_phone_number_id: pid || undefined
-    })
-      .then(function () {
-        toast('Template sent', 'ok');
-        closeOverlay();
-        return loadMessages(t.phone);
-      })
-      .then(rerender)
-      .catch(function (err) {
-        toast('Send failed: ' + (err.message || 'unknown'), 'err');
+    if (typeof window.openInitiateChatModal !== 'function') {
+      return toast('Template composer unavailable — please reload the page.', 'err');
+    }
+    closeOverlay();
+    try {
+      window.openInitiateChatModal({
+        id: (S.lead && S.lead.id) || null,
+        phone: t.phone,
+        name: (S.lead && S.lead.name) || t.name || ''
       });
+    } catch (e) {
+      toast('Could not open template composer: ' + (e.message || 'unknown'), 'err');
+    }
   }
 
   /* =============================================================
