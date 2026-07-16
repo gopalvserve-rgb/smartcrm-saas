@@ -3861,11 +3861,18 @@ const WIDGET_LIBRARY = {
        * "New To NP" (a real vserve status meaning the lead WAS worked) must not match, so
        * these are exact names, not a /^new/ prefix. */
       const _ENTRY_STAGE_NAMES = ['new', 'new lead', 'new inquiry', 'new enquiry'];
+      const _isEntry = (n) => _ENTRY_STAGE_NAMES.indexOf(String(n || '').trim().toLowerCase()) >= 0;
       const _byStatus = (d.summary && d.summary.by_status) || [];
-      const _newRow = _byStatus.find(x => _ENTRY_STAGE_NAMES.indexOf(String(x.status || '').trim().toLowerCase()) >= 0);
+      /* SUM every entry-stage row, don't .find() the first. A tenant can carry BOTH the
+       * default "New" AND a pack's "New Enquiry" — showcase-re has exactly that. find()
+       * returns whichever by_status lists first; if that were the empty "New Enquiry" (0
+       * leads, so invisible in the table) Pending would read 0 and all 30 leads would be
+       * labelled Attempted. It only worked because "New" happened to come first. Summing
+       * is order-independent, and by_status includes 0-count rows so the empty one adds 0. */
+      const _entryRows = _byStatus.filter(x => _isEntry(x.status));
 
-      if (_newRow) {
-        const _newCnt = Number(_newRow.c) || 0;
+      if (_entryRows.length) {
+        const _newCnt = _entryRows.reduce((n, x) => n + (Number(x.c) || 0), 0);
         /* by_status only counts leads whose status_id matches a real status row, so leads
          * with status_id = NULL appear in NO bucket. On vserve that is 125 leads: auto-created
          * rows named as bare phone numbers that never got a status at all.
@@ -3886,14 +3893,14 @@ const WIDGET_LIBRARY = {
          * (routes/reports.js builds it that way, and that file is LOCKED). So map
          * name -> id through the statuses cache the SPA already warms. */
         const _all = (CRM.cache && CRM.cache.statuses) || [];
-        const _newId = (_all.find(st => String(st.name || '').trim().toLowerCase()
-                          === String(_newRow.status || '').trim().toLowerCase()) || {}).id;
-        if (_newId) {
+        const _entryIds = _all.filter(st => _isEntry(st.name)).map(st => Number(st.id)).filter(Boolean);
+        if (_entryIds.length) {
           _pen.onclick = () => {
             if (typeof window.applyLeadFilters === 'function')
-              window.applyLeadFilters({ status_ids: [Number(_newId)] });
+              window.applyLeadFilters({ status_ids: _entryIds });
           };
-          const _otherIds = _all.map(st => Number(st.id)).filter(id => id && id !== Number(_newId));
+          const _otherIds = _all.map(st => Number(st.id))
+                                .filter(id => id && _entryIds.indexOf(id) < 0);
           if (_otherIds.length) _att.onclick = () => {
             if (typeof window.applyLeadFilters === 'function')
               window.applyLeadFilters({ status_ids: _otherIds });
