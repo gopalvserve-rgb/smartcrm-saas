@@ -42765,6 +42765,13 @@ VIEWS.campaigns = async (view) => {
  * (a separate <script>) cannot see it. Same trap as PACK_GLOBALS_FIX_v1 (`window.VIEWS`).
  * Expose it so the hub's Settings tab renders the real CRUD instead of an error box. */
 try { window.adminCampaigns = adminCampaigns; } catch (_) {}
+/* WA_CHAT_TPL_VARS_v1 (2026-07-16) — expose the Initiate-Chat modal to wbChatV2.js.
+ * wbChatV2 is a separate <script>, so everything in app.js is module-scoped and invisible
+ * to it (the PACK_GLOBALS_FIX_v1 / window.VIEWS trap, third time). Its own template picker
+ * had no variable or media-header inputs AND sent via api_wb_chat_send, which has no
+ * template support at all — so it always failed. Rather than build a second picker that
+ * would drift from this one, wbChatV2 now calls straight into this modal. */
+try { window.openInitiateChatModal = openInitiateChatModal; } catch (_) {}
 
 /* WORKSPACE_DRILLDOWN_v1 (2026-07-15) — apply a filter set to the Leads view and go there.
  *

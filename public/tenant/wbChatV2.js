@@ -1293,38 +1293,51 @@
     }
   }
 
+  /* WA_CHAT_TPL_VARS_v1 (2026-07-16) — Gopal: "On This Window, There is no Option to
+   * Select Veriable and Image for header".
+   *
+   * The old picker here listed templates and fired on click with:
+   *     api('api_wb_chat_send', { phone, templateName, templateLanguage })
+   * Two things were wrong with that:
+   *   1. No variable inputs and no header-media input — the reported bug.
+   *   2. api_wb_chat_send has NO template support whatsoever (routes/whatsbot.js:2162 —
+   *      zero references to templateName/components) and it rejects anything without
+   *      text/media_url/media_id, so EVERY click died on "Empty message". The button
+   *      never worked at all; a template with a {{1}} or an image header could not be
+   *      sent from this window by any route.
+   *
+   * app.js already has the grown-up version of exactly this — openInitiateChatModal:
+   * per-variable inputs with @{merge} hints, header IMAGE/VIDEO/DOCUMENT detection from
+   * header_type/components, upload-or-paste-URL, a live preview, a guard that blocks send
+   * when a media header has no URL, and it posts to api_wb_initiate_chat -> _sendTemplate,
+   * which builds the real Meta `components` array. So delegate to it instead of writing a
+   * second picker: one implementation, one behaviour. (Two matchers for one fact is what
+   * put 108 recordings on the wrong customer — REC_LEAD_AUTHORITY_v1.)
+   *
+   * It takes a lead-shaped object and only reads .id and .phone. S.lead is null for chats
+   * with no linked lead yet, so fall back to the thread's phone — the modal works fine
+   * with lead_id undefined (api_wb_initiate_chat treats it as optional and just skips the
+   * @{merge} render). */
   async function openTemplatePicker() {
-    try {
-      if (!S.templates) S.templates = await api('api_wb_templates_list').catch(() => []);
-      const tpls = (S.templates || []).filter(x => String(x.status || '').toUpperCase() === 'APPROVED');
-      if (!tpls.length) return toast('No approved templates found.', 'err');
-      // Simple modal: show list, click to send
-      const bg = h('div', { class: 'wbv2-modal-bg', onclick: (e) => { if (e.target === bg) bg.remove(); } },
-        h('div', { class: 'wbv2-modal' },
-          h('h3', null, 'Select a template'),
-          h('div', { style: { maxHeight: '50vh', overflowY: 'auto', border: '1px solid #e9edef', borderRadius: '8px' } },
-            ...tpls.map(t => h('div', {
-              style: { padding: '10px 12px', borderBottom: '1px solid #f0f2f5', cursor: 'pointer' },
-              onmouseover: function () { this.style.background = '#f0f2f5'; },
-              onmouseout: function () { this.style.background = ''; },
-              onclick: () => { bg.remove(); sendTemplate(t); }
-            }, h('div', { style: { fontWeight: 600, fontSize: '13px' } }, t.name || t.template_name),
-               h('div', { style: { fontSize: '11px', color: '#667781', marginTop: '2px' } }, (t.language || '') + ' · ' + (t.category || '')))))
-          ,
-          h('div', { class: 'acts' },
-            h('button', { class: 'btn-cancel', onclick: () => bg.remove() }, 'Cancel'))));
-      document.body.appendChild(bg);
-    } catch (e) { toast('Could not load templates: ' + e.message, 'err'); }
-  }
-  async function sendTemplate(tpl) {
     const t = S.activeThread;
     if (!t) return;
-    try {
-      await api('api_wb_chat_send', { phone: t.phone, templateName: tpl.name || tpl.template_name, templateLanguage: tpl.language, from_phone_number_id: S.sendFromId || t.phone_number_id || undefined });
-      toast('Template sent', 'ok');
-      setTimeout(() => loadMessages(t), 800);
-    } catch (e) { toast('Template send failed: ' + e.message, 'err'); }
+    if (typeof window.openInitiateChatModal === 'function') {
+      try {
+        return await window.openInitiateChatModal({
+          id: (S.lead && S.lead.id) || null,
+          phone: t.phone,
+          name: (S.lead && S.lead.name) || t.name || ''
+        });
+      } catch (e) {
+        toast('Could not open template composer: ' + e.message, 'err');
+        return;
+      }
+    }
+    /* app.js not loaded (shouldn't happen — it's the SPA shell). Say so rather than
+     * fall back to the old picker, which could not send anyway. */
+    toast('Template composer unavailable — please reload the page.', 'err');
   }
+
   async function openAssigneePopup() {
     if (!S.users.length) {
       try { S.users = await api('api_users_list') || []; } catch (_) { return toast('Cannot load users', 'err'); }
