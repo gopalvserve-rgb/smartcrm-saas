@@ -3868,8 +3868,20 @@ const WIDGET_LIBRARY = {
          * ignored the filter entirely — that was the bug. */
         const _byStatus = (d.summary && d.summary.by_status) || [];
         const _newRow = _byStatus.find(x => String(x.status || '').trim().toLowerCase() === 'new');
-        const _pending = _newRow ? (Number(_newRow.c) || 0) : 0;
-        const _attempted = Math.max(0, total - _pending);
+        const _newCnt = _newRow ? (Number(_newRow.c) || 0) : 0;
+        /* by_status only counts leads whose status_id matches a real status row, so leads
+         * with status_id = NULL appear in NO bucket. On vserve that is 125 leads (all-time):
+         * auto-created rows named as bare phone numbers that never got a status at all.
+         *
+         * Attempted must NOT be `total - New` — that sweeps those 125 into "Attempted" and
+         * claims a rep worked them, when they are the least touched leads in the system.
+         * They belong in Pending. So count Attempted from the buckets we can actually see
+         * (statused, and not New) and let everything else fall to Pending. That also makes
+         * Attempted + Pending == Total leads exactly, so the tiles reconcile with the table
+         * below instead of quietly overcounting by 125. */
+        const _statused = _byStatus.reduce((n, x) => n + (Number(x.c) || 0), 0);
+        const _attempted = Math.max(0, _statused - _newCnt);
+        const _pending = Math.max(0, total - _attempted);
         const _att = tile('Attempted', _attempted, '#d97706', '#fffbeb', '📞', pct(_attempted), '#/leads');
         const _pen = tile('Pending for attempt', _pending, '#16a34a', '#f0fdf4', '⏳', pct(_pending), '#/leads');
         grid.appendChild(_att); grid.appendChild(_pen);
