@@ -129,18 +129,45 @@ async function api_lead_actions(token, leadId) {
     meta: typeof r.meta_json === 'string' ? safeJson(r.meta_json) : (r.meta_json || {}),
     created_at: r.created_at
   }));
+  /* TIMELINE_CALL_MATCH_v1 — the lead's own phone tail, used to catch calls whose
+   * lead_id was never written. Empty string disables the phone arm of the match. */
+  let _leadTail = '';
+  try {
+    const lr = await db.query('SELECT phone FROM leads WHERE id = $1', [Number(leadId)]);
+    const d = String((lr.rows[0] || {}).phone || '').replace(/[^0-9]/g, '');
+    if (d.length >= 10) _leadTail = d.slice(-10);
+  } catch (_) { _leadTail = ''; }
+
   // CALL_TIMELINE_v1 — merge call activity (call_events) into the lead
   // timeline so Classic View shows calls alongside status/remark/etc.
   // Calls are stored in their own table and were never in lead_actions.
   try {
+    /* TIMELINE_CALL_MATCH_v1 (2026-07-16) — calls were missing from the timeline even
+     * though the lead's 📞 badge counted them.
+     *
+     * This matched on `c.lead_id = $1` ALONE. But a call_events row often has
+     * lead_id = NULL — the phone number is known, the lead link was never written (the
+     * live receiver can't resolve a lead, and only some sync paths back-fill it). The
+     * dial-count badge does NOT have this problem because _dialCountMap() matches by
+     * lead_id OR phone (last 10 digits) and takes the MAX of the two. So the badge saw
+     * the calls and the timeline could not.
+     *
+     * Live proof: vserve lead 3789 "Paras" (+919719510001) — badge said 2 dials, the
+     * timeline showed 0 calls and only a whatsapp_out event.
+     *
+     * Fix: match the same way the badge does — lead_id OR last-10-digit phone. Same
+     * source of truth for both, so the badge and the timeline can never disagree again.
+     * (Two matchers for one fact is what put 108 recordings on the wrong customer.) */
     const ce = await db.query(
       `SELECT c.id, c.user_id, c.phone, c.direction, c.event, c.duration_s, c.recording_id, c.created_at,
               u.name AS user_name
          FROM call_events c
          LEFT JOIN users u ON u.id = c.user_id
-        WHERE c.lead_id = $1
+        WHERE ( c.lead_id = $1
+                OR ( $2 <> ''
+                     AND right(regexp_replace(COALESCE(c.phone,''), '[^0-9]', '', 'g'), 10) = $2 ) )
         ORDER BY c.created_at ASC`,
-      [Number(leadId)]
+      [Number(leadId), _leadTail]
     );
     ce.rows.forEach(r => out.push({
       id: 'call_' + r.id, lead_id: Number(leadId), action_type: 'call',
