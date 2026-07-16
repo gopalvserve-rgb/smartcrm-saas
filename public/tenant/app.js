@@ -3843,84 +3843,66 @@ const WIDGET_LIBRARY = {
         return card;
       }
       grid.appendChild(tile('Total leads', total,              '#2563eb', '#eff6ff', '🎯', '100% of total',     '#/leads'));
-      /* ATTEMPTED_STATUS_v1 (2026-07-16) — vserve only.
-       * "New today" answers a question nobody asks at 6pm. What a manager actually needs
-       * is: how many did we TRY, and how many are still waiting to be tried. So on vserve
-       * the tile is replaced by Attempted + Pending for attempt. Every other tenant keeps
-       * "New today" untouched — the slug gate below is the entire blast radius.
-       * Counts come from api_leads_attemptedCounts (read-only; Attempted = the status,
-       * Pending = still New with NO call-log-confirmed call). */
-      if (String(window.TENANT_SLUG || '').toLowerCase() === 'vserve') {
-        /* ATTEMPTED_STATUS_v2 (2026-07-16) — REDEFINED, and simpler.
-         *
-         * v1 defined Attempted as "a call the phone's call log confirms". That was wrong
-         * in practice: it depends on the CallLog sync, which is dead on any rep still on a
-         * stale APK — so their called leads stayed in "Pending" forever and Pending read a
-         * nonsense 1,342. Gopal's rule is better and needs no call data at all:
-         *     Pending for attempt = status is still New
-         *     Attempted           = the status was CHANGED to anything else
-         * A rep changing the status IS the proof they worked the lead.
-         *
-         * Counts come from d.summary.by_status — the SAME bundle the "Distribution by
-         * status" donut renders, which the dashboard has ALREADY filtered by date range +
-         * workspace. So (a) these tiles respect the filter for free, and (b) they can never
-         * disagree with the chart sitting below them. The old api_leads_attemptedCounts
-         * ignored the filter entirely — that was the bug. */
-        const _byStatus = (d.summary && d.summary.by_status) || [];
-        const _newRow = _byStatus.find(x => String(x.status || '').trim().toLowerCase() === 'new');
-        const _newCnt = _newRow ? (Number(_newRow.c) || 0) : 0;
+      /* "New today" answers a question nobody asks at 6pm. What a manager actually needs is:
+       * how many did we TRY, and how many are still waiting to be tried. */
+      /* ATTEMPTED_STATUS_v3 (2026-07-16) — rolled out to ALL tenants (Gopal: "dash Board
+       * CHanges Impmnet to all tananets"). v2 was gated to vserve.
+       *
+       * WHY THIS ISN'T JUST "DELETE THE GATE": the rule is "New = Pending, anything else =
+       * Attempted" — but "New" is only vserve's name for the entry stage. The packs seed
+       * their own pipelines: education starts at "New Inquiry", holiday and realestate at
+       * "New Enquiry". On those tenants an exact 'new' match finds nothing, Pending
+       * collapses to ~0 and EVERY lead reads Attempted — worse than the bug we fixed.
+       *
+       * And sort_order can't identify the entry stage either: on vserve "New" has
+       * sort_order 900 (near-last) while 17 statuses all share 100, so "lowest sort_order"
+       * picks "Pending". Checked, not assumed. Name matching is the only signal that holds.
+       *
+       * "New To NP" (a real vserve status meaning the lead WAS worked) must not match, so
+       * these are exact names, not a /^new/ prefix. */
+      const _ENTRY_STAGE_NAMES = ['new', 'new lead', 'new inquiry', 'new enquiry'];
+      const _byStatus = (d.summary && d.summary.by_status) || [];
+      const _newRow = _byStatus.find(x => _ENTRY_STAGE_NAMES.indexOf(String(x.status || '').trim().toLowerCase()) >= 0);
+
+      if (_newRow) {
+        const _newCnt = Number(_newRow.c) || 0;
         /* by_status only counts leads whose status_id matches a real status row, so leads
-         * with status_id = NULL appear in NO bucket. On vserve that is 125 leads (all-time):
-         * auto-created rows named as bare phone numbers that never got a status at all.
+         * with status_id = NULL appear in NO bucket. On vserve that is 125 leads: auto-created
+         * rows named as bare phone numbers that never got a status at all.
          *
-         * Attempted must NOT be `total - New` — that sweeps those 125 into "Attempted" and
-         * claims a rep worked them, when they are the least touched leads in the system.
-         * They belong in Pending. So count Attempted from the buckets we can actually see
-         * (statused, and not New) and let everything else fall to Pending. That also makes
-         * Attempted + Pending == Total leads exactly, so the tiles reconcile with the table
-         * below instead of quietly overcounting by 125. */
+         * Attempted must NOT be `total - New` — that sweeps those into "Attempted" and claims
+         * a rep worked them, when they are the least touched leads in the system. They belong
+         * in Pending. So count Attempted from the buckets we can actually see (statused, and
+         * not the entry stage) and let everything else fall to Pending. That also makes
+         * Attempted + Pending === Total leads exactly, so the tiles reconcile with the table. */
         const _statused = _byStatus.reduce((n, x) => n + (Number(x.c) || 0), 0);
         const _attempted = Math.max(0, _statused - _newCnt);
         const _pending = Math.max(0, total - _attempted);
         const _att = tile('Attempted', _attempted, '#d97706', '#fffbeb', '📞', pct(_attempted), '#/leads');
         const _pen = tile('Pending for attempt', _pending, '#16a34a', '#f0fdf4', '⏳', pct(_pending), '#/leads');
         grid.appendChild(_att); grid.appendChild(_pen);
-        (async () => {
-          try {
-            /* Only for the click-through filters — the NUMBERS above are already correct
-             * and filtered. If this fails the tiles still show the right counts. */
-            const r = await api('api_leads_attemptedCounts', {});
-            if (!r || !r.enabled) return;
-            /* ATTEMPTED_STATUS_v2 — do NOT overwrite the values here any more. v1 wrote
-             * unfiltered whole-tenant counts over the filtered ones, so the tiles ignored
-             * the date range. The counts above come from the filtered d.summary and stand.
-             * This call now only supplies the status ids for the click-through. */
-            if (r.attempted_status_id) _att.onclick = () => {
-              if (typeof window.applyLeadFilters === 'function')
-                window.applyLeadFilters({ status_ids: [Number(r.attempted_status_id)] });
-            };
-            if (r.new_status_id) _pen.onclick = () => {
-              if (typeof window.applyLeadFilters === 'function')
-                window.applyLeadFilters({ status_ids: [Number(r.new_status_id)] });
-            };
-            /* Attempted = every status EXCEPT New, so the drill-down needs the full
-             * non-New id list, not a single id.
-             * by_status carries only {status, color, c} — no status_id (routes/reports.js
-             * builds it that way, and that file is LOCKED). So map name -> id through the
-             * statuses cache the SPA already warms. */
-            const _allStatuses = (CRM.cache && CRM.cache.statuses) || [];
-            const _otherIds = _allStatuses
-              .filter(st => String(st.name || '').trim().toLowerCase() !== 'new')
-              .map(st => Number(st.id))
-              .filter(Boolean);
-            if (_otherIds.length) _att.onclick = () => {
-              if (typeof window.applyLeadFilters === 'function')
-                window.applyLeadFilters({ status_ids: _otherIds });
-            };
-          } catch (e) { console.warn('[attempted] counts failed:', e && e.message); }
-        })();
+
+        /* Drill-through. by_status carries only {status, color, c} — no status_id
+         * (routes/reports.js builds it that way, and that file is LOCKED). So map
+         * name -> id through the statuses cache the SPA already warms. */
+        const _all = (CRM.cache && CRM.cache.statuses) || [];
+        const _newId = (_all.find(st => String(st.name || '').trim().toLowerCase()
+                          === String(_newRow.status || '').trim().toLowerCase()) || {}).id;
+        if (_newId) {
+          _pen.onclick = () => {
+            if (typeof window.applyLeadFilters === 'function')
+              window.applyLeadFilters({ status_ids: [Number(_newId)] });
+          };
+          const _otherIds = _all.map(st => Number(st.id)).filter(id => id && id !== Number(_newId));
+          if (_otherIds.length) _att.onclick = () => {
+            if (typeof window.applyLeadFilters === 'function')
+              window.applyLeadFilters({ status_ids: _otherIds });
+          };
+        }
       } else {
-        grid.appendChild(tile('New today',   nT.new_today  || 0, '#16a34a', '#f0fdf4', '✨', pct(nT.new_today),   '#/leads?filter=new_today'));
+        /* No entry stage we recognise on this tenant — we cannot compute Pending honestly,
+         * so show the original tile rather than a confident wrong number. */
+        grid.appendChild(tile('New today', nT.new_today || 0, '#16a34a', '#f0fdf4', '✨', pct(nT.new_today), '#/leads?filter=new_today'));
       }
       grid.appendChild(tile('Won',         sT.won        || 0, '#059669', '#ecfdf5', '🏆', pct(sT.won),         '#/leads?filter=won'));
       grid.appendChild(tile('Due today',   nT.due_today  || 0, '#d97706', '#fffbeb', '📅', pct(nT.due_today),   '#/followups?tab=due'));
