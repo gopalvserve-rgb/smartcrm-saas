@@ -3843,7 +3843,37 @@ const WIDGET_LIBRARY = {
         return card;
       }
       grid.appendChild(tile('Total leads', total,              '#2563eb', '#eff6ff', '🎯', '100% of total',     '#/leads'));
-      grid.appendChild(tile('New today',   nT.new_today  || 0, '#16a34a', '#f0fdf4', '✨', pct(nT.new_today),   '#/leads?filter=new_today'));
+      /* ATTEMPTED_STATUS_v1 (2026-07-16) — vserve only.
+       * "New today" answers a question nobody asks at 6pm. What a manager actually needs
+       * is: how many did we TRY, and how many are still waiting to be tried. So on vserve
+       * the tile is replaced by Attempted + Pending for attempt. Every other tenant keeps
+       * "New today" untouched — the slug gate below is the entire blast radius.
+       * Counts come from api_leads_attemptedCounts (read-only; Attempted = the status,
+       * Pending = still New with NO call-log-confirmed call). */
+      if (String(window.TENANT_SLUG || '').toLowerCase() === 'vserve') {
+        const _att = tile('Attempted', 0, '#d97706', '#fffbeb', '📞', 'called, not updated', '#/leads');
+        const _pen = tile('Pending for attempt', 0, '#16a34a', '#f0fdf4', '⏳', 'never called yet', '#/leads');
+        grid.appendChild(_att); grid.appendChild(_pen);
+        (async () => {
+          try {
+            const r = await api('api_leads_attemptedCounts', {});
+            if (!r || !r.enabled) return;
+            const setv = (card, n) => { const v = card.querySelector('div:nth-child(2)'); if (v) v.textContent = String(n); };
+            setv(_att, r.attempted || 0);
+            setv(_pen, r.pending_for_attempt || 0);
+            if (r.attempted_status_id) _att.onclick = () => {
+              if (typeof window.applyLeadFilters === 'function')
+                window.applyLeadFilters({ status_ids: [Number(r.attempted_status_id)] });
+            };
+            if (r.new_status_id) _pen.onclick = () => {
+              if (typeof window.applyLeadFilters === 'function')
+                window.applyLeadFilters({ status_ids: [Number(r.new_status_id)] });
+            };
+          } catch (e) { console.warn('[attempted] counts failed:', e && e.message); }
+        })();
+      } else {
+        grid.appendChild(tile('New today',   nT.new_today  || 0, '#16a34a', '#f0fdf4', '✨', pct(nT.new_today),   '#/leads?filter=new_today'));
+      }
       grid.appendChild(tile('Won',         sT.won        || 0, '#059669', '#ecfdf5', '🏆', pct(sT.won),         '#/leads?filter=won'));
       grid.appendChild(tile('Due today',   nT.due_today  || 0, '#d97706', '#fffbeb', '📅', pct(nT.due_today),   '#/followups?tab=due'));
       grid.appendChild(tile('Overdue',     nT.overdue    || 0, '#dc2626', '#fef2f2', '⚠️', pct(nT.overdue),     '#/followups?tab=overdue'));
