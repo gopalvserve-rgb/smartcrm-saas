@@ -3858,7 +3858,13 @@ const WIDGET_LIBRARY = {
           try {
             const r = await api('api_leads_attemptedCounts', {});
             if (!r || !r.enabled) return;
-            const setv = (card, n) => { const v = card.querySelector('div:nth-child(2)'); if (v) v.textContent = String(n); };
+            /* ATTEMPTED_TILE_FIX_v1 — this used card.querySelector('div:nth-child(2)').
+             * querySelector searches DESCENDANTS depth-first, so it returned the LABEL
+             * div (2nd child of the icon+label header row), not the card's own value div.
+             * Result on screen: the tile titles read "0" and "1342" instead of "Attempted"
+             * and "Pending for attempt", and the values stayed 0. card.children[1] is the
+             * VALUE div — a direct child, which is what was meant. */
+            const setv = (card, n) => { const v = card.children && card.children[1]; if (v) v.textContent = String(n); };
             setv(_att, r.attempted || 0);
             setv(_pen, r.pending_for_attempt || 0);
             if (r.attempted_status_id) _att.onclick = () => {
