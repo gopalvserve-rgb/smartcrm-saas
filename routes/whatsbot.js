@@ -2355,7 +2355,12 @@ async function api_wb_initiate_chat(token, payload) {
   const p = payload || {};
   if (!p.phone)         throw new Error('phone required');
   if (!p.template_name) throw new Error('template_name required');
-  const cfg = await _cfg();
+  /* WA_INITIATE_FROMPHONE_FIX_v1 (2026-07-16) — __fromPhoneId was read at the top of this
+   * function and then never used: cfg came from the DEFAULT _cfg() and fromPhoneNumberId
+   * was never passed to _sendTemplate. So on a multi-number tenant the "Send from" picker
+   * in the Initiate Chat modal was decorative — every template went out from the default
+   * number no matter what the user chose. _sendTemplate has always supported it. */
+  const cfg = __fromPhoneId ? await _cfgForPhone(__fromPhoneId) : await _cfg();
   if (!cfg.token || !cfg.phoneId) throw new Error('WhatsApp not connected. Settings → WhatsBot → Connect Account.');
 
   // Render @{merge} fields against the lead, if a lead_id is supplied.
@@ -2368,7 +2373,8 @@ async function api_wb_initiate_chat(token, payload) {
   const r = await _sendTemplate({
     to: p.phone, templateName: p.template_name, language: p.template_language || 'en_US',
     variables: rendered, imageUrl: p.image_url || null,
-    leadId: p.lead_id || null, userId: me.id
+    leadId: p.lead_id || null, userId: me.id,
+    fromPhoneNumberId: __fromPhoneId || undefined
   }, cfg);
 
   await _logActivity({
