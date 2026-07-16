@@ -42589,12 +42589,29 @@ async function openWaWidgetSnippet(widgetId) {
 // stay on the main view instead of jumping into Settings.
 // ─────────────────────────────────────────────────────────────────────
 VIEWS.campaigns = async (view) => {
+  /* WORKSPACE_HUB_v1 (2026-07-15) — this used to render adminCampaigns() directly, i.e.
+   * the Settings CRUD table reached from a different menu: a list of workspaces with
+   * Edit/Delete. Every workspace feature already had a backend (reportAdvanced's
+   * kpis/funnel/status_rows/user_rows, uploadLeads, resetUnclosed, campaign_agents) and
+   * none of it was surfaced. The hub wires those up: picker + Overview / By user /
+   * By status / Upload / Re-churn / Agents / Settings.
+   *
+   * adminCampaigns() is NOT deleted — it IS the Settings tab inside the hub, and it's
+   * the fallback below. If workspaceHub.js fails to load, the old screen still works. */
+  if (window.WorkspaceHub && typeof window.WorkspaceHub.render === 'function') {
+    try { return await window.WorkspaceHub.render(view); }
+    catch (e) { console.warn('[workspace] hub failed, falling back to CRUD:', e && e.message); }
+  }
   if (typeof adminCampaigns !== 'function') {
     view.replaceChildren(h('div', { class: 'error-box' }, 'Campaigns module not loaded — please refresh.'));
     return;
   }
   view.replaceChildren(await adminCampaigns(() => navigateTo('campaigns')));
 };
+/* WORKSPACE_HUB_v1 — adminCampaigns is module-scoped in app.js, so workspaceHub.js
+ * (a separate <script>) cannot see it. Same trap as PACK_GLOBALS_FIX_v1 (`window.VIEWS`).
+ * Expose it so the hub's Settings tab renders the real CRUD instead of an error box. */
+try { window.adminCampaigns = adminCampaigns; } catch (_) {}
 
 
 

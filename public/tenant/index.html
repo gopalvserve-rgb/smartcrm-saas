@@ -216,6 +216,13 @@
           /* WA_MOBILE_UI_v1 (2026-07-12) — mobile WhatsApp module loaded
            * alongside the desktop v2. The v2 render() delegates to
            * WB_CHAT_V2_MOBILE on viewports <=768px. */
+          /* WORKSPACE_HUB_v1 (2026-07-15) — the Workspace page (picker + 7 tabs).
+           * Own file on purpose: app.js is 58k lines and a whole-file upload from a
+           * stale checkout has twice silently reverted other people's work. A small
+           * module can be diffed at a glance and can't take the SPA down with it. */
+          var wsh = document.createElement('script');
+          wsh.src = 'workspaceHub.js?v=2026-07-15-workspace-hub-v1';
+          document.body.appendChild(wsh);
           var wbM = document.createElement('script');
           wbM.src = 'wbChatV2Mobile.js?v=2026-07-12-wa-mobile-v2-2';
           document.body.appendChild(wbM);
