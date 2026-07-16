@@ -1389,6 +1389,24 @@ async function api_campaigns_reportAdvanced(token, payload) {
       avg_tat_secs: tatSecs
     },
     funnel,
+    /* WORKSPACE_DRILLDOWN_v1 (2026-07-15) — hand back the exact status-id sets this
+     * report used for its Won / Lost / Final KPIs.
+     *
+     * Why: the hub makes the KPI cards clickable ("Won: 38" -> the 38 won leads). To
+     * build that filter the client would otherwise have to re-derive "which statuses
+     * count as won" — and that rule lives here, as a hardcoded name list in
+     * _wonLostNames() ('won','closed won','converted','admission done','booked').
+     * Copying it into the SPA guarantees the KPI and its drill-down disagree the day
+     * someone edits either list. Two matchers for one fact is the bug that put 108
+     * recordings on the wrong customer this week — so: server computes, server tells. */
+    status_sets: {
+      final: finalArr.map(Number),
+      won:   wonArr.map(Number),
+      lost:  lostArr.map(Number),
+      open:  statusRows.rows
+               .map(r => Number(r.status_id))
+               .filter(id => id && finalArr.map(Number).indexOf(id) < 0)
+    },
     status_rows:   statusRows.rows,
     user_rows:     userRows.rows,
     product_rows:  productRows.rows,
