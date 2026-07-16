@@ -3851,22 +3851,38 @@ const WIDGET_LIBRARY = {
        * Counts come from api_leads_attemptedCounts (read-only; Attempted = the status,
        * Pending = still New with NO call-log-confirmed call). */
       if (String(window.TENANT_SLUG || '').toLowerCase() === 'vserve') {
-        const _att = tile('Attempted', 0, '#d97706', '#fffbeb', '📞', 'called, not updated', '#/leads');
-        const _pen = tile('Pending for attempt', 0, '#16a34a', '#f0fdf4', '⏳', 'never called yet', '#/leads');
+        /* ATTEMPTED_STATUS_v2 (2026-07-16) — REDEFINED, and simpler.
+         *
+         * v1 defined Attempted as "a call the phone's call log confirms". That was wrong
+         * in practice: it depends on the CallLog sync, which is dead on any rep still on a
+         * stale APK — so their called leads stayed in "Pending" forever and Pending read a
+         * nonsense 1,342. Gopal's rule is better and needs no call data at all:
+         *     Pending for attempt = status is still New
+         *     Attempted           = the status was CHANGED to anything else
+         * A rep changing the status IS the proof they worked the lead.
+         *
+         * Counts come from d.summary.by_status — the SAME bundle the "Distribution by
+         * status" donut renders, which the dashboard has ALREADY filtered by date range +
+         * workspace. So (a) these tiles respect the filter for free, and (b) they can never
+         * disagree with the chart sitting below them. The old api_leads_attemptedCounts
+         * ignored the filter entirely — that was the bug. */
+        const _byStatus = (d.summary && d.summary.by_status) || [];
+        const _newRow = _byStatus.find(x => String(x.status || '').trim().toLowerCase() === 'new');
+        const _pending = _newRow ? (Number(_newRow.c) || 0) : 0;
+        const _attempted = Math.max(0, total - _pending);
+        const _att = tile('Attempted', _attempted, '#d97706', '#fffbeb', '📞', pct(_attempted), '#/leads');
+        const _pen = tile('Pending for attempt', _pending, '#16a34a', '#f0fdf4', '⏳', pct(_pending), '#/leads');
         grid.appendChild(_att); grid.appendChild(_pen);
         (async () => {
           try {
+            /* Only for the click-through filters — the NUMBERS above are already correct
+             * and filtered. If this fails the tiles still show the right counts. */
             const r = await api('api_leads_attemptedCounts', {});
             if (!r || !r.enabled) return;
-            /* ATTEMPTED_TILE_FIX_v1 — this used card.querySelector('div:nth-child(2)').
-             * querySelector searches DESCENDANTS depth-first, so it returned the LABEL
-             * div (2nd child of the icon+label header row), not the card's own value div.
-             * Result on screen: the tile titles read "0" and "1342" instead of "Attempted"
-             * and "Pending for attempt", and the values stayed 0. card.children[1] is the
-             * VALUE div — a direct child, which is what was meant. */
-            const setv = (card, n) => { const v = card.children && card.children[1]; if (v) v.textContent = String(n); };
-            setv(_att, r.attempted || 0);
-            setv(_pen, r.pending_for_attempt || 0);
+            /* ATTEMPTED_STATUS_v2 — do NOT overwrite the values here any more. v1 wrote
+             * unfiltered whole-tenant counts over the filtered ones, so the tiles ignored
+             * the date range. The counts above come from the filtered d.summary and stand.
+             * This call now only supplies the status ids for the click-through. */
             if (r.attempted_status_id) _att.onclick = () => {
               if (typeof window.applyLeadFilters === 'function')
                 window.applyLeadFilters({ status_ids: [Number(r.attempted_status_id)] });
@@ -3874,6 +3890,20 @@ const WIDGET_LIBRARY = {
             if (r.new_status_id) _pen.onclick = () => {
               if (typeof window.applyLeadFilters === 'function')
                 window.applyLeadFilters({ status_ids: [Number(r.new_status_id)] });
+            };
+            /* Attempted = every status EXCEPT New, so the drill-down needs the full
+             * non-New id list, not a single id.
+             * by_status carries only {status, color, c} — no status_id (routes/reports.js
+             * builds it that way, and that file is LOCKED). So map name -> id through the
+             * statuses cache the SPA already warms. */
+            const _allStatuses = (CRM.cache && CRM.cache.statuses) || [];
+            const _otherIds = _allStatuses
+              .filter(st => String(st.name || '').trim().toLowerCase() !== 'new')
+              .map(st => Number(st.id))
+              .filter(Boolean);
+            if (_otherIds.length) _att.onclick = () => {
+              if (typeof window.applyLeadFilters === 'function')
+                window.applyLeadFilters({ status_ids: _otherIds });
             };
           } catch (e) { console.warn('[attempted] counts failed:', e && e.message); }
         })();
@@ -4015,25 +4045,69 @@ const WIDGET_LIBRARY = {
 
 
   // ----- Charts -----
-  chart_status: { title: 'Chart · Leads by status (Donut)', group: 'Charts',
+  chart_status: { title: 'Table · Leads by status', group: 'Charts',
     render: (c, _cfg, d, w) => {
+      /* STATUS_TABLE_v1 (2026-07-16) — was a doughnut. Gopal: "this make in Table the graph".
+       * A donut over ~10 statuses is mostly unreadable: the small slices collapse into
+       * slivers you can't hover on a phone, and the number you actually want — how many
+       * leads are sitting in each status — is only in the tooltip. A table shows every
+       * count at once, sorts biggest-first, and each row is a real click target.
+       *
+       * Same d.summary.by_status the donut used, so it stays filter-aware and stays in
+       * agreement with the Attempted / Pending tiles above (ATTEMPTED_STATUS_v2). */
       c.appendChild(h('h3', { style: { margin: '0 0 .4rem', fontSize: '1.05rem' } }, w.title || '🎯 Distribution by status'));
-      const id = 'wc-' + w.id;
-      c.appendChild(h('div', { class: 'chart-wrap', style: { minHeight: '260px' } }, h('canvas', { id })));
-      setTimeout(() => {
-        const rows = (d.summary?.by_status || []).filter(x => x.c > 0);
-        if (!rows.length) return;
-        // DASH_MOBILE_FIX_v1 — on phone-sized viewports the right-side
-        // legend overflows the card and pushes the donut off-screen.
-        // Move the legend below the chart on mobile so the donut takes
-        // the full card width.
-        const isMobile = window.matchMedia && window.matchMedia('(max-width: 780px)').matches;
-        const legendPos = isMobile ? 'bottom' : 'right';
-        makeChart(id, 'doughnut', rows.map(x => x.status), rows.map(x => x.c), rows.map(x => x.color), {
-          plugins: { legend: { position: legendPos, labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
-          cutout: '60%'
-        });
-      }, 50);
+      const rows = (d.summary?.by_status || []).filter(x => Number(x.c) > 0)
+                     .sort((a, b) => Number(b.c) - Number(a.c));
+      if (!rows.length) { c.appendChild(h('div', { class: 'muted', style: { padding: '.8rem 0' } }, 'No leads in range.')); return; }
+      const tot = rows.reduce((n, x) => n + (Number(x.c) || 0), 0) || 1;
+      const statusIdByName = {};
+      ((CRM.cache && CRM.cache.statuses) || []).forEach(st => {
+        statusIdByName[String(st.name || '').trim().toLowerCase()] = Number(st.id);
+      });
+      const wrap = h('div', { style: { overflowX: 'auto' } });
+      const tbl = h('table', { class: 'table', style: { width: '100%', fontSize: '.86rem' } });
+      tbl.appendChild(h('thead', {}, h('tr', {},
+        h('th', { style: { textAlign: 'left' } }, 'Status'),
+        h('th', { style: { textAlign: 'right' } }, 'Leads'),
+        h('th', { style: { textAlign: 'right', width: '4.5rem' } }, 'Share'),
+        h('th', { style: { width: '38%' } }, ''))));
+      const tb = h('tbody', {});
+      rows.forEach(r => {
+        const n = Number(r.c) || 0;
+        const share = Math.round((n / tot) * 1000) / 10;
+        const sid = statusIdByName[String(r.status || '').trim().toLowerCase()];
+        const tr = h('tr', {
+          style: sid ? { cursor: 'pointer' } : {},
+          title: sid ? ('Show the ' + n + ' lead(s) in "' + r.status + '"') : ''
+        },
+          h('td', {}, h('span', { style: {
+              display: 'inline-block', width: '.6rem', height: '.6rem', borderRadius: '50%',
+              background: r.color || '#94a3b8', marginRight: '.45rem', verticalAlign: 'middle'
+            } }), h('span', {}, r.status || '—')),
+          h('td', { style: { textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, String(n)),
+          h('td', { class: 'muted', style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, share + '%'),
+          /* The bar keeps the at-a-glance comparison the donut gave, without its
+           * unreadable slivers — length is share of the largest status, not of total,
+           * so the smaller statuses stay visible. */
+          h('td', {}, h('div', { style: {
+              background: '#eef2f7', borderRadius: '999px', height: '.5rem', overflow: 'hidden'
+            } }, h('div', { style: {
+              width: Math.max(2, (n / (Number(rows[0].c) || 1)) * 100) + '%',
+              background: r.color || '#94a3b8', height: '100%', borderRadius: '999px'
+            } })))
+        );
+        if (sid) tr.onclick = () => {
+          if (typeof window.applyLeadFilters === 'function') window.applyLeadFilters({ status_ids: [sid] });
+        };
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      tbl.appendChild(h('tfoot', {}, h('tr', {},
+        h('td', { style: { fontWeight: 600 } }, 'Total'),
+        h('td', { style: { textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' } }, String(tot)),
+        h('td', {}, ''), h('td', {}, ''))));
+      wrap.appendChild(tbl);
+      c.appendChild(wrap);
     }
   },
   chart_source: { title: 'Chart · Leads by source', group: 'Charts',
