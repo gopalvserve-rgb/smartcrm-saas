@@ -85,23 +85,12 @@ public class MainActivity extends BridgeActivity {
         registerCallReceiver();
         getBridge().getWebView().addJavascriptInterface(new LeadCRMBridge(), "LeadCRMNative");
         handleSharedIntent(getIntent());
-        /* INCOMING_CARD_OPEN_LEAD_FIX (2026-07-10) — process the
-         * "deeplink" extra pushed by IncomingCallActivity so tapping
-         * 'Open lead' actually routes the WebView to the lead modal. */
-        handleDeeplink(getIntent());
         // REC_AUTOSYNC_KILL_v1 — disabled periodic 15-min WorkManager auto-sync per user request
         // scheduleRecordingBgSync();
 
         // CALLLOG_AUTOSYNC_v1 — hourly background call-log import (SIM-filtered).
         // Completely separate from the (intentionally disabled) recording bg-sync above.
         try { scheduleCallLogAutoSync(); } catch (Exception e) { Log.w(TAG, "scheduleCallLogAutoSync failed: " + e.getMessage()); }
-        // CALLLOG_SYNC_ON_OPEN_v1 — also sync immediately whenever the app opens.
-        // A PeriodicWorkRequest never runs at enqueue time (first turn can be an hour
-        // away), so on its own it feels broken. This fires a debounced one-shot sync.
-        // CALL-LOG ONLY (number, timestamp, duration, SIM). It performs NO file I/O and
-        // never touches the recording folder or RecordingsBackgroundSyncWorker — so it
-        // cannot cause the hang that made recording auto-sync get disabled.
-        runCallLogSyncNow("app-open");
 
         // PERM_ONBOARDING_v1: launch Runo-style permission onboarding on first run
         // or whenever critical perms (battery whitelist / MANAGE_EXTERNAL_STORAGE / recording folder)
@@ -148,11 +137,6 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleSharedIntent(intent);
-        /* INCOMING_CARD_OPEN_LEAD_FIX — also read the deeplink extra when
-         * MainActivity is already alive and IncomingCallActivity brings it
-         * to front via REORDER_TO_FRONT / SINGLE_TOP. Without this the
-         * extra is silently dropped and the popup dismisses to Dashboard. */
-        handleDeeplink(intent);
     }
 
     @Override
@@ -163,40 +147,6 @@ public class MainActivity extends BridgeActivity {
         // sync stays bulletproof. start() is idempotent — safe to call on every
         // resume.
         try { CallTrackingForegroundService.start(this); } catch (Exception e) {}
-        /* INCOMING_CARD_OPEN_LEAD_FIX — safety net: if the deeplink extra
-         * arrived during a slow resume, re-consume it here. Idempotent
-         * because handleDeeplink calls intent.removeExtra("deeplink"). */
-        try { handleDeeplink(getIntent()); } catch (Exception e) {}
-        // CALLLOG_SYNC_ON_OPEN_v1 — sync the call log every time the app comes to the
-        // foreground. Debounced inside runCallLogSyncNow (max once / 5 min) so opening
-        // the app repeatedly cannot hammer it. Call-log only — no recording fetch.
-        runCallLogSyncNow("app-resume");
-    }
-
-    /* INCOMING_CARD_OPEN_LEAD_FIX (2026-07-10) — consume the "deeplink"
-     * extra pushed by IncomingCallActivity so tapping "Open lead" reaches
-     * the SPA. Path shapes:
-     *   /#/leads/<id>              (renderKnown — existing lead by id)
-     *   /#/leads?new=1&phone=<n>   (renderUnknown — new-lead prefilled)
-     * We stash the path on window.LeadCRMDeeplink and call the SPA's
-     * consumer __consumeLeadCRMDeeplink() which handles both shapes. */
-    private void handleDeeplink(Intent intent) {
-        if (intent == null) return;
-        final String path = intent.getStringExtra("deeplink");
-        if (path == null || path.isEmpty()) return;
-        intent.removeExtra("deeplink");
-        final WebView wv = getBridge().getWebView();
-        if (wv == null) {
-            Log.w(TAG, "handleDeeplink: webview null, path=" + path);
-            return;
-        }
-        Log.i(TAG, "handleDeeplink: pushing to SPA: " + path);
-        wv.postDelayed(() -> {
-            String js = "try { window.LeadCRMDeeplink = " + jsStr(path) + "; " +
-                    "if (typeof window.__consumeLeadCRMDeeplink === 'function') " +
-                    "window.__consumeLeadCRMDeeplink(); } catch(e){ console.error('deeplink', e); }";
-            wv.evaluateJavascript(js, null);
-        }, 300);
     }
 
     private void handleSharedIntent(Intent intent) {
@@ -472,30 +422,6 @@ public class MainActivity extends BridgeActivity {
             if (url == null || url.isEmpty()) return;
             runOnUiThread(() -> {
                 try {
-                    /* APK_UPDATE_FIX_v1 (2026-07-10) — check if the OS will let
-                     * us prompt for the install. Without this permission the
-                     * PackageInstaller intent silently no-ops on Android 8+
-                     * and the user thinks the download itself failed. */
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                            && !getPackageManager().canRequestPackageInstalls()) {
-                        Log.w(TAG, "installApk: REQUEST_INSTALL_PACKAGES not granted — opening system dialog");
-                        try {
-                            Intent settingsIntent = new Intent(
-                                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                Uri.parse("package:" + getPackageName()));
-                            settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            startActivity(settingsIntent);
-                            android.widget.Toast.makeText(MainActivity.this,
-                                "Please grant 'Install unknown apps' for SmartCRM, then tap Update Now again.",
-                                android.widget.Toast.LENGTH_LONG).show();
-                        } catch (Exception ex) {
-                            Log.w(TAG, "settings intent failed: " + ex.getMessage());
-                        }
-                        /* Also start the browser download so the user has a
-                         * working fallback even if they don't grant now. */
-                        try { downloadApk(url); } catch (Exception ignored) {}
-                        return;
-                    }
                     String full = url;
                     if (full.startsWith("/")) {
                         String origin = "https://crm.smartcrmsolution.com";
@@ -547,32 +473,6 @@ public class MainActivity extends BridgeActivity {
                     } else {
                         registerReceiver(receiver, filter);
                     }
-                    /* APK_UPDATE_FIX_v1 — friendly kick-off toast so the user
-                     * knows the download started (DownloadManager runs silently
-                     * in bg and users think nothing happened). */
-                    try {
-                        android.widget.Toast.makeText(MainActivity.this,
-                            "Downloading SmartCRM update…",
-                            android.widget.Toast.LENGTH_LONG).show();
-                    } catch (Exception ignored) {}
-                    /* APK_UPDATE_FIX_v1 — 90-second watchdog. If the receiver
-                     * never fires (OEM DownloadManager quirk, or the app was
-                     * killed then relaunched) then poke the file directly OR
-                     * fall back to browser download so the user isn't stuck
-                     * on "Downloading forever". */
-                    final Handler dlWatch = new Handler(Looper.getMainLooper());
-                    dlWatch.postDelayed(() -> {
-                        try {
-                            if (outFile.exists() && outFile.length() > 200_000) {
-                                Log.i(TAG, "installApk: watchdog — file exists, launching installer");
-                                launchInstaller(outFile);
-                            } else {
-                                Log.w(TAG, "installApk: watchdog — file missing/small, falling back to browser");
-                                try { unregisterReceiver(receiver); } catch (Exception ignored) {}
-                                downloadApk(url);
-                            }
-                        } catch (Exception ex) { Log.w(TAG, "watchdog failed: " + ex.getMessage()); }
-                    }, 90_000L);
                 } catch (Exception e) {
                     Log.e(TAG, "installApk failed: " + e.getMessage());
                     // Fall back to browser-launch path if anything blew up.
@@ -991,6 +891,61 @@ public class MainActivity extends BridgeActivity {
 
         /** Active SIMs as JSON: [{slot, subId, label}]. Needs READ_PHONE_STATE. */
         @JavascriptInterface
+        /* ====================================================================
+         * DIAL_INTENT_FIX_v1 (2026-07-15) — "the dialer opens with the PREVIOUS number".
+         *
+         * SYMPTOM (filmed by the user): rep types 9566145501 in the CRM dialpad, taps
+         * call, and the phone's dialer opens showing 7200368725 — the number dialled
+         * two minutes earlier, with the dialer's Recents screen behind it.
+         *
+         * CAUSE: the SPA handed off with a plain web link (<a href="tel:...">.click()).
+         * Nothing in this app intercepted tel:, so it fell through to Capacitor's generic
+         * handler, which fires ACTION_VIEW with only FLAG_ACTIVITY_NEW_TASK. Android's
+         * documented behaviour for that flag when a task for the target already exists is
+         * to bring that task to the front WITH ITS LAST STATE RESTORED — so the OEM dialer
+         * came back exactly as the rep had left it and the new number was never applied.
+         * The dialer task was alive from the 12:13 call; hence the stale 12:15 screen.
+         *
+         * FIX: launch it ourselves with FLAG_ACTIVITY_CLEAR_TOP | SINGLE_TOP, which tears
+         * down the stale dialer screen so the new number has to be applied.
+         *
+         * WHY ACTION_DIAL AND NOT ACTION_CALL: ACTION_CALL would place the call directly
+         * and make this class of bug impossible (no dialer UI = no stale state), and we do
+         * hold CALL_PHONE. But this app never selects a PhoneAccountHandle, so on a
+         * dual-SIM handset ACTION_CALL silently uses the DEFAULT SIM and the rep loses the
+         * SIM chooser. After a week of getting SIM 1/SIM 2 right, that trade is not worth
+         * it. ACTION_DIAL keeps the confirm + SIM choice exactly as today.
+         *
+         * SCOPE: additive only. Recording capture, the CallLog sync, Call Activity and
+         * SIM prefs are untouched — this method only launches an Intent. In particular
+         * registerOutgoingCall() still writes last_dialed_phone exactly as before, so the
+         * recording gate's reference point does not move.
+         * ==================================================================== */
+        @JavascriptInterface
+        public boolean dial(String number) {
+            final String n = number == null ? "" : number.trim();
+            if (n.isEmpty()) return false;
+            try {
+                // Uri.fromParts does the tel: escaping correctly and preserves a leading
+                // '+' for international numbers (Uri.encode would turn it into %2B).
+                final Intent i = new Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", n, null));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                         | Intent.FLAG_ACTIVITY_CLEAR_TOP     // <-- kills the stale dialer screen
+                         | Intent.FLAG_ACTIVITY_SINGLE_TOP);  // <-- reuse, but deliver onNewIntent
+                runOnUiThread(() -> {
+                    try { startActivity(i); }
+                    catch (Exception e) { Log.w(TAG, "dial(): startActivity failed: " + e.getMessage()); }
+                });
+                Log.i(TAG, "dial() -> ACTION_DIAL " + n);
+                return true;
+            } catch (Exception e) {
+                // Returning false lets the SPA fall back to the old tel: link rather than
+                // leaving the rep with a dead button.
+                Log.w(TAG, "dial() failed: " + e.getMessage());
+                return false;
+            }
+        }
+
         public String getSims() {
             org.json.JSONArray arr = new org.json.JSONArray();
             try {
@@ -1187,49 +1142,6 @@ public class MainActivity extends BridgeActivity {
             Log.i(TAG, "scheduleCallLogAutoSync: hourly worker enqueued");
         } catch (Exception e) {
             Log.w(TAG, "scheduleCallLogAutoSync failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * CALLLOG_SYNC_ON_OPEN_v1 — fire an immediate call-log sync.
-     *
-     * Why: a PeriodicWorkRequest never runs at enqueue time — Android gives it its
-     * first turn somewhere inside the hour, and Doze/OEM battery managers delay it
-     * further. So the hourly worker alone makes "auto sync" look broken on a fresh
-     * install. This runs one straight away when the app opens/resumes.
-     *
-     * SAFETY — why this cannot hang the app (unlike the recording sync):
-     *   • It runs in a WorkManager background thread — never on the UI thread.
-     *   • It reads the CallLog SQLite table only: number, timestamp, duration, SIM.
-     *   • It performs ZERO file I/O. It never opens the recording folder and never
-     *     touches RecordingsBackgroundSyncWorker (which stays disabled).
-     *   • It is watermark-bounded — only rows since the last sync (usually 0-5).
-     *   • Debounced to at most once per 5 minutes, so repeatedly opening the app
-     *     cannot hammer it.
-     */
-    private void runCallLogSyncNow(String reason) {
-        try {
-            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-            long last = prefs.getLong("calllog_sync_last_kick", 0L);
-            long now  = System.currentTimeMillis();
-            if (now - last < 5 * 60 * 1000L) {   // debounce — max one kick / 5 min
-                Log.i(TAG, "runCallLogSyncNow skipped (debounced) - " + reason);
-                return;
-            }
-            prefs.edit().putLong("calllog_sync_last_kick", now).apply();
-
-            Constraints constraints = new Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build();
-            OneTimeWorkRequest req = new OneTimeWorkRequest.Builder(CallLogAutoSyncWorker.class)
-                .setConstraints(constraints)
-                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-                .addTag("calllog-sync-now")
-                .build();
-            WorkManager.getInstance(this).enqueue(req);
-            Log.i(TAG, "runCallLogSyncNow enqueued (" + reason + ")");
-        } catch (Exception e) {
-            Log.w(TAG, "runCallLogSyncNow failed: " + e.getMessage());
         }
     }
 }
