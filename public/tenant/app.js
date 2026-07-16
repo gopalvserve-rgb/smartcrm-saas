@@ -4758,7 +4758,23 @@ async function openAddWidgetModal(onPicked) {
     const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.5rem' } });
     items.forEach(({ type, def }) => {
       grid.appendChild(h('button', { class: 'btn',
-        style: { textAlign: 'left', padding: '.7rem .9rem' },
+        /* DASH_WIDGET_PICKER_FIX_v1 (2026-07-16) — the widget cards rendered with their
+         * title and description OVERLAPPING each other, text spilling out of the card.
+         *
+         * The card is a `.btn`, and .btn is:
+         *     display: inline-flex; align-items: center; justify-content: center;
+         *     white-space: nowrap;
+         * ...so the two child divs (title, description) were laid out SIDE BY SIDE in a
+         * flex row, centred, and the description could not wrap — it just overflowed on
+         * top of the title. It only looks fine on buttons with a single short label,
+         * which is every other .btn in the app.
+         *
+         * display:block makes the children stack as intended; white-space:normal lets the
+         * description wrap inside the 220px grid cell. Scoped to this button only — the
+         * shared .btn class is untouched, so no other button in the CRM moves. */
+        style: { textAlign: 'left', padding: '.7rem .9rem',
+                 display: 'block', whiteSpace: 'normal', lineHeight: '1.35',
+                 height: 'auto', width: '100%' },
         onclick: async () => {
           const widget = { id: 'w-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
                             type, size: 'medium', config: {} };
@@ -4776,8 +4792,8 @@ async function openAddWidgetModal(onPicked) {
           }
           m.remove(); onPicked(widget);
         } },
-        h('div', { style: { fontWeight: 600 } }, def.title || type),
-        h('div', { class: 'muted', style: { fontSize: '.8rem' } }, def.description || '')));
+        h('div', { style: { fontWeight: 600, marginBottom: '.15rem' } }, def.title || type),
+        h('div', { class: 'muted', style: { fontSize: '.8rem', whiteSpace: 'normal' } }, def.description || '')));
     });
     body.appendChild(grid);
   });
