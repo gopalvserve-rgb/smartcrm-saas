@@ -691,28 +691,80 @@ async function api_campaigns_pullDiagnostic(token, payload) {
  * Status of "final" follows the standard statuses.is_final flag
  * (Junk / Won / Lost / etc.).
  * ============================================================ */
-async function api_campaigns_resetUnclosed(token, campaignId) {
+/* WORKSPACE_RECHURN_v2 (2026-07-15) — dry-run + filters.
+ *
+ * This used to take a bare campaignId and IMMEDIATELY un-assign every unclosed lead in
+ * the workspace. No count, no preview, no undo — and it wipes lead_pull_log, so a rep
+ * mid-conversation with 40 leads could have them scattered back to the pool by one click.
+ *
+ * Now:
+ *   • Backwards compatible — a bare number still works (legacy callers unaffected).
+ *   • Object form: { campaign_id, apply:false, status_ids:[], idle_days, user_id,
+ *                    skip_future_followups:true }
+ *   • apply DEFAULTS TO FALSE. You must ask for the write. Every bulk tool we built this
+ *     week is dry-run-first; re-churn is the most destructive of them.
+ *   • skip_future_followups (default ON) protects leads with a booked follow-up — those
+ *     are exactly the ones a rep is actively working.
+ */
+async function api_campaigns_resetUnclosed(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
-  const cid = Number(campaignId);
+
+  // Legacy: resetUnclosed(token, 5). New: resetUnclosed(token, { campaign_id: 5, ... })
+  const p = (payload && typeof payload === 'object') ? payload : { campaign_id: payload, apply: true };
+  const cid = Number(p.campaign_id);
   if (!cid) throw new Error('campaign_id required');
+  const apply = p.apply === true || p.apply === 1 || p.apply === '1';
+  const idleDays = Number(p.idle_days) || 0;
+  const statusIds = Array.isArray(p.status_ids) ? p.status_ids.map(Number).filter(Boolean) : [];
+  const onlyUser = Number(p.user_id) || 0;
+  const skipFuture = (p.skip_future_followups === undefined)
+    ? true
+    : (p.skip_future_followups === true || p.skip_future_followups === 1 || p.skip_future_followups === '1');
 
   // Make sure the campaign exists in this tenant.
   const c = await db.query('SELECT id, name FROM campaigns WHERE id = $1', [cid]);
   if (!c.rows.length) throw new Error('Campaign not found');
 
   // 1) Find the lead IDs we'll reset (so we can log the count + scope the pull-log delete).
+  const where = [`l.campaign_id = $1`, `COALESCE(s.is_final, 0) = 0`];
+  const params = [cid];
+  if (statusIds.length) { params.push(statusIds); where.push(`l.status_id = ANY($${params.length}::int[])`); }
+  if (onlyUser)         { params.push(onlyUser);  where.push(`l.assigned_to = $${params.length}`); }
+  if (idleDays > 0)     { params.push(idleDays);  where.push(`COALESCE(l.updated_at, l.created_at) < NOW() - ($${params.length} || ' days')::interval`); }
+  if (skipFuture) {
+    where.push(`(l.next_followup_at IS NULL OR l.next_followup_at < NOW())`);
+  }
+
   const cand = await db.query(
-    `SELECT l.id
+    `SELECT l.id, l.name, l.phone, l.assigned_to, l.status_id,
+            COALESCE(s.name, '—') AS status_name,
+            COALESCE(u.name, 'Unassigned') AS agent_name,
+            COALESCE(l.updated_at, l.created_at) AS last_touch
        FROM leads l
        LEFT JOIN statuses s ON s.id = l.status_id
-      WHERE l.campaign_id = $1
-        AND COALESCE(s.is_final, 0) = 0`,
-    [cid]
+       LEFT JOIN users u ON u.id = l.assigned_to
+      WHERE ${where.join(' AND ')}
+      ORDER BY last_touch ASC`,
+    params
   );
   const ids = cand.rows.map(r => Number(r.id));
+
+  // DRY RUN — report exactly what WOULD happen. Nothing is written.
+  if (!apply) {
+    return {
+      ok: true, apply: false, campaign_id: cid, campaign_name: c.rows[0].name,
+      would_reset: ids.length,
+      filters: { status_ids: statusIds, idle_days: idleDays, user_id: onlyUser, skip_future_followups: skipFuture },
+      sample: cand.rows.slice(0, 25).map(r => ({
+        id: r.id, name: r.name, phone: r.phone, status: r.status_name,
+        agent: r.agent_name, last_touch: r.last_touch
+      }))
+    };
+  }
+
   if (!ids.length) {
-    return { ok: true, reset_count: 0, campaign_id: cid, campaign_name: c.rows[0].name };
+    return { ok: true, apply: true, reset_count: 0, campaign_id: cid, campaign_name: c.rows[0].name };
   }
 
   // 2) Wipe assignment + un-hide + bump updated_at in a transaction.
@@ -1011,7 +1063,14 @@ async function api_campaigns_report(token, payload) {
   let userRows = { rows: [] };
   try {
     userRows = await db.query(
-      `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
+      /* WORKSPACE_USERROWS_FIX_v1 (2026-07-15) — this said
+       *     COALESCE(u.full_name, u.username, 'Unassigned')
+       * but the users table has NO full_name and NO username column — it is `name`
+       * (db/schema.sql:11). So this query threw "column u.full_name does not exist"
+       * on every call, the `catch (_) {}` below swallowed it, and user_rows returned
+       * [] forever. The By-user breakdown has NEVER worked, in either report fn.
+       * Confirmed live on mahajan: 578 assigned leads, user_rows = []. */
+      `SELECT COALESCE(NULLIF(u.name, ''), 'Unassigned') AS user_name,
               l.assigned_to,
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${dateClause.params.length + 1}::text[]))::int AS final_cnt,
@@ -1019,7 +1078,7 @@ async function api_campaigns_report(token, payload) {
          FROM leads l
          LEFT JOIN users u ON u.id::text = l.assigned_to::text
         WHERE ${dateClause.sql}
-        GROUP BY u.full_name, u.username, l.assigned_to
+        GROUP BY u.name, l.assigned_to
         ORDER BY total DESC`,
       dateClause.params.concat([finalArr, wonArr])
     );
@@ -1234,7 +1293,14 @@ async function api_campaigns_reportAdvanced(token, payload) {
   let userRows = { rows: [] };
   try {
     userRows = await db.query(
-      `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
+      /* WORKSPACE_USERROWS_FIX_v1 (2026-07-15) — this said
+       *     COALESCE(u.full_name, u.username, 'Unassigned')
+       * but the users table has NO full_name and NO username column — it is `name`
+       * (db/schema.sql:11). So this query threw "column u.full_name does not exist"
+       * on every call, the `catch (_) {}` below swallowed it, and user_rows returned
+       * [] forever. The By-user breakdown has NEVER worked, in either report fn.
+       * Confirmed live on mahajan: 578 assigned leads, user_rows = []. */
+      `SELECT COALESCE(NULLIF(u.name, ''), 'Unassigned') AS user_name,
               l.assigned_to,
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS final_cnt,
@@ -1242,7 +1308,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
          FROM leads l
          LEFT JOIN users u ON u.id::text = l.assigned_to::text
         WHERE ${W}
-        GROUP BY u.full_name, u.username, l.assigned_to
+        GROUP BY u.name, l.assigned_to
         ORDER BY total DESC`,
       params.concat([finalArr, wonArr])
     );
