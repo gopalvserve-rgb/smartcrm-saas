@@ -7278,13 +7278,39 @@ function callLead(lead) {
     }).catch(() => {});
   } catch (_) {}
 
-  // Fire the tel: link FIRST so the dialer opens immediately (any user
-  // gesture context is still active here)
+  // Fire the dialer FIRST so it opens immediately (any user gesture context is
+  // still active here)
   const hasPlus = raw.trim().startsWith('+');
   const telTarget = (hasPlus ? '+' : '') + digits;
-  const a = document.createElement('a');
-  a.href = 'tel:' + telTarget;
-  a.click();
+
+  /* DIAL_INTENT_FIX_v1 (2026-07-15) — the dialer used to open showing the PREVIOUSLY
+   * dialled number (filmed: typed 9566145501 at 12:15, dialer showed 7200368725 from
+   * 12:13, with its Recents screen behind it).
+   *
+   * `<a href="tel:...">.click()` is a plain web navigation. Nothing in the APK
+   * intercepted tel:, so Capacitor's generic handler fired ACTION_VIEW with only
+   * FLAG_ACTIVITY_NEW_TASK — and Android's documented behaviour for that flag, when a
+   * task for the dialer already exists, is to bring it forward WITH ITS LAST STATE
+   * RESTORED. The rep's dialer was still alive from the previous call, so it resumed
+   * with the old number and our tel: payload was dropped.
+   *
+   * LeadCRMNative.dial() launches ACTION_DIAL ourselves with CLEAR_TOP | SINGLE_TOP,
+   * which tears the stale screen down. Falls back to the old tel: link when the bridge
+   * is absent (older APK / desktop web), so nothing regresses for anyone.
+   *
+   * NOTE: everything above this comment — the pending-call stash, registerOutgoingCall
+   * (which feeds last_dialed_phone to the RECORDING gate) and the dial_requested row —
+   * is deliberately untouched. This change is the launch mechanism only. */
+  let _dialed = false;
+  if (window.LeadCRMNative && typeof LeadCRMNative.dial === 'function') {
+    try { _dialed = LeadCRMNative.dial(telTarget) !== false; }
+    catch (e) { console.warn('[leadcrm] native dial failed, using tel: link:', e); _dialed = false; }
+  }
+  if (!_dialed) {
+    const a = document.createElement('a');
+    a.href = 'tel:' + telTarget;
+    a.click();
+  }
 
   // Then open the after-call modal. It sits in the background while the
   // user is on the call. When they return to the app, it's already there.
