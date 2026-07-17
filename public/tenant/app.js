@@ -19966,6 +19966,77 @@ function openCampaignModal(templates) {
   form.appendChild(pasteBox);
   form._getPastedRows = () => _campPastedRows;
 
+  /* WA_CAMPAIGN_IMAGE_v1 (2026-07-17) — Gopal: "When Trying To pick image For header in Bulk
+   * Whats App Campaign, Search result in desktop is not showing Images only showing excel files".
+   *
+   * There was no image picker in this modal AT ALL. The only <input type=file> here is the
+   * recipients Excel upload (accept='.xlsx,.xls,.csv') — so that is the dialog you got, and it
+   * filtered to spreadsheets because that is exactly what it is for. For an IMAGE-header
+   * template the preview merely printed the label "Image header (uploaded at send time)" —
+   * a promise the UI never kept, because nothing ever collected the file.
+   *
+   * Consequence beyond the annoyance: the campaign posted no image_url, so _sendTemplate got
+   * imageUrl=null and sent an image-header template with NO header → Meta rejects it (#132012
+   * header format mismatch). That is the long-standing "campaigns can't send image templates"
+   * bug — same root cause.
+   *
+   * The whole backend was already built and waiting: wa_campaigns.image_url (schema.sql:546),
+   * present in the db/pg.js SCHEMA whitelist (checked — that list has silently dropped columns
+   * 5 times before), api_wb_campaigns_create already does `image_url: p.image_url || null`, and
+   * _campaignTick already passes `imageUrl: camp.image_url` to _sendTemplate. ONLY the UI was
+   * missing. Mirrors openInitiateChatModal so both paths behave identically. */
+  const campMediaBox = h('div', { class: 'f-row full', id: 'cm-media' });
+  form.appendChild(campMediaBox);
+  let campMediaUrl = '';
+  let campHdrFmt = '';
+
+  function renderCampMedia(t) {
+    campMediaBox.innerHTML = '';
+    campMediaUrl = '';
+    campHdrFmt = '';
+    if (!t) return;
+    const comps = t.components || [];
+    const hdr = Array.isArray(comps) ? comps.find(c => (c && (c.type || '').toUpperCase()) === 'HEADER') : null;
+    const fmt = String((hdr && hdr.format) || t.header_type || '').toUpperCase();
+    if (['IMAGE', 'VIDEO', 'DOCUMENT'].indexOf(fmt) < 0) return;
+    campHdrFmt = fmt;
+    const acceptMap = { IMAGE: 'image/*', VIDEO: 'video/*', DOCUMENT: '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx' };
+    const labelMap  = { IMAGE: '🖼️ Image header', VIDEO: '🎥 Video header', DOCUMENT: '📄 Document header' };
+    const wrap = h('div', { style: { padding: '.6rem .7rem', background: '#fffbeb',
+      border: '1px solid #fde68a', borderRadius: '8px' } });
+    wrap.appendChild(h('label', { style: { fontWeight: 600, display: 'block', marginBottom: '.35rem' } },
+      labelMap[fmt] + ' — required for this template'));
+    const filePick = h('input', { type: 'file', accept: acceptMap[fmt] || '*/*',
+      style: { width: '100%', marginBottom: '.3rem' } });
+    const urlInp = h('input', { type: 'url', placeholder: 'Or paste a public URL…',
+      style: { width: '100%', padding: '.4rem .6rem', border: '1px solid #cbd5e1',
+               borderRadius: '6px', fontSize: '.82rem', boxSizing: 'border-box' } });
+    const note = h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.3rem' } },
+      'Pick a file (we host it for you) OR paste a public URL Meta can fetch. The same image goes to every recipient.');
+    filePick.onchange = async () => {
+      const f = filePick.files && filePick.files[0];
+      if (!f) return;
+      if (f.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
+      note.textContent = '⏳ Uploading ' + f.name + '…';
+      try {
+        const fd = new FormData(); fd.append('file', f);
+        const r = await fetch('/api/wa-sample', { method: 'POST', headers: { 'x-auth-token': CRM.token }, body: fd });
+        if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Upload failed (HTTP ' + r.status + ')'); }
+        const j = await r.json();
+        urlInp.value = j.url || '';
+        campMediaUrl = j.url || '';
+        note.innerHTML = '✓ Hosted: <code style="font-size:.7rem">' + (j.url || '') + '</code>';
+        _campTplRenderPreview(t);
+      } catch (e) {
+        toast('Upload failed: ' + e.message, 'err');
+        note.textContent = 'Pick a file (we host it for you) OR paste a public URL Meta can fetch.';
+      }
+    };
+    urlInp.addEventListener('input', () => { campMediaUrl = urlInp.value || ''; _campTplRenderPreview(t); });
+    wrap.appendChild(filePick); wrap.appendChild(urlInp); wrap.appendChild(note);
+    campMediaBox.appendChild(wrap);
+  }
+
   // Variables block
   const varsBox = h('div', { class: 'f-row full', id: 'cm-vars' });
   form.appendChild(varsBox);
@@ -20003,9 +20074,14 @@ function openCampaignModal(templates) {
     // Header
     if (header) {
       const fmt = String(header.format || '').toUpperCase();
-      if (fmt === 'IMAGE' && (header.example?.header_handle?.[0] || header.example?.header_url)) {
+      /* WA_CAMPAIGN_IMAGE_v1 — preview what will ACTUALLY be sent. Priority: the file the
+       * user just picked > Meta's sample from the approved template > placeholder. The old
+       * copy said "(uploaded at send time)", which was doubly wrong: nothing uploaded it,
+       * and now that the picker exists the upload happens right here. A preview that shows
+       * a grey box while a real image is attached is a preview you stop trusting. */
+      if (fmt === 'IMAGE' && (campMediaUrl || header.example?.header_handle?.[0] || header.example?.header_url)) {
         bubble.appendChild(h('img', {
-          src: header.example.header_url || header.example.header_handle[0],
+          src: campMediaUrl || header.example.header_url || header.example.header_handle[0],
           style: { maxWidth: '100%', borderRadius: '6px', marginBottom: '6px', display: 'block' }
         }));
       } else if (fmt === 'IMAGE') {
@@ -20013,7 +20089,7 @@ function openCampaignModal(templates) {
           style: { background: '#e2e8f0', height: '90px', borderRadius: '6px',
                    display: 'flex', alignItems: 'center', justifyContent: 'center',
                    color: '#64748b', marginBottom: '6px', fontSize: '.82rem' }
-        }, '🖼 Image header (uploaded at send time)'));
+        }, '🖼 Pick an image above ↑'));
       } else if (fmt === 'VIDEO') {
         bubble.appendChild(h('div', {
           style: { background: '#e2e8f0', height: '90px', borderRadius: '6px',
@@ -20105,6 +20181,7 @@ function openCampaignModal(templates) {
     const [name, lang] = String(combo || '').split('||');
     const t = approved.find(x => x.name === name && x.language === lang);
     varsBox.innerHTML = '';
+    renderCampMedia(t);   // WA_CAMPAIGN_IMAGE_v1 — show the media-header picker for this template
     if (!t) { previewBox.innerHTML = ''; return; }
     if (!t.body_params) {
       varsBox.appendChild(h('div', {
@@ -20251,11 +20328,23 @@ function openCampaignModal(templates) {
         }
         uploaded_rows = merged.length ? merged : null;
       }
+      /* WA_CAMPAIGN_IMAGE_v1 — block creation if this template needs a media header but
+       * none was supplied. Without this the campaign queues happily, then EVERY recipient
+       * fails at Meta with #132012 and you only find out from the failed count. Better to
+       * refuse one click than to burn a 1000-recipient send. */
+      if (campHdrFmt && !campMediaUrl) {
+        toast('This template has a ' + campHdrFmt.toLowerCase() + ' header — upload a file or paste a URL first', 'err');
+        return;
+      }
       try {
         const r = await api('api_wb_campaigns_create', {
           name: form.name.value,
           template_name: name, template_language: lang || 'en_US',
           variables, filter,
+          /* WA_CAMPAIGN_IMAGE_v1 — the missing link. The column, the whitelist, the create
+           * endpoint and _campaignTick were all already wired for this; the SPA just never
+           * sent it, so image-header campaigns went out headerless and Meta rejected them. */
+          image_url: campMediaUrl || undefined,
           uploaded_rows: uploaded_rows && uploaded_rows.length ? uploaded_rows : undefined,
           /* WA_CAMPAIGN_SCHED_FIX_v1 — no more send_now checkbox. Backend
            * derives send-now vs schedule from scheduled_at alone. */
