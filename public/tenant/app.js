@@ -19174,7 +19174,16 @@ function _waErrExplain(raw) {
     '132001': { title: 'Template language mismatch', fix: 'The template’s language does not match what Meta approved. Set the campaign template language to en_US (or the exact language Meta approved for that template).' },
     '132000': { title: 'Template variable count mismatch', fix: 'The number of variables you filled does not match the template. Add or remove variables so the count exactly matches the approved template.' },
     '132005': { title: 'Template content mismatch', fix: 'The template was edited/paused at Meta. Re-sync templates and pick the current approved version.' },
-    '132012': { title: 'Template parameter format is invalid', fix: 'A variable value has a format Meta rejects (e.g. newline/tab, or too long). Clean the variable values.' },
+    /* WA_ERR_132012_FIX_v1 (2026-07-17) — this text used to say only "a variable value has a
+     * format Meta rejects… clean the variable values", which sent Gopal off checking his
+     * variables while the real cause sat elsewhere. Meta's own words are "Parameter format
+     * does not match format in the created TEMPLATE" — it fires for a STRUCTURE mismatch too,
+     * and that is the far more common cause here: an IMAGE/VIDEO/DOCUMENT-header template sent
+     * with no header. Live proof on tenant 'his': warehouse_management (header_type=IMAGE),
+     * every campaign image_url=NULL, 4 campaigns × 100% failed (2/2, 2/2, 26/26, 26/26) — 56
+     * recipients, 0 ever sent, all #132012. Body-param junk is real but rarer, and
+     * _sanitizeTplParam already strips newlines/tabs/long values, so lead with the header. */
+    '132012': { title: 'Template parameter format doesn\'t match the template', fix: 'Usually a media header is missing: if the template has an IMAGE/VIDEO/DOCUMENT header you must attach that file when creating the campaign — pick it under the template dropdown. (Less often: a variable value Meta rejects, e.g. a newline or over 1024 chars.)' },
     '131026': { title: 'Recipient is not on WhatsApp', fix: 'This number does not have a WhatsApp account — nothing to deliver.' },
     '131047': { title: 'Re-engagement needed (24h window closed)', fix: 'More than 24h since the user last messaged you — only approved template messages can be sent.' },
     '131049': { title: 'Meta limited this marketing message', fix: 'Meta throttled marketing delivery to this user. Try later or use a different template type.' },
