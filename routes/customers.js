@@ -555,6 +555,67 @@ async function api_customers_ruleDelete(token, id) {
 }
 
 /* ---------------------------------------------------------------------------
+ * CUSTOM FIELDS — admin-defined extra fields on the Convert form.
+ * Mirrors the leads custom_fields feature. Definitions live in
+ * buyer_custom_fields; the VALUES a rep enters land in buyers.extra_json,
+ * keyed by field `key`. Read is open to any authed user (the convert form
+ * needs the defs); create/edit/delete are admin-only.
+ * ------------------------------------------------------------------------- */
+async function api_customers_fields(token) {
+  await authUser(token);
+  if (!isEnabled()) return [];
+  try {
+    const r = await db.query('SELECT * FROM buyer_custom_fields WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
+    return r.rows;
+  } catch (_) { return []; }
+}
+async function api_customers_fieldSave(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  if (me.role !== 'admin') throw new Error('Admins only');
+  const p = payload || {};
+  if (!p.label) throw new Error('label required');
+  const TYPES = ['text', 'number', 'date', 'select', 'textarea'];
+  const type = TYPES.indexOf(p.field_type) >= 0 ? p.field_type : 'text';
+  // Derive a stable machine key from the label if none supplied. Once set it
+  // never changes on edit — the key is what extra_json values are stored under,
+  // so renaming it would orphan every value already saved.
+  let key = String(p.key || '').trim();
+  if (!key) key = 'cf_' + String(p.label).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  const row = {
+    key: key,
+    label: p.label,
+    field_type: type,
+    options: p.options || null,
+    is_required: p.is_required ? 1 : 0,
+    sort_order: Number(p.sort_order) || 10,
+    is_active: p.is_active === 0 ? 0 : 1
+  };
+  if (p.id) {
+    // never rewrite key on edit
+    delete row.key;
+    await db.update('buyer_custom_fields', Number(p.id), row);
+    return { ok: true, id: Number(p.id) };
+  }
+  // guard against a duplicate key
+  try {
+    const ex = await db.query('SELECT id FROM buyer_custom_fields WHERE key = $1 LIMIT 1', [key]);
+    if (ex.rows[0]) throw new Error('A field with key "' + key + '" already exists');
+  } catch (e) { if (/already exists/.test(e.message)) throw e; }
+  const id = await db.insert('buyer_custom_fields', Object.assign({ created_at: db.nowIso() }, row));
+  return { ok: true, id };
+}
+async function api_customers_fieldDelete(token, id) {
+  const me = await authUser(token);
+  _assertEnabled();
+  if (me.role !== 'admin') throw new Error('Admins only');
+  // Soft-delete: flip is_active so existing extra_json values aren't orphaned
+  // and the field can be brought back. Hard delete would silently hide data.
+  await db.update('buyer_custom_fields', Number(id), { is_active: 0 });
+  return { ok: true };
+}
+
+/* ---------------------------------------------------------------------------
  * REPORTS — Gopal: "on Stage, saler Wise Volume, Count, Type Of product"
  *   Volume = SUM(sale_amount)  ·  Count = COUNT(customers)
  *
@@ -659,5 +720,6 @@ module.exports = {
   api_customers_addWatcher, api_customers_removeWatcher,
   api_customers_stages, api_customers_stageSave,
   api_customers_rules, api_customers_ruleSave, api_customers_ruleDelete,
-  api_customers_report
+  api_customers_report,
+  api_customers_fields, api_customers_fieldSave, api_customers_fieldDelete
 };
