@@ -41,6 +41,7 @@ try { errorLogs = require('./errorLogs'); } catch (_) {}
 const ROUTE_FILES = [
   'admin',
   'attempted',       /* ATTEMPTED_STATUS_v1 — vserve-only Attempted status + counters */
+  'customers',       /* CUSTOMER_MODULE_v1 — vserve-only Convert-to-Customer + rules + reports */
   'userCallPrefs',   /* USER_CALL_PREFS_v1 — per-user call settings */
   'announcements',
   'auth',
