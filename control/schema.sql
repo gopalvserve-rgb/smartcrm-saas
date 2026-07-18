@@ -198,6 +198,19 @@ CREATE TABLE IF NOT EXISTS platform_announcements (
 );
 CREATE INDEX IF NOT EXISTS idx_pa_active ON platform_announcements(is_active);
 
+-- POPUP_BROADCAST_v1 (2026-07-18) — super-admin can push a styled pop-up
+-- (text or image + clickable URL) to every tenant's web screen, not just a
+-- top banner. All additive; existing banner rows keep display_mode='banner'.
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS display_mode TEXT NOT NULL DEFAULT 'banner'; -- banner | popup
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS image_url    TEXT;
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS link_url     TEXT;   -- clickable URL for the whole popup / CTA
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS cta_text     TEXT;   -- button label (defaults to "Learn more")
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS bg_color     TEXT;   -- designer style
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS text_color   TEXT;
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS accent_color TEXT;
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS dismissible  INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE platform_announcements ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMPTZ; -- control.update() sets this; column was missing
+
 -- ---- custom_requirements ----------------------------------------
 -- Tenants submit "I'd like X feature for ₹Y", admin replies + charges.
 CREATE TABLE IF NOT EXISTS custom_requirements (
@@ -252,29 +265,6 @@ CREATE TABLE IF NOT EXISTS signups (
 CREATE INDEX IF NOT EXISTS idx_signups_email ON signups(email);
 CREATE INDEX IF NOT EXISTS idx_signups_order ON signups(cashfree_order_id);
 CREATE INDEX IF NOT EXISTS idx_signups_status ON signups(status);
-
--- ---- SAAS_TXN_v1 — platform transactions ledger -----------------
-CREATE TABLE IF NOT EXISTS transactions (
-  id               SERIAL PRIMARY KEY,
-  tenant_id        INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
-  type             TEXT NOT NULL DEFAULT 'manual',   -- auto | manual
-  source           TEXT,                              -- signup | renewal | manual
-  amount_inr       NUMERIC(12,2) NOT NULL DEFAULT 0,  -- grand total (incl GST)
-  sale_amount_inr  NUMERIC(12,2),                     -- excl GST
-  gst_amount_inr   NUMERIC(12,2) DEFAULT 0,
-  gst_mode         TEXT DEFAULT 'no_gst',             -- gst | no_gst
-  transaction_mode TEXT,
-  transaction_id   TEXT,
-  txn_date         DATE,
-  notes            TEXT,
-  invoice_id       INTEGER,
-  created_by       INTEGER,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_transactions_tenant  ON transactions(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
-CREATE INDEX IF NOT EXISTS idx_transactions_type    ON transactions(type);
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ; -- SAAS_TXN_EDIT_FIX_v1
 
 -- ============================================================
 -- Cashfree webhook logs — dedicated audit trail for /hook/cashfree
@@ -577,20 +567,6 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS balance_banner_dismissed_at TIMESTA
 -- TENANT_BILLING_NOTIFY_v1 (2026-06-20) — billing-reminder cron support.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_type TEXT NOT NULL DEFAULT 'live';
--- SIGNUP_TXN_v1 — transaction + GST details captured at signup, stored on tenant
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_mode TEXT;
--- WELCOME_EMAIL_v2 — per-tenant welcome-email delivery tracking.
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_status  TEXT;   -- sent | failed
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_email_error   TEXT;
--- WELCOME_EMAIL_v3 — store the one-time onboarding password so the welcome
--- email can be RESENT without resetting it. Cleared is fine; onboarding creds.
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS welcome_temp_password TEXT;
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_id   TEXT;
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS transaction_date TIMESTAMPTZ;
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS gst_amount_inr   NUMERIC(12,2);
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sale_amount_inr  NUMERIC(12,2);
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenure           TEXT;
 
 -- SIGNUP_REQUEST_v2 (2026-06-20) — payment status on signup_requests.
 -- Carried into tenants on approve.
