@@ -72,11 +72,11 @@ const DEFAULT_STAGES = [
 async function ensureSeed() {
   if (!isEnabled()) return;
   try {
-    const r = await db.query('SELECT COUNT(*)::int AS n FROM customer_stages');
+    const r = await db.query('SELECT COUNT(*)::int AS n FROM buyer_stages');
     if (!Number(r.rows[0].n)) {
       for (const s of DEFAULT_STAGES) {
         await db.query(
-          `INSERT INTO customer_stages (name, color, sort_order, expected_days, is_final, is_active)
+          `INSERT INTO buyer_stages (name, color, sort_order, expected_days, is_final, is_active)
            VALUES ($1,$2,$3,$4,$5,1)`,
           [s.name, s.color, s.sort_order, s.expected_days || null, s.is_final || 0]
         );
@@ -87,12 +87,12 @@ async function ensureSeed() {
      * converted sale that matches no rule would otherwise land with owner=NULL —
      * an order nobody is delivering, sitting silently until the customer calls
      * angry. There is always a catch-all. */
-    const f = await db.query('SELECT COUNT(*)::int AS n FROM customer_assign_rules WHERE is_fallback = 1');
+    const f = await db.query('SELECT COUNT(*)::int AS n FROM buyer_rules WHERE is_fallback = 1');
     if (!Number(f.rows[0].n)) {
       const admin = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = 1 ORDER BY id ASC LIMIT 1`);
       const uid = admin.rows[0] ? Number(admin.rows[0].id) : null;
       await db.query(
-        `INSERT INTO customer_assign_rules (name, product_id, mode, user_ids, priority, is_fallback, is_active)
+        `INSERT INTO buyer_rules (name, product_id, mode, user_ids, priority, is_fallback, is_active)
          VALUES ('Fallback — nothing matched', NULL, 'fixed', $1::jsonb, 9999, 1, 1)`,
         [JSON.stringify(uid ? [uid] : [])]
       );
@@ -110,7 +110,7 @@ async function ensureSeed() {
  * ------------------------------------------------------------------------- */
 async function _pickAssignee(productId) {
   const { rows } = await db.query(
-    `SELECT * FROM customer_assign_rules
+    `SELECT * FROM buyer_rules
       WHERE is_active = 1
         AND (product_id = $1 OR product_id IS NULL)
       ORDER BY (product_id IS NULL) ASC, priority ASC, id ASC`,
@@ -137,7 +137,7 @@ async function _pickAssignee(productId) {
       const b = await db.query(
         `SELECT u.id, COUNT(c.id)::int AS n
            FROM users u
-           LEFT JOIN customers c
+           LEFT JOIN buyers c
              ON c.owner_user_id = u.id
             AND c.closed_at IS NULL
           WHERE u.id = ANY($1::int[])
@@ -147,7 +147,7 @@ async function _pickAssignee(productId) {
 
     // round_robin (default) — atomic bump
     const up = await db.query(
-      `UPDATE customer_assign_rules
+      `UPDATE buyer_rules
           SET rr_position = (rr_position + 1), updated_at = NOW()
         WHERE id = $1 RETURNING rr_position`, [rule.id]);
     const pos = Number(up.rows[0].rr_position) - 1;
@@ -163,7 +163,7 @@ async function api_customers_previewAssignee(token, payload) {
   await ensureSeed();
   const productId = payload && payload.product_id ? Number(payload.product_id) : null;
   const { rows } = await db.query(
-    `SELECT * FROM customer_assign_rules
+    `SELECT * FROM buyer_rules
       WHERE is_active = 1 AND (product_id = $1 OR product_id IS NULL)
       ORDER BY (product_id IS NULL) ASC, priority ASC, id ASC`, [productId]);
   for (const rule of rows) {
@@ -201,7 +201,7 @@ async function api_customers_convert(token, payload) {
   // Idempotency. There is also a UNIQUE index on customers(lead_id) — belt and
   // braces, because a double-clicked button that creates two customers would
   // silently double-count the sale in every report below.
-  const dupe = await db.query('SELECT id FROM customers WHERE lead_id = $1 LIMIT 1', [leadId]);
+  const dupe = await db.query('SELECT id FROM buyers WHERE lead_id = $1 LIMIT 1', [leadId]);
   if (dupe.rows[0]) throw new Error('This lead is already converted (customer #' + dupe.rows[0].id + ')');
 
   const phone = _digits(p.phone || lead.phone || lead.whatsapp);
@@ -211,7 +211,7 @@ async function api_customers_convert(token, payload) {
   let isRepeat = 0;
   try {
     const r = await db.query(
-      `SELECT id FROM customers WHERE right(regexp_replace(phone,'[^0-9]','','g'),10) = $1 LIMIT 1`,
+      `SELECT id FROM buyers WHERE right(regexp_replace(phone,'[^0-9]','','g'),10) = $1 LIMIT 1`,
       [phone.slice(-10)]);
     if (r.rows[0]) isRepeat = 1;
   } catch (_) {}
@@ -228,13 +228,13 @@ async function api_customers_convert(token, payload) {
   const pick = await _pickAssignee(productId);
 
   const firstStage = await db.query(
-    `SELECT id FROM customer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC LIMIT 1`);
+    `SELECT id FROM buyer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC LIMIT 1`);
   const stageId = firstStage.rows[0] ? Number(firstStage.rows[0].id) : null;
 
   /* product_name is SNAPSHOT, not a live join: renaming a product later must not
    * silently rewrite what past customers were sold. (The Inventory module already
    * matches stock by product NAME and a rename breaks it — INVENTORY_STOCK_v1.) */
-  const id = await db.insert('customers', {
+  const id = await db.insert('buyers', {
     lead_id: leadId,
     name: p.name || lead.name || ('Customer ' + phone.slice(-4)),
     phone,
@@ -265,7 +265,7 @@ async function api_customers_convert(token, payload) {
 
   try {
     await db.query(
-      `INSERT INTO customer_stage_history (customer_id, from_stage_id, to_stage_id, changed_by, note)
+      `INSERT INTO buyer_stage_history (customer_id, from_stage_id, to_stage_id, changed_by, note)
        VALUES ($1, NULL, $2, $3, $4)`,
       [id, stageId, me.id, 'Converted from lead #' + leadId +
         (pick.user_id ? (' · auto-assigned by rule: ' + (pick.rule_name || pick.rule_id)) : ' · NO RULE MATCHED')]
@@ -303,7 +303,7 @@ async function _visibleWhere(me) {
   return {
     sql: `(c.sales_user_id = ANY($1::int[])
            OR c.owner_user_id = ANY($1::int[])
-           OR EXISTS (SELECT 1 FROM customer_watchers w
+           OR EXISTS (SELECT 1 FROM buyer_watchers w
                        WHERE w.customer_id = c.id AND w.user_id = ANY($1::int[])))`,
     args: [ids]
   };
@@ -333,19 +333,19 @@ async function api_customers_list(token, payload) {
   // scope=mine|shared: "mine" means I'm accountable for delivery; "shared" means
   // I won it or I'm a specialist — I watch it but someone else drives it.
   if (p.scope === 'mine')   add('c.owner_user_id = $$', Number(me.id));
-  if (p.scope === 'shared') add('(c.owner_user_id IS DISTINCT FROM $$ AND (c.sales_user_id = $$ OR EXISTS (SELECT 1 FROM customer_watchers w2 WHERE w2.customer_id = c.id AND w2.user_id = $$)))', Number(me.id));
+  if (p.scope === 'shared') add('(c.owner_user_id IS DISTINCT FROM $$ AND (c.sales_user_id = $$ OR EXISTS (SELECT 1 FROM buyer_watchers w2 WHERE w2.customer_id = c.id AND w2.user_id = $$)))', Number(me.id));
 
   const page = Math.max(1, Number(p.page) || 1);
   const size = Math.min(200, Math.max(1, Number(p.page_size) || 50));
   const W = where.join(' AND ');
 
-  const cnt = await db.query(`SELECT COUNT(*)::int AS n FROM customers c WHERE ${W}`, args);
+  const cnt = await db.query(`SELECT COUNT(*)::int AS n FROM buyers c WHERE ${W}`, args);
   const rows = await db.query(
     `SELECT c.*,
             s.name AS stage_name, s.color AS stage_color, s.expected_days, s.is_final AS stage_final,
             uo.name AS owner_name, us.name AS sales_name
-       FROM customers c
-       LEFT JOIN customer_stages s ON s.id = c.stage_id
+       FROM buyers c
+       LEFT JOIN buyer_stages s ON s.id = c.stage_id
        LEFT JOIN users uo ON uo.id = c.owner_user_id
        LEFT JOIN users us ON us.id = c.sales_user_id
       WHERE ${W}
@@ -370,21 +370,21 @@ async function api_customers_get(token, id) {
   const r = await db.query(
     `SELECT c.*, s.name AS stage_name, s.color AS stage_color,
             uo.name AS owner_name, us.name AS sales_name
-       FROM customers c
-       LEFT JOIN customer_stages s ON s.id = c.stage_id
+       FROM buyers c
+       LEFT JOIN buyer_stages s ON s.id = c.stage_id
        LEFT JOIN users uo ON uo.id = c.owner_user_id
        LEFT JOIN users us ON us.id = c.sales_user_id
       WHERE c.id = $${v.args.length + 1} AND ${v.sql}`, [...v.args, Number(id)]);
   if (!r.rows[0]) throw new Error('Not found');
   const hist = await db.query(
     `SELECT h.*, u.name AS changed_by_name, f.name AS from_name, t.name AS to_name
-       FROM customer_stage_history h
+       FROM buyer_stage_history h
        LEFT JOIN users u ON u.id = h.changed_by
-       LEFT JOIN customer_stages f ON f.id = h.from_stage_id
-       LEFT JOIN customer_stages t ON t.id = h.to_stage_id
+       LEFT JOIN buyer_stages f ON f.id = h.from_stage_id
+       LEFT JOIN buyer_stages t ON t.id = h.to_stage_id
       WHERE h.customer_id = $1 ORDER BY h.changed_at DESC`, [Number(id)]);
   const watch = await db.query(
-    `SELECT w.*, u.name FROM customer_watchers w LEFT JOIN users u ON u.id = w.user_id
+    `SELECT w.*, u.name FROM buyer_watchers w LEFT JOIN users u ON u.id = w.user_id
       WHERE w.customer_id = $1`, [Number(id)]);
   return { ok: true, customer: r.rows[0], history: hist.rows, watchers: watch.rows };
 }
@@ -396,7 +396,7 @@ async function api_customers_setStage(token, payload) {
   const p = payload || {};
   const id = Number(p.id), stageId = Number(p.stage_id);
   if (!id || !stageId) throw new Error('id and stage_id required');
-  const c = await db.findById('customers', id);
+  const c = await db.findById('buyers', id);
   if (!c) throw new Error('Not found');
   /* The sales rep watches but does not drive delivery — otherwise "who is
    * accountable for this order" goes fuzzy again, which is the whole problem
@@ -405,13 +405,13 @@ async function api_customers_setStage(token, payload) {
     throw new Error('Only the assigned owner can move the stage');
   }
   const prev = c.stage_started_at ? Math.floor((Date.now() - new Date(c.stage_started_at).getTime()) / 1000) : null;
-  const st = await db.findById('customer_stages', stageId);
-  await db.update('customers', id, {
+  const st = await db.findById('buyer_stages', stageId);
+  await db.update('buyers', id, {
     stage_id: stageId, stage_started_at: db.nowIso(), updated_at: db.nowIso(),
     closed_at: (st && Number(st.is_final) === 1) ? db.nowIso() : null
   });
   await db.query(
-    `INSERT INTO customer_stage_history (customer_id, from_stage_id, to_stage_id, duration_prev_s, changed_by, note)
+    `INSERT INTO buyer_stage_history (customer_id, from_stage_id, to_stage_id, duration_prev_s, changed_by, note)
      VALUES ($1,$2,$3,$4,$5,$6)`,
     [id, c.stage_id || null, stageId, prev, me.id, p.note || null]);
   return { ok: true };
@@ -423,7 +423,7 @@ async function api_customers_update(token, payload) {
   const p = payload || {};
   const id = Number(p.id);
   if (!id) throw new Error('id required');
-  const c = await db.findById('customers', id);
+  const c = await db.findById('buyers', id);
   if (!c) throw new Error('Not found');
   const mayEdit = me.role === 'admin' || me.role === 'manager' ||
                   Number(c.owner_user_id) === Number(me.id) ||
@@ -439,7 +439,7 @@ async function api_customers_update(token, payload) {
   if (p.owner_user_id !== undefined && (me.role === 'admin' || me.role === 'manager')) {
     patch.owner_user_id = p.owner_user_id ? Number(p.owner_user_id) : null;
   }
-  await db.update('customers', id, patch);
+  await db.update('buyers', id, patch);
   return { ok: true };
 }
 
@@ -450,7 +450,7 @@ async function api_customers_addWatcher(token, payload) {
   const p = payload || {};
   if (!p.id || !p.user_id) throw new Error('id and user_id required');
   await db.query(
-    `INSERT INTO customer_watchers (customer_id, user_id, role, added_by)
+    `INSERT INTO buyer_watchers (customer_id, user_id, role, added_by)
      VALUES ($1,$2,$3,$4) ON CONFLICT (customer_id, user_id) DO NOTHING`,
     [Number(p.id), Number(p.user_id), p.role || 'specialist', me.id]);
   return { ok: true };
@@ -459,7 +459,7 @@ async function api_customers_removeWatcher(token, payload) {
   await authUser(token);
   _assertEnabled();
   const p = payload || {};
-  await db.query('DELETE FROM customer_watchers WHERE customer_id = $1 AND user_id = $2',
+  await db.query('DELETE FROM buyer_watchers WHERE customer_id = $1 AND user_id = $2',
     [Number(p.id), Number(p.user_id)]);
   return { ok: true };
 }
@@ -471,7 +471,7 @@ async function api_customers_stages(token) {
   await authUser(token);
   if (!isEnabled()) return [];
   await ensureSeed();
-  const r = await db.query('SELECT * FROM customer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
+  const r = await db.query('SELECT * FROM buyer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
   return r.rows;
 }
 async function api_customers_stageSave(token, payload) {
@@ -486,8 +486,8 @@ async function api_customers_stageSave(token, payload) {
     expected_days: p.expected_days ? Number(p.expected_days) : null,
     is_final: p.is_final ? 1 : 0, is_active: 1
   };
-  if (p.id) { await db.update('customer_stages', Number(p.id), row); return { ok: true, id: Number(p.id) }; }
-  const id = await db.insert('customer_stages', Object.assign({ created_at: db.nowIso() }, row));
+  if (p.id) { await db.update('buyer_stages', Number(p.id), row); return { ok: true, id: Number(p.id) }; }
+  const id = await db.insert('buyer_stages', Object.assign({ created_at: db.nowIso() }, row));
   return { ok: true, id };
 }
 
@@ -497,7 +497,7 @@ async function api_customers_rules(token) {
   await ensureSeed();
   const r = await db.query(
     `SELECT r.*, p.name AS product_name
-       FROM customer_assign_rules r
+       FROM buyer_rules r
        LEFT JOIN products p ON p.id = r.product_id
       ORDER BY r.is_fallback ASC, r.priority ASC, r.id ASC`);
   const users = await db.getAll('users');
@@ -530,14 +530,14 @@ async function api_customers_ruleSave(token, payload) {
     updated_at: db.nowIso()
   };
   if (p.id) {
-    const ex = await db.findById('customer_assign_rules', Number(p.id));
+    const ex = await db.findById('buyer_rules', Number(p.id));
     // The fallback's product must stay NULL — that's what makes it catch everything.
     if (ex && Number(ex.is_fallback) === 1) { row.product_id = null; row.is_active = 1; }
-    await db.update('customer_assign_rules', Number(p.id), row);
+    await db.update('buyer_rules', Number(p.id), row);
     return { ok: true, id: Number(p.id) };
   }
   if (!row.product_id) throw new Error('Pick a product (only the built-in fallback may apply to every product)');
-  const id = await db.insert('customer_assign_rules',
+  const id = await db.insert('buyer_rules',
     Object.assign({ is_fallback: 0, rr_position: 0, created_by: me.id, created_at: db.nowIso() }, row));
   return { ok: true, id };
 }
@@ -545,12 +545,12 @@ async function api_customers_ruleDelete(token, id) {
   const me = await authUser(token);
   _assertEnabled();
   if (me.role !== 'admin') throw new Error('Admins only');
-  const r = await db.findById('customer_assign_rules', Number(id));
+  const r = await db.findById('buyer_rules', Number(id));
   if (!r) throw new Error('Not found');
   /* Refuse to delete the catch-all. Without it a converted sale can land with
    * owner = NULL and nobody delivers it. Edit its pool instead. */
   if (Number(r.is_fallback) === 1) throw new Error('The fallback rule cannot be deleted — change who it points to instead');
-  await db.query('DELETE FROM customer_assign_rules WHERE id = $1', [Number(id)]);
+  await db.query('DELETE FROM buyer_rules WHERE id = $1', [Number(id)]);
   return { ok: true };
 }
 
@@ -585,14 +585,14 @@ async function api_customers_report(token, payload) {
             COALESCE(SUM(c.paid_amount),0)::float AS collected,
             COUNT(DISTINCT right(regexp_replace(c.phone,'[^0-9]','','g'),10))::int AS unique_customers,
             COUNT(*) FILTER (WHERE c.closed_at IS NOT NULL)::int AS completed
-       FROM customers c WHERE ${W}`, args);
+       FROM buyers c WHERE ${W}`, args);
 
   const byStage = await db.query(
     `SELECT s.id AS stage_id, s.name AS stage, s.color, s.sort_order,
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume
-       FROM customer_stages s
-       LEFT JOIN customers c ON c.stage_id = s.id AND ${W}
+       FROM buyer_stages s
+       LEFT JOIN buyers c ON c.stage_id = s.id AND ${W}
       WHERE s.is_active = 1
       GROUP BY s.id, s.name, s.color, s.sort_order
       ORDER BY s.sort_order ASC`, args);
@@ -603,7 +603,7 @@ async function api_customers_report(token, payload) {
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume,
             COALESCE(SUM(c.paid_amount),0)::float AS collected
-       FROM customers c
+       FROM buyers c
        JOIN users u ON u.id = c.sales_user_id
       WHERE ${W}
       GROUP BY u.id, u.name
@@ -614,7 +614,7 @@ async function api_customers_report(token, payload) {
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume,
             COUNT(c.id) FILTER (WHERE c.closed_at IS NULL)::int AS open_count
-       FROM customers c
+       FROM buyers c
        JOIN users u ON u.id = c.owner_user_id
       WHERE ${W}
       GROUP BY u.id, u.name
@@ -625,7 +625,7 @@ async function api_customers_report(token, payload) {
             c.product_id,
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume
-       FROM customers c WHERE ${W}
+       FROM buyers c WHERE ${W}
       GROUP BY c.product_name, c.product_id
       ORDER BY volume DESC`, args);
 
@@ -635,8 +635,8 @@ async function api_customers_report(token, payload) {
             COALESCE(s.name,'—') AS stage,
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume
-       FROM customers c
-       LEFT JOIN customer_stages s ON s.id = c.stage_id
+       FROM buyers c
+       LEFT JOIN buyer_stages s ON s.id = c.stage_id
       WHERE ${W}
       GROUP BY c.product_name, s.name, s.sort_order
       ORDER BY c.product_name ASC, s.sort_order ASC`, args);
