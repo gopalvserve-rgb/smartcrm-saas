@@ -1729,7 +1729,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_txns_gtxn ON payment_link_txns(gate
 --   "visible to both" requirement.
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS customer_stages (
+CREATE TABLE IF NOT EXISTS buyer_stages (
   id            SERIAL PRIMARY KEY,
   name          TEXT NOT NULL,
   color         TEXT DEFAULT '#6366f1',
@@ -1740,7 +1740,7 @@ CREATE TABLE IF NOT EXISTS customer_stages (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS customers (
+CREATE TABLE IF NOT EXISTS buyers (
   id               SERIAL PRIMARY KEY,
   lead_id          INTEGER REFERENCES leads(id) ON DELETE SET NULL,
   name             TEXT NOT NULL,
@@ -1754,7 +1754,7 @@ CREATE TABLE IF NOT EXISTS customers (
   currency         TEXT NOT NULL DEFAULT 'INR',
   payment_mode     TEXT,
   payment_ref      TEXT,
-  stage_id         INTEGER REFERENCES customer_stages(id) ON DELETE SET NULL,
+  stage_id         INTEGER REFERENCES buyer_stages(id) ON DELETE SET NULL,
   stage_started_at TIMESTAMPTZ,
   sales_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- rep who won it
   owner_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- accountable back-office
@@ -1770,16 +1770,16 @@ CREATE TABLE IF NOT EXISTS customers (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   closed_at        TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_customers_phone   ON customers(phone);
-CREATE INDEX IF NOT EXISTS idx_customers_owner   ON customers(owner_user_id);
-CREATE INDEX IF NOT EXISTS idx_customers_sales   ON customers(sales_user_id);
-CREATE INDEX IF NOT EXISTS idx_customers_stage   ON customers(stage_id);
-CREATE INDEX IF NOT EXISTS idx_customers_lead    ON customers(lead_id);
--- One conversion per lead. Without this a double-click makes two customers and
+CREATE INDEX IF NOT EXISTS idx_buyers_phone   ON buyers(phone);
+CREATE INDEX IF NOT EXISTS idx_buyers_owner   ON buyers(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_buyers_sales   ON buyers(sales_user_id);
+CREATE INDEX IF NOT EXISTS idx_buyers_stage   ON buyers(stage_id);
+CREATE INDEX IF NOT EXISTS idx_buyers_lead    ON buyers(lead_id);
+-- One conversion per lead. Without this a double-click makes two buyers and
 -- the reports silently double-count the sale.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_lead ON customers(lead_id) WHERE lead_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_buyers_lead ON buyers(lead_id) WHERE lead_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS customer_assign_rules (
+CREATE TABLE IF NOT EXISTS buyer_rules (
   id            SERIAL PRIMARY KEY,
   name          TEXT,
   product_id    INTEGER REFERENCES products(id) ON DELETE CASCADE,  -- NULL = fallback (any product)
@@ -1793,21 +1793,21 @@ CREATE TABLE IF NOT EXISTS customer_assign_rules (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_cust_rules_prod ON customer_assign_rules(product_id);
+CREATE INDEX IF NOT EXISTS idx_buyer_rules_prod ON buyer_rules(product_id);
 
-CREATE TABLE IF NOT EXISTS customer_watchers (
+CREATE TABLE IF NOT EXISTS buyer_watchers (
   id          SERIAL PRIMARY KEY,
-  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  customer_id INTEGER NOT NULL REFERENCES buyers(id) ON DELETE CASCADE,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role        TEXT DEFAULT 'watcher',   -- watcher | specialist
   added_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
   added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_cust_watch ON customer_watchers(customer_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_buyer_watch ON buyer_watchers(customer_id, user_id);
 
-CREATE TABLE IF NOT EXISTS customer_stage_history (
+CREATE TABLE IF NOT EXISTS buyer_stage_history (
   id              SERIAL PRIMARY KEY,
-  customer_id     INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  customer_id     INTEGER NOT NULL REFERENCES buyers(id) ON DELETE CASCADE,
   from_stage_id   INTEGER,
   to_stage_id     INTEGER,
   duration_prev_s INTEGER,          -- how long it sat in the previous stage -> TAT reporting
@@ -1815,4 +1815,4 @@ CREATE TABLE IF NOT EXISTS customer_stage_history (
   note            TEXT,
   changed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_cust_hist ON customer_stage_history(customer_id);
+CREATE INDEX IF NOT EXISTS idx_buyer_hist ON buyer_stage_history(customer_id);

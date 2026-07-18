@@ -711,18 +711,13 @@ const SCHEMA = {
               'paid_at', 'raw_json'],
     json: ['raw_json']
   },
-  /* CUSTOMER_MODULE_v1 (2026-07-17) — vserve only.
-   * EVERY column a write touches must be listed here or db.insert/db.update
-   * DROPS IT SILENTLY — no error, no warning, the value just never lands.
-   * That has bitten this codebase 5 times (SCHEMA_DROP_FIX_v1: sub_status_id,
-   * campaign_id, qualified, is_hidden were dead on every lead write; LS_v1: the
-   * AI Score columns rendered '–' for the same reason). Adding a column to
-   * schema.sql without adding it here is a silent data-loss bug. */
-  customer_stages: {
-    columns: ['name', 'color', 'sort_order', 'is_final', 'expected_days', 'is_active', 'created_at'],
-    json: []
-  },
-  customers: {
+  /* CUSTOMER_MODULE_v1 (2026-07-17) — vserve only. Renamed off `customers*`:
+   * an unrelated dormant `customers` + `customer_sales` + `customer_remarks` table
+   * set already exists (subscription/renewal master, no UI). My first cut collided
+   * on the `customers` name — the CREATE became a no-op and a duplicate pg.js key
+   * silently overrode the existing whitelist. Namespaced to `buyers*` to isolate.
+   * EVERY column a write touches must be listed or db.insert/update DROPS IT SILENTLY. */
+  buyers: {
     columns: ['lead_id', 'name', 'phone', 'email', 'company',
               'product_id', 'product_name', 'sale_amount', 'paid_amount', 'currency',
               'payment_mode', 'payment_ref',
@@ -732,16 +727,20 @@ const SCHEMA = {
               'is_repeat', 'converted_by', 'created_at', 'updated_at', 'closed_at'],
     json: ['extra_json']
   },
-  customer_assign_rules: {
+  buyer_stages: {
+    columns: ['name', 'color', 'sort_order', 'is_final', 'expected_days', 'is_active', 'created_at'],
+    json: []
+  },
+  buyer_rules: {
     columns: ['name', 'product_id', 'mode', 'user_ids', 'rr_position', 'priority',
               'is_fallback', 'is_active', 'created_by', 'created_at', 'updated_at'],
     json: ['user_ids']
   },
-  customer_watchers: {
+  buyer_watchers: {
     columns: ['customer_id', 'user_id', 'role', 'added_by', 'added_at'],
     json: []
   },
-  customer_stage_history: {
+  buyer_stage_history: {
     columns: ['customer_id', 'from_stage_id', 'to_stage_id', 'duration_prev_s',
               'changed_by', 'note', 'changed_at'],
     json: []
