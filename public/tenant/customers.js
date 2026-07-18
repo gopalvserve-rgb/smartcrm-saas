@@ -290,7 +290,7 @@
    * CUSTOMERS PAGE — tabs: List · Reports · Settings(admin)
    * ======================================================================= */
   const S = { tab: 'list', scope: 'all', stages: [], users: null, products: null, cfDefs: null,
-    filter: { preset: 'all', from: '', to: '', stage_id: '', owner_user_id: '', sales_user_id: '', product_id: '' } };
+    filter: { preset: 'all', from: '', to: '', stage_id: '', owner_user_id: '', sales_user_id: '', product_id: '', q: '' } };
 
   async function loadLookups() {
     if (!S.stages || !S.stages.length) { try { S.stages = (await api('api_customers_stages')) || []; } catch (_) {} }
@@ -318,54 +318,81 @@
     if (f.owner_user_id) out.owner_user_id = Number(f.owner_user_id);
     if (f.sales_user_id) out.sales_user_id = Number(f.sales_user_id);
     if (f.product_id) out.product_id = Number(f.product_id);
+    if (f.q && String(f.q).trim()) out.q = String(f.q).trim();
     return out;
   }
-  function _selStyle() { return { border: '1px solid ' + C.border, borderRadius: '6px', padding: '.34rem .5rem',
-    fontSize: '.8rem', background: '#fff', color: C.text }; }
-  /* Reusable filter bar for List + Report. onApply() re-queries the current view. */
+  function _selStyle() {
+    /* explicit width + box-sizing to override the global `select { width:100% }` in
+     * styles.css — without this each dropdown stretches full-width and stacks (the
+     * "filter design is not good" Gopal flagged). */
+    return { width: '150px', boxSizing: 'border-box', border: '1px solid ' + C.border,
+      borderRadius: '8px', padding: '.4rem .55rem', fontSize: '.8rem', background: '#fff',
+      color: C.text, cursor: 'pointer', height: '34px' };
+  }
+  /* Reusable filter bar for List + Report. Compact single card: a segmented date-range
+   * control on top, then inline fixed-width dropdowns + search + clear on one wrapping row.
+   * onApply() re-queries the current view. */
   function filterBar(onApply) {
-    const bar = card(null, { marginBottom: '.7rem', padding: '.6rem .7rem' });
-    const chips = h('div', { style: { display: 'flex', gap: '.3rem', flexWrap: 'wrap', marginBottom: '.5rem' } });
-    [['today','Today'],['yest','Yesterday'],['d7','Last 7 days'],['d30','Last 30 days'],['all','All time'],['custom','Custom']]
-      .forEach(function (pr) {
-        const on = S.filter.preset === pr[0];
-        chips.appendChild(h('button', { type: 'button', style: { padding: '.28rem .6rem', borderRadius: '99px', fontSize: '.76rem',
-          fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? C.brand : C.border),
-          background: on ? C.brand : '#fff', color: on ? '#fff' : C.text },
-          onclick: function () { applyPreset(pr[0]); onApply(); } }, pr[1]));
-      });
-    bar.appendChild(chips);
+    const bar = card(null, { marginBottom: '.8rem', padding: '.7rem .8rem',
+      display: 'flex', flexDirection: 'column', gap: '.6rem' });
 
-    // custom date inputs (only when Custom)
+    // ── date range: segmented pill control ──
+    const seg = h('div', { style: { display: 'inline-flex', flexWrap: 'wrap', border: '1px solid ' + C.border,
+      borderRadius: '9px', overflow: 'hidden', width: 'fit-content' } });
+    const RANGES = [['today','Today'],['yest','Yesterday'],['d7','7 days'],['d30','30 days'],['all','All time'],['custom','Custom']];
+    RANGES.forEach(function (pr, i) {
+      const on = S.filter.preset === pr[0];
+      seg.appendChild(h('button', { type: 'button', style: {
+        padding: '.4rem .8rem', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer', border: 'none',
+        borderLeft: i ? '1px solid ' + C.border : 'none',
+        background: on ? C.brand : '#fff', color: on ? '#fff' : C.soft },
+        onclick: function () { applyPreset(pr[0]); onApply(); } }, pr[1]));
+    });
+    const dateRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' } },
+      h('span', { style: { fontSize: '.72rem', fontWeight: 700, color: C.soft, textTransform: 'uppercase', letterSpacing: '.03em' } }, '📅 Date'),
+      seg);
     if (S.filter.preset === 'custom') {
-      const from = h('input', { type: 'date', value: S.filter.from || '', style: _selStyle() });
-      const to = h('input', { type: 'date', value: S.filter.to || '', style: _selStyle() });
+      const from = h('input', { type: 'date', value: S.filter.from || '', style: Object.assign(_selStyle(), { width: '150px' }) });
+      const to = h('input', { type: 'date', value: S.filter.to || '', style: Object.assign(_selStyle(), { width: '150px' }) });
       from.addEventListener('change', function () { S.filter.from = from.value; onApply(); });
       to.addEventListener('change', function () { S.filter.to = to.value; onApply(); });
-      bar.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.5rem' } },
-        h('span', { style: { fontSize: '.76rem', color: C.soft } }, 'From'), from,
-        h('span', { style: { fontSize: '.76rem', color: C.soft } }, 'to'), to));
+      dateRow.appendChild(h('span', { style: { fontSize: '.75rem', color: C.soft } }, 'from'));
+      dateRow.appendChild(from);
+      dateRow.appendChild(h('span', { style: { fontSize: '.75rem', color: C.soft } }, 'to'));
+      dateRow.appendChild(to);
     }
+    bar.appendChild(dateRow);
 
-    // dropdown row: Stage / Owner / Sales rep / Product
+    // ── inline dropdowns + search + clear ──
     const mkSel = function (key, placeholder, opts) {
       const sel = h('select', { style: _selStyle() }, h('option', { value: '' }, placeholder),
         opts.map(function (o) { const el = h('option', { value: o.v }, o.t);
           if (String(S.filter[key]) === String(o.v)) el.selected = 'selected'; return el; }));
+      // highlight when an actual value is chosen
+      if (S.filter[key]) { sel.style.borderColor = C.brand; sel.style.color = C.brand; sel.style.fontWeight = '600'; }
       sel.addEventListener('change', function () { S.filter[key] = sel.value; onApply(); });
       return sel;
     };
     const userOpts = (S.users || []).map(function (u) { return { v: u.id, t: u.name }; });
-    const row = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } });
+    const row = h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } });
+
+    const search = input({ type: 'search', placeholder: '🔎 Name or phone…', value: S.filter.q || '',
+      style: { width: '200px', boxSizing: 'border-box', border: '1px solid ' + C.border, borderRadius: '8px',
+        padding: '.4rem .6rem', fontSize: '.8rem', height: '34px' } });
+    let _t = null;
+    search.addEventListener('input', function () { clearTimeout(_t); _t = setTimeout(function () { S.filter.q = search.value; onApply(); }, 350); });
+    row.appendChild(search);
     row.appendChild(mkSel('stage_id', 'Stage: any', (S.stages || []).map(function (st) { return { v: st.id, t: st.name }; })));
     row.appendChild(mkSel('owner_user_id', 'Owner: any', userOpts));
     row.appendChild(mkSel('sales_user_id', 'Sales rep: any', userOpts));
     row.appendChild(mkSel('product_id', 'Product: any', (S.products || []).map(function (p) { return { v: p.id, t: p.name }; })));
-    // clear
-    const hasAny = S.filter.from || S.filter.to || S.filter.stage_id || S.filter.owner_user_id || S.filter.sales_user_id || S.filter.product_id;
-    if (hasAny) row.appendChild(h('button', { type: 'button', style: { padding: '.3rem .6rem', borderRadius: '6px', fontSize: '.76rem',
-      cursor: 'pointer', border: '1px solid ' + C.border, background: '#fff', color: C.err },
-      onclick: function () { S.filter = { preset: 'all', from: '', to: '', stage_id: '', owner_user_id: '', sales_user_id: '', product_id: '' }; onApply(); } }, '✕ Clear'));
+
+    const hasAny = S.filter.q || S.filter.stage_id || S.filter.owner_user_id || S.filter.sales_user_id || S.filter.product_id
+      || (S.filter.preset !== 'all');
+    if (hasAny) row.appendChild(h('button', { type: 'button', style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem',
+      padding: '.4rem .7rem', borderRadius: '8px', fontSize: '.78rem', fontWeight: 600, height: '34px',
+      cursor: 'pointer', border: '1px solid ' + C.err, background: '#fef2f2', color: C.err },
+      onclick: function () { S.filter = { preset: 'all', from: '', to: '', stage_id: '', owner_user_id: '', sales_user_id: '', product_id: '', q: '' }; onApply(); } }, '✕ Clear all'));
     bar.appendChild(row);
     return bar;
   }
