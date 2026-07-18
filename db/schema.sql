@@ -1833,3 +1833,14 @@ CREATE TABLE IF NOT EXISTS buyer_custom_fields (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_buyer_cf_key ON buyer_custom_fields(key);
+
+-- STAGES_FROM_CLOSURE_v1 (2026-07-18) — the customer delivery stage now points at
+-- project_stages (Sales Closure), not buyer_stages. Drop the old FK so buyers.stage_id
+-- can hold a project_stages id. Idempotent; safe to re-apply.
+ALTER TABLE buyers DROP CONSTRAINT IF EXISTS buyers_stage_id_fkey;
+-- Any existing customer whose stage_id no longer matches a live project_stage gets
+-- reset to the first Sales Closure stage (so nothing shows a dangling stage).
+UPDATE buyers SET stage_id = (
+  SELECT id FROM project_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC LIMIT 1
+) WHERE stage_id IS NOT NULL
+  AND stage_id NOT IN (SELECT id FROM project_stages);
