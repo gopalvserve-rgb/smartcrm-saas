@@ -100,6 +100,7 @@ const ROUTE_FILES = [
   'packs/manufacturer',
   'packs/holiday',
   'packs/ecommerce',
+  'packs/whatsapp',   /* WHATSAPP_PACK_v1 — shared team inbox + smart retargeting */
   'social',
   'ivr',
   'compliance',  /* COMPLIANCE_v1 */
