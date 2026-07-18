@@ -1805,6 +1805,9 @@ const NAV_GROUPS = [
     { id: 'duetoday',   label: 'Due Today',            icon: '📅', countKey: 'due_today', search: 'today due today today follow-up' },
     { id: 'upcoming',   label: 'Upcoming',             icon: '⏰', countKey: 'upcoming',  search: 'upcoming tomorrow next follow-up' },
     { id: 'projects',   label: 'Sales Closure',        icon: '🚚', search: 'closure sale closure closed won conversion sale final closure' },
+    /* CUSTOMER_MODULE_v1 — visible only when customers.js loaded (vserve). The view
+     * itself re-checks enabled server-side, so this is just discoverability. */
+    { id: 'customers',  label: 'Customers',            icon: '👥', search: 'customer convert customer delivery order fulfilment buyer', requiresSlug: ['vserve'] },
     { id: 'quotations', label: 'Quotations',           icon: '📄', search: 'quotation quote proposal estimate' },
     // ---- Education pack (visible only when pack is active) ----
     { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'fees collection education' },
@@ -2153,6 +2156,9 @@ function renderShell() {
       const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
       if (!installed.has(item.requiresPack)) return null;
     }
+    // CUSTOMER_MODULE_v1 — slug-gated nav (vserve). Deterministic at render time,
+    // unlike a deferred-global check. Matches routes/customers.js ALLOWED_SLUGS.
+    if (item.requiresSlug && item.requiresSlug.indexOf(String(window.TENANT_SLUG||'').toLowerCase()) < 0) return null;
     const countBadge = item.countKey
       ? h('span', { class: 'nav-count', 'data-count-key': item.countKey, hidden: 'hidden' }, '0')
       : null;
@@ -2312,6 +2318,7 @@ function renderShell() {
       const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
       if (!installed.has(item.requiresPack)) return;
     }
+    if (item.requiresSlug && item.requiresSlug.indexOf(String(window.TENANT_SLUG||'').toLowerCase()) < 0) return;
     const _modKey2 = (typeof _moduleForNavId === 'function') ? _moduleForNavId(item.id) : null;
     if (_modKey2 && !_isModuleActive(_modKey2)) return;
     if (mobilePrimary.includes(item.id)) {
@@ -2475,6 +2482,7 @@ function showMobileMore() {
             const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
             if (!installed.has(item.requiresPack)) return false;
           }
+          if (item.requiresSlug && item.requiresSlug.indexOf(String(window.TENANT_SLUG||'').toLowerCase()) < 0) return false;
           // Also honor admin-hidden nav items (Settings -> Menu visibility)
           try {
             const hiddenIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming')
@@ -10200,6 +10208,24 @@ async function openLeadModal(id) {
   actionsRow.appendChild(h('button', { type: 'button', class: 'btn', onclick: () => modal.remove() }, 'Cancel'));
   if (id && ['admin', 'manager', 'team_leader'].includes(CRM.user.role)) {
     actionsRow.appendChild(h('button', { type: 'button', class: 'btn', onclick: () => openDuplicateAndReassignModal(id, lead, () => { modal.remove(); loadLeads && loadLeads(); }) }, '📋 Duplicate & reassign'));
+  }
+  /* CUSTOMER_MODULE_v1 — "Convert to Customer" on a closed-sale lead. Shows only
+   * when customers.js is loaded (vserve) AND this lead sits at a final/won status
+   * (Sale Done / Won / Closed). Delegates to the module's modal; the backend
+   * re-validates and freezes nothing on the lead itself. */
+  if (id && window.CustomersUI && typeof window.CustomersUI.openConvert === 'function') {
+    try {
+      const _st = (CRM.cache.statuses || []).find(x => Number(x.id) === Number(lead.status_id));
+      const _stName = String((_st && _st.name) || '').toLowerCase();
+      const _isClosedSale = (_st && Number(_st.is_final) === 1) ||
+        /sale done|won|closed|converted|payment/.test(_stName);
+      if (_isClosedSale) {
+        actionsRow.appendChild(h('button', { type: 'button', class: 'btn',
+          style: { background: '#dcfce7', color: '#166534', borderColor: '#86efac', fontWeight: '700' },
+          onclick: () => { try { window.CustomersUI.openConvert(lead); } catch (e) { toast('Convert failed: ' + e.message, 'err'); } }
+        }, '🎉 Convert to Customer'));
+      }
+    } catch (_) {}
   }
   actionsRow.appendChild(h('button', { type: 'submit', form: 'lead-form', class: 'btn primary' }, id ? 'Save changes' : 'Create lead'));
   body.appendChild(actionsRow);
@@ -42861,6 +42887,16 @@ async function openWaWidgetSnippet(widgetId) {
 // but uses navigateTo('campaigns') as the reload callback so CRUD ops
 // stay on the main view instead of jumping into Settings.
 // ─────────────────────────────────────────────────────────────────────
+/* CUSTOMER_MODULE_v1 — the Customers page lives in its own file (customers.js),
+ * same isolation standard as workspaceHub. app.js only delegates. */
+VIEWS.customers = async (view) => {
+  if (window.CustomersUI && typeof window.CustomersUI.render === 'function') {
+    try { return await window.CustomersUI.render(view); }
+    catch (e) { console.warn('[customers] render failed:', e && e.message); }
+  }
+  view.replaceChildren(h('div', { class: 'error-box' }, 'Customer module not loaded — please refresh.'));
+};
+
 VIEWS.campaigns = async (view) => {
   /* WORKSPACE_HUB_v1 (2026-07-15) — this used to render adminCampaigns() directly, i.e.
    * the Settings CRUD table reached from a different menu: a list of workspaces with
