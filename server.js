@@ -104,6 +104,7 @@ require('./routes/packs/education');
 require('./routes/packs/realestate');
 require('./routes/packs/solar');   // SOLAR_PACK_v1 (2026-06-27)
 require('./routes/packs/holiday'); // HOLIDAY_PACK_v1 (2026-06-27) - 1782572107
+require('./routes/packs/whatsapp'); // WHATSAPP_PACK_v1 (2026-07-18)
 
 // ── Social Post Publisher — fire scheduled posts every minute ──────
 // Runs in-process; idempotent (status='scheduled' rows only).
