@@ -130,6 +130,11 @@
     let products = [];
     try { products = (await api('api_products_list')) || []; } catch (_) {}
     products = products.filter(function (p) { return Number(p.is_active) !== 0; });
+    /* CUSTOMER_MODULE_v1 — admin-defined custom fields (Gopal: "like custom field in
+     * Leads"). Definitions come from api_customers_fields; the values the rep types are
+     * saved into buyers.extra_json under each field's key. */
+    let cfDefs = [];
+    try { cfDefs = (await api('api_customers_fields')) || []; } catch (_) {}
 
     const body = h('div', {});
     // Customer
@@ -196,6 +201,35 @@
       h('div', {}, label('Site contact'), fContact, h('div', { style: { height: '.5rem' } }), label('Target date'), fTarget)));
     body.appendChild(sec('Notes for back office'));
     body.appendChild(fNotes);
+
+    /* Render each admin-defined custom field by type. We keep a map key -> read()
+     * so the submit handler can pull values into extra_json without caring about type. */
+    const cfInputs = {};
+    if (cfDefs.length) {
+      body.appendChild(sec('Additional details'));
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.7rem' } });
+      cfDefs.forEach(function (f) {
+        let el;
+        if (f.field_type === 'textarea') {
+          el = h('textarea', { rows: '2', style: { width: '100%', border: '1px solid ' + C.border, borderRadius: '6px',
+            padding: '.42rem .55rem', fontSize: '.85rem', boxSizing: 'border-box' } });
+        } else if (f.field_type === 'select') {
+          const opts = String(f.options || '').split('|').map(function (o) { return o.trim(); }).filter(Boolean);
+          el = h('select', { style: { width: '100%', border: '1px solid ' + C.border, borderRadius: '6px',
+            padding: '.42rem .55rem', fontSize: '.85rem', boxSizing: 'border-box' } },
+            h('option', { value: '' }, '—'), opts.map(function (o) { return h('option', { value: o }, o); }));
+        } else {
+          el = input({ type: f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : 'text' });
+        }
+        cfInputs[f.key] = { el: el, def: f };
+        const cell = h('div', {}, label(f.label + (Number(f.is_required) ? ' *' : '')), el);
+        // textarea spans both columns for room
+        if (f.field_type === 'textarea') cell.style.gridColumn = '1 / -1';
+        grid.appendChild(cell);
+      });
+      body.appendChild(grid);
+    }
+
     body.appendChild(assignBanner);
 
     const doBtn = btn('🎉 Convert & assign', 'ok', null);
@@ -211,10 +245,21 @@
     doBtn.addEventListener('click', async function () {
       if (!lead.id) { toast('No lead id', 'err'); return; }
       if (!fProduct.value) { toast('Pick a product — it decides the delivery journey and who gets assigned', 'err'); return; }
+      // gather custom-field values + enforce required ones
+      const extra = {};
+      let missing = null;
+      Object.keys(cfInputs).forEach(function (k) {
+        const rec = cfInputs[k];
+        const v = rec.el.value;
+        if (Number(rec.def.is_required) && !String(v || '').trim()) missing = rec.def.label;
+        if (String(v || '').trim()) extra[k] = v;
+      });
+      if (missing) { toast('Please fill "' + missing + '"', 'err'); return; }
       doBtn.disabled = 'disabled'; doBtn.textContent = 'Converting…';
       try {
         const prodName = (products.find(function (p) { return Number(p.id) === Number(fProduct.value); }) || {}).name || '';
         const r = await api('api_customers_convert', {
+          extra_json: extra,
           lead_id: lead.id,
           name: fName.value, phone: fPhone.value,
           product_id: Number(fProduct.value), product_name: prodName,
@@ -263,6 +308,7 @@
     tabs.appendChild(mk('list', '📋 List'));
     tabs.appendChild(mk('reports', '📊 Reports'));
     if (role() === 'admin') tabs.appendChild(mk('rules', '⚙️ Auto-assign rules'));
+    if (role() === 'admin') tabs.appendChild(mk('fields', '🧩 Custom fields'));
     view.appendChild(tabs);
 
     const panel = h('div', {});
@@ -270,6 +316,7 @@
     if (S.tab === 'list') await renderList(panel);
     else if (S.tab === 'reports') await renderReports(panel);
     else if (S.tab === 'rules') await renderRules(panel);
+    else if (S.tab === 'fields') await renderFields(panel);
   }
 
   async function renderList(panel) {
@@ -326,6 +373,17 @@
     body.appendChild(h('div', { style: { display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '.6rem' } },
       kv('Phone', c.phone), kv('Product', c.product_name), kv('Value', money(c.sale_amount)),
       kv('Paid', money(c.paid_amount)), kv('Sales rep', c.sales_name), kv('Owner', c.owner_name || 'unassigned')));
+
+    // custom-field values (extra_json) labelled by their definitions
+    try {
+      let ex = c.extra_json; if (typeof ex === 'string') ex = JSON.parse(ex || '{}');
+      const defs = (await api('api_customers_fields')) || [];
+      const shown = defs.filter(function (f) { return ex && ex[f.key] != null && String(ex[f.key]).trim(); });
+      if (shown.length) {
+        body.appendChild(h('div', { style: { display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '.6rem' } },
+          shown.map(function (f) { return kv(f.label, ex[f.key]); })));
+      }
+    } catch (_) {}
 
     // stage mover (owner/admin only)
     const canMove = role() === 'admin' || role() === 'manager' || myId() === Number(c.owner_user_id);
@@ -409,6 +467,72 @@
     tbl.appendChild(tb);
     c.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
     return c;
+  }
+
+  async function renderFields(panel) {
+    panel.innerHTML = '';
+    let defs = [];
+    try { defs = (await api('api_customers_fields')) || []; } catch (e) { panel.appendChild(card(h('div', { style: { color: C.err } }, e.message))); return; }
+    panel.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '.6rem' } },
+      h('div', { style: { color: C.soft, fontSize: '.82rem' } }, 'Extra fields shown on the Convert-to-Customer form — same idea as Leads custom fields. Values are saved on each customer.'),
+      h('span', { style: { flex: 1 } }),
+      btn('+ Add field', 'primary', function () { fieldEditor(null, panel); })));
+    if (!defs.length) { panel.appendChild(card(h('div', { style: { color: C.muted } }, 'No custom fields yet. Click “Add field”.'))); return; }
+    const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '.82rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', {}, ['Label', 'Type', 'Options', 'Required', 'Order', ''].map(function (hd) {
+      return h('th', { style: { textAlign: 'left', fontSize: '.66rem', textTransform: 'uppercase', color: C.muted,
+        padding: '.5rem .6rem', borderBottom: '1px solid ' + C.border } }, hd); }))));
+    const tb = h('tbody', {});
+    defs.forEach(function (f) {
+      tb.appendChild(h('tr', {},
+        h('td', { style: td() }, h('b', {}, f.label), h('div', { style: { color: C.muted, fontSize: '.7rem' } }, f.key)),
+        h('td', { style: td() }, f.field_type),
+        h('td', { style: td() }, f.options || '—'),
+        h('td', { style: td() }, Number(f.is_required) ? 'Yes' : '—'),
+        h('td', { style: td() }, f.sort_order),
+        h('td', { style: Object.assign({ textAlign: 'right' }, td()) },
+          btn('Edit', null, function () { fieldEditor(f, panel); }),
+          h('span', { style: { marginLeft: '.3rem' } }, btn('Remove', null, async function () {
+            if (!confirm('Remove this field? Existing saved values are kept.')) return;
+            try { await api('api_customers_fieldDelete', f.id); renderFields(panel); } catch (e) { toast(e.message, 'err'); }
+          })))));
+    });
+    tbl.appendChild(tb);
+    panel.appendChild(card(h('div', { style: { overflowX: 'auto' } }, tbl), { padding: '0' }));
+  }
+
+  function fieldEditor(f, panel) {
+    f = f || {};
+    const body = h('div', {});
+    const fLabel = input({ value: f.label || '', placeholder: 'e.g. Roof type' });
+    const fType = h('select', { style: sel() }, [['text','Text'],['number','Number'],['date','Date'],['select','Dropdown'],['textarea','Long text']].map(function (t) {
+      const o = h('option', { value: t[0] }, t[1]); if ((f.field_type || 'text') === t[0]) o.selected = 'selected'; return o; }));
+    const fOpts = input({ value: f.options || '', placeholder: 'Option A | Option B | Option C' });
+    const optWrap = h('div', { style: { marginTop: '.6rem', display: (f.field_type === 'select' ? 'block' : 'none') } }, label('Dropdown options (separate with |)'), fOpts);
+    fType.addEventListener('change', function () { optWrap.style.display = fType.value === 'select' ? 'block' : 'none'; });
+    const fReq = h('input', { type: 'checkbox' }); if (Number(f.is_required)) fReq.checked = true;
+    const fSort = input({ type: 'number', value: f.sort_order != null ? f.sort_order : 10 });
+    body.appendChild(h('div', {}, label('Field label *'), fLabel));
+    body.appendChild(h('div', { style: { marginTop: '.6rem' } }, label('Type'), fType));
+    body.appendChild(optWrap);
+    body.appendChild(h('div', { style: { display: 'flex', gap: '1rem', alignItems: 'center', marginTop: '.7rem' } },
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.82rem' } }, fReq, 'Required'),
+      h('div', {}, label('Sort order'), fSort)));
+    if (f.key) body.appendChild(h('div', { style: { marginTop: '.5rem', color: C.muted, fontSize: '.72rem' } }, 'Key: ' + f.key + ' (fixed — values are stored under it)'));
+    const save = btn('Save field', 'primary', null);
+    body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' } },
+      btn('Cancel', null, function () { shell._close(); }), save));
+    const shell = modalShell(f.id ? 'Edit field' : 'Add custom field', body);
+    document.body.appendChild(shell);
+    save.addEventListener('click', async function () {
+      if (!fLabel.value.trim()) { toast('Enter a label', 'err'); return; }
+      try {
+        await api('api_customers_fieldSave', { id: f.id || undefined, label: fLabel.value.trim(),
+          field_type: fType.value, options: fType.value === 'select' ? fOpts.value : null,
+          is_required: fReq.checked ? 1 : 0, sort_order: Number(fSort.value) || 10 });
+        shell._close(); renderFields(panel);
+      } catch (e) { toast(e.message, 'err'); }
+    });
   }
 
   async function renderRules(panel) {
