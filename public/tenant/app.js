@@ -1869,6 +1869,9 @@ const NAV_GROUPS = [
     { id: 'tourpayments',     label: 'Payments & Collection',    icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'payment collection balance outstanding' },
     { id: 'tourreports',      label: 'Travel Reports',           icon: '📊', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'reports upcoming collection itinerary leaderboard' },
     { id: 'tourinsights',     label: 'AI Insights',              icon: '🤖', roles: ['admin','manager'], requiresPack: 'holiday', search: 'ai insights gemini travel' },
+    // ---- WhatsApp Suite pack ----
+    { id: 'wapackinbox',    label: 'Team Inbox',        icon: '📥', roles: ['admin','manager','team_leader','sales'], requiresPack: 'whatsapp', search: 'whatsapp shared team inbox chat assign transfer handoff agent' },
+    { id: 'wapackretarget', label: 'Smart Retargeting', icon: '🎯', roles: ['admin','manager','team_leader'], requiresPack: 'whatsapp', search: 'whatsapp retarget engagement read replied segment campaign' },
     // ---- Ecommerce pack ----
     { id: 'packecommerce', label: 'Ecommerce Overview', icon: '🛒', roles: ['admin','manager','team_leader'], requiresPack: 'ecommerce', search: 'ecommerce order return cart loyalty d2c' }
   ] },
