@@ -413,5 +413,240 @@
 
       render();
     };
+
+    // ════════════════════════════════════════════════════════════════
+    //  FORMS & WEBVIEWS
+    // ════════════════════════════════════════════════════════════════
+    const FIELD_TYPES = [['text', 'Text'], ['email', 'Email'], ['phone', 'Phone'], ['number', 'Number'], ['select', 'Dropdown']];
+    function phoneMock(children) {
+      return h('div', { style: { width: '260px', border: '8px solid #111827', borderRadius: '26px',
+        background: '#ece5dd', padding: '10px', minHeight: '360px' } },
+        h('div', { style: { background: WA_D, color: '#fff', margin: '-10px -10px 8px', padding: '10px',
+          borderRadius: '18px 18px 0 0', fontSize: '12px', fontWeight: 700 } }, 'WhatsApp'),
+        ...children);
+    }
+
+    VIEWS.wapackforms = async function (view) {
+      let tab = 'forms';
+      function render() {
+        view.innerHTML = '';
+        view.appendChild(topbar('WhatsApp / Forms & WebViews', '📝 Forms & WebViews', [btn('🔄 Refresh', function () { render(); })]));
+        const tabs = h('div', { style: { display: 'flex', gap: '6px', background: '#fff', padding: '6px',
+          borderRadius: '10px', border: '1px solid #d1fae5', marginBottom: '14px', width: 'fit-content' } });
+        [['forms', '📝 In-chat Forms'], ['webviews', '🌐 WebViews']].forEach(function (t) {
+          tabs.appendChild(h('button', { style: tabStyle(tab === t[0]), onclick: function () { tab = t[0]; render(); } }, t[1]));
+        });
+        view.appendChild(tabs);
+        const body = h('div'); view.appendChild(body);
+        (tab === 'forms' ? renderForms : renderWebviews)(body);
+      }
+      view.appendChild(h('div'));
+
+      async function renderForms(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
+        let forms;
+        try { forms = (await api('api_wapack_forms_list')).forms || []; }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        body.innerHTML = '';
+        body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' } },
+          h('div', { style: { fontSize: '11.5px', color: '#64748b' } }, 'Capture leads without leaving the WhatsApp chat. Publishing uses Meta Flows on your WABA.'),
+          btn('＋ New form', function () { formModal(null); }, 'primary')));
+        if (!forms.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No forms yet.')])); return; }
+        forms.forEach(function (f) {
+          body.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '10px',
+            padding: '12px 14px', marginBottom: '8px', display: 'flex', gap: '12px', alignItems: 'center' } },
+            h('div', { style: { flex: 1 } },
+              h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, h('b', {}, f.name),
+                f.status === 'published' ? pill('✓ Published', '#dcfce7', '#166534') : pill('Draft', '#f1f5f9', '#475569')),
+              h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px' } },
+                (f.fields || []).length + ' fields · ' + (f.submissions || 0) + ' submissions')),
+            btn('👁 Responses', function () { responsesModal(f); }),
+            btn('✏️ Edit', function () { formModal(f); }),
+            btn('🗑', async function () { if (!confirm('Delete form?')) return; try { await api('api_wapack_form_delete', { id: f.id }); render(); } catch (e) { toast(e.message); } })));
+        });
+      }
+
+      function formModal(f) {
+        f = f || {}; let fields = (f.fields || []).slice();
+        const nameI = h('input', { value: f.name || '', placeholder: 'Form name', style: inpS() });
+        const descI = h('input', { value: f.description || '', placeholder: 'Short description', style: inpS() });
+        const statusSel = sel([['draft', 'Draft'], ['published', 'Published']], f.status || 'draft');
+        const fieldsWrap = h('div');
+        const preview = h('div');
+        function draw() {
+          fieldsWrap.innerHTML = '';
+          fields.forEach(function (fl, idx) {
+            fieldsWrap.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginBottom: '6px', alignItems: 'center' } },
+              (function () { const i = h('input', { value: fl.label || '', placeholder: 'Label', style: { flex: 1, padding: '6px 8px', border: '1px solid #d1fae5', borderRadius: '6px' } }); i.oninput = function () { fl.label = i.value; drawPreview(); }; return i; })(),
+              (function () { const s = sel(FIELD_TYPES, fl.type || 'text'); s.onchange = function () { fl.type = s.value; drawPreview(); }; return s; })(),
+              (function () { const l = h('label', { style: { fontSize: '11px', display: 'flex', gap: '3px', alignItems: 'center' } }); const c = h('input', { type: 'checkbox' }); c.checked = !!fl.required; c.onchange = function () { fl.required = c.checked; }; l.appendChild(c); l.appendChild(document.createTextNode('req')); return l; })(),
+              btn('✕', function () { fields.splice(idx, 1); draw(); })));
+          });
+          drawPreview();
+        }
+        function drawPreview() {
+          preview.innerHTML = '';
+          preview.appendChild(phoneMock([
+            h('div', { style: { background: '#fff', borderRadius: '8px', padding: '10px', fontSize: '12px' } },
+              h('b', {}, nameI.value || 'Form'),
+              f.description || descI.value ? h('div', { style: { color: '#667781', fontSize: '11px', margin: '2px 0 8px' } }, descI.value) : null,
+              ...fields.map(function (fl) {
+                return h('div', { style: { marginBottom: '7px' } },
+                  h('div', { style: { fontSize: '11px', color: '#374151', marginBottom: '2px' } }, (fl.label || 'Field') + (fl.required ? ' *' : '')),
+                  fl.type === 'select'
+                    ? h('div', { style: { border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 7px', color: '#9ca3af', fontSize: '11px' } }, '▾ ' + ((fl.options && fl.options[0]) || 'Select'))
+                    : h('div', { style: { border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 7px', color: '#9ca3af', fontSize: '11px' } }, fl.type === 'email' ? 'name@email.com' : fl.type === 'phone' ? '+91…' : '…'));
+              }),
+              h('div', { style: { background: WA, color: '#fff', textAlign: 'center', padding: '7px', borderRadius: '6px', fontWeight: 700, fontSize: '12px', marginTop: '4px' } }, 'Submit'))
+          ]));
+        }
+        nameI.oninput = drawPreview; descI.oninput = drawPreview;
+        const bodyEl = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 280px', gap: '16px' } },
+          h('div', {},
+            h('div', { style: { marginBottom: '8px' } }, nameI),
+            h('div', { style: { marginBottom: '8px' } }, descI),
+            h('div', { style: { marginBottom: '8px' } }, statusSel),
+            h('div', { style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.4px', color: '#64748b', fontWeight: 700, margin: '8px 0 6px' } }, 'Fields'),
+            fieldsWrap,
+            btn('＋ Add field', function () { fields.push({ key: 'f' + Date.now(), label: '', type: 'text', required: false, options: ['Option 1', 'Option 2'] }); draw(); })),
+          h('div', {}, h('div', { style: { fontSize: '11px', color: '#64748b', marginBottom: '6px' } }, 'Live preview'), preview));
+        draw();
+        modal(f.id ? 'Edit form' : 'New form', bodyEl, [
+          ['💾 Save form', async function (close) {
+            try { await api('api_wapack_form_save', { id: f.id || 0, name: nameI.value, description: descI.value, status: statusSel.value, fields: fields }); toast('Saved'); close(); render(); }
+            catch (e) { toast(e.message); }
+          }, 'primary']
+        ]);
+      }
+
+      async function responsesModal(f) {
+        let resp = [];
+        try { resp = (await api('api_wapack_form_responses', { form_id: f.id })).responses || []; } catch (e) { toast(e.message); }
+        const rows = resp.map(function (r) {
+          const ans = r.answers || {};
+          return h('div', { style: { padding: '8px 0', borderBottom: '1px solid #ecfdf5', fontSize: '12.5px' } },
+            h('b', {}, r.contact_name || r.phone || '—'), ' ', h('span', { style: { color: '#94a3b8', fontSize: '11px' } }, fmtTime(r.created_at)),
+            h('div', { style: { color: '#475569', marginTop: '2px' } }, Object.keys(ans).map(function (k) { return k + ': ' + ans[k]; }).join(' · ')));
+        });
+        modal('👁 Responses · ' + f.name, h('div', {}, resp.length ? h('div', {}, ...rows) : h('div', { style: { color: '#64748b', padding: '10px' } }, 'No responses yet.')), []);
+      }
+
+      async function renderWebviews(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
+        let wvs;
+        try { wvs = (await api('api_wapack_webviews_list')).webviews || []; }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        body.innerHTML = '';
+        body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' } },
+          h('div', { style: { fontSize: '11.5px', color: '#64748b' } }, 'Let customers open web pages inside the chat. Rendering in-chat uses Meta Flows.'),
+          btn('＋ New WebView', function () { wvModal(null); }, 'primary')));
+        const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '10px' } });
+        wvs.forEach(function (w) {
+          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '10px', padding: '12px' } },
+            h('div', { style: { fontWeight: 700 } }, '🌐 ' + w.title),
+            h('div', { style: { fontSize: '12px', color: WA_D, wordBreak: 'break-all' } }, w.url),
+            w.description ? h('div', { style: { fontSize: '11.5px', color: '#64748b', margin: '4px 0' } }, w.description) : null,
+            h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+              btn('✏️', function () { wvModal(w); }),
+              btn('🗑', async function () { if (!confirm('Delete?')) return; try { await api('api_wapack_webview_delete', { id: w.id }); render(); } catch (e) { toast(e.message); } }))));
+        });
+        if (!wvs.length) body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No webviews yet.')]));
+        else body.appendChild(g);
+      }
+      function wvModal(w) {
+        w = w || {};
+        const t = h('input', { value: w.title || '', placeholder: 'Title', style: inpS() });
+        const u = h('input', { value: w.url || '', placeholder: 'https://…', style: inpS() });
+        const d = h('input', { value: w.description || '', placeholder: 'Description', style: inpS() });
+        modal(w.id ? 'Edit WebView' : 'New WebView', h('div', {}, h('div', { style: { marginBottom: '8px' } }, t), h('div', { style: { marginBottom: '8px' } }, u), d), [
+          ['💾 Save', async function (close) { try { await api('api_wapack_webview_save', { id: w.id || 0, title: t.value, url: u.value, description: d.value }); toast('Saved'); close(); render(); } catch (e) { toast(e.message); } }, 'primary']
+        ]);
+      }
+      function inpS() { return { width: '100%', padding: '8px 10px', border: '1px solid #d1fae5', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }; }
+      render();
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  STOREFRONT — Shopify / WooCommerce / FB catalog
+    // ════════════════════════════════════════════════════════════════
+    VIEWS.wapackshop = async function (view) {
+      let tab = 'connections';
+      function render() {
+        view.innerHTML = '';
+        view.appendChild(topbar('WhatsApp / Storefront', '🛒 Storefront', [btn('🔄 Refresh', function () { render(); })]));
+        const tabs = h('div', { style: { display: 'flex', gap: '6px', background: '#fff', padding: '6px', borderRadius: '10px', border: '1px solid #d1fae5', marginBottom: '14px', width: 'fit-content' } });
+        [['connections', '🔌 Connections'], ['catalog', '🛍️ Catalog']].forEach(function (t) {
+          tabs.appendChild(h('button', { style: tabStyle(tab === t[0]), onclick: function () { tab = t[0]; render(); } }, t[1]));
+        });
+        view.appendChild(tabs);
+        const body = h('div'); view.appendChild(body);
+        (tab === 'connections' ? renderConnections : renderCatalog)(body);
+      }
+
+      async function renderConnections(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
+        let data;
+        try { data = await api('api_wapack_shop_connections'); }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        body.innerHTML = '';
+        body.appendChild(h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '12px' } },
+          data.product_count + ' products in catalog · connect a store to auto-sync products and show them inside WhatsApp.'));
+        const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '12px' } });
+        (data.providers || []).forEach(function (p) {
+          const connected = p.status === 'connected';
+          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', padding: '16px' } },
+            h('div', { style: { fontSize: '26px' } }, p.icon),
+            h('div', { style: { fontWeight: 700, marginTop: '4px' } }, p.name, ' ', connected ? pill('Connected', '#dcfce7', '#166534') : pill('Not connected', '#f1f5f9', '#475569')),
+            h('div', { style: { fontSize: '12px', color: '#64748b', margin: '4px 0 10px' } }, p.blurb),
+            connected
+              ? h('div', {}, p.store_url ? h('div', { style: { fontSize: '11.5px', color: WA_D, marginBottom: '8px' } }, p.store_url) : null,
+                  btn('Disconnect', function () { doConnect(p.provider, true); }))
+              : btn('🔌 Connect', function () { connectModal(p); }, 'primary')));
+        });
+        body.appendChild(g);
+        body.appendChild(h('div', { style: { fontSize: '11px', color: '#94a3b8', marginTop: '12px' } },
+          '⚠ Live product sync needs your store API keys (Shopify/WooCommerce) or Meta catalog access. Connecting here is enabled for the demo.'));
+      }
+      function connectModal(p) {
+        const url = h('input', { placeholder: p.provider === 'meta_catalog' ? 'Catalog ID' : 'yourstore.example.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #d1fae5', borderRadius: '7px', boxSizing: 'border-box' } });
+        modal('Connect ' + p.name, h('div', {},
+          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } },
+            'Enter your ' + p.name + ' store URL / ID. A live connection also needs your API key — this demo records the connection so you can see the flow.'),
+          url), [['Connect', function (close) { doConnect(p.provider, false, url.value); close(); }, 'primary']]);
+      }
+      async function doConnect(provider, disconnect, store_url) {
+        try { await api('api_wapack_shop_connect', { provider: provider, disconnect: !!disconnect, store_url: store_url || null }); toast(disconnect ? 'Disconnected' : 'Connected'); render(); }
+        catch (e) { toast(e.message); }
+      }
+
+      async function renderCatalog(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
+        let prods;
+        try { prods = (await api('api_wapack_products_list')).products || []; }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        body.innerHTML = '';
+        if (!prods.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No products. Connect a store to sync your catalog.')])); return; }
+        const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: '12px' } });
+        prods.forEach(function (p) {
+          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', overflow: 'hidden' } },
+            h('div', { style: { height: '90px', background: 'linear-gradient(135deg,#a7f3d0,#6ee7b7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px' } }, '📦'),
+            h('div', { style: { padding: '10px' } },
+              h('div', { style: { fontWeight: 700, fontSize: '13px' } }, p.name),
+              h('div', { style: { fontSize: '11px', color: '#64748b' } }, (p.source || 'manual') + ' · ' + (p.sku || '')),
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' } },
+                h('b', { style: { color: WA_D } }, p.price_inr ? '₹' + Number(p.price_inr).toLocaleString('en-IN') : '—'),
+                Number(p.in_stock) ? pill('In stock', '#dcfce7', '#166534') : pill('Out', '#fef2f2', '#dc2626')),
+              h('div', { style: { marginTop: '8px' } }, btn('📤 Send to WhatsApp', function () { sendModal(p); }, 'primary')))));
+        });
+        body.appendChild(g);
+      }
+      function sendModal(p) {
+        const ph = h('input', { placeholder: 'WhatsApp number e.g. 9198…', style: { width: '100%', padding: '8px 10px', border: '1px solid #d1fae5', borderRadius: '7px', boxSizing: 'border-box' } });
+        modal('📤 Send "' + p.name + '"', h('div', {},
+          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Send this product as a WhatsApp message. Enter the customer\'s number:'),
+          ph), [['Send', async function (close) { try { const r = await api('api_wapack_product_send', { product_id: p.id, phone: ph.value }); toast('Sent to ' + r.sent_to); close(); } catch (e) { toast(e.message); } }, 'primary']]);
+      }
+      render();
+    };
   });
 })();

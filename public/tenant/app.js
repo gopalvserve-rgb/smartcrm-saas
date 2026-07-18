@@ -1871,6 +1871,8 @@ const NAV_GROUPS = [
     { id: 'tourinsights',     label: 'AI Insights',              icon: '🤖', roles: ['admin','manager'], requiresPack: 'holiday', search: 'ai insights gemini travel' },
     // ---- WhatsApp Suite pack ----
     { id: 'wapackinbox',    label: 'Team Inbox',        icon: '📥', roles: ['admin','manager','team_leader','sales'], requiresPack: 'whatsapp', search: 'whatsapp shared team inbox chat assign transfer handoff agent' },
+    { id: 'wapackforms',    label: 'Forms & WebViews',  icon: '📝', roles: ['admin','manager','team_leader'], requiresPack: 'whatsapp', search: 'whatsapp forms in-chat lead capture webview web page flows' },
+    { id: 'wapackshop',     label: 'Storefront',        icon: '🛒', roles: ['admin','manager','team_leader'], requiresPack: 'whatsapp', search: 'whatsapp shopify woocommerce facebook catalog store products ecommerce' },
     { id: 'wapackretarget', label: 'Smart Retargeting', icon: '🎯', roles: ['admin','manager','team_leader'], requiresPack: 'whatsapp', search: 'whatsapp retarget engagement read replied segment campaign' },
     // ---- Ecommerce pack ----
     { id: 'packecommerce', label: 'Ecommerce Overview', icon: '🛒', roles: ['admin','manager','team_leader'], requiresPack: 'ecommerce', search: 'ecommerce order return cart loyalty d2c' }
