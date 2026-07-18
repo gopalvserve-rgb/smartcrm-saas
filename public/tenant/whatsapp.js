@@ -476,11 +476,33 @@
         function draw() {
           fieldsWrap.innerHTML = '';
           fields.forEach(function (fl, idx) {
-            fieldsWrap.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginBottom: '6px', alignItems: 'center' } },
-              (function () { const i = h('input', { value: fl.label || '', placeholder: 'Label', style: { flex: 1, padding: '6px 8px', border: '1px solid #d1fae5', borderRadius: '6px' } }); i.oninput = function () { fl.label = i.value; drawPreview(); }; return i; })(),
-              (function () { const s = sel(FIELD_TYPES, fl.type || 'text'); s.onchange = function () { fl.type = s.value; drawPreview(); }; return s; })(),
-              (function () { const l = h('label', { style: { fontSize: '11px', display: 'flex', gap: '3px', alignItems: 'center' } }); const c = h('input', { type: 'checkbox' }); c.checked = !!fl.required; c.onchange = function () { fl.required = c.checked; }; l.appendChild(c); l.appendChild(document.createTextNode('req')); return l; })(),
-              btn('✕', function () { fields.splice(idx, 1); draw(); })));
+            const labelI = h('input', { value: fl.label || '', placeholder: 'Field label — e.g. Full name',
+              style: { width: '100%', padding: '7px 9px', border: '1px solid #d1fae5', borderRadius: '7px', boxSizing: 'border-box', fontWeight: 600, fontSize: '13px' } });
+            labelI.oninput = function () { fl.label = labelI.value; drawPreview(); };
+            const typeS = sel(FIELD_TYPES, fl.type || 'text'); typeS.style.width = '130px';
+            const optRow = h('div');
+            function drawOpt() {
+              optRow.innerHTML = '';
+              if (typeS.value === 'select') {
+                const o = h('input', { value: (fl.options || []).join(', '), placeholder: 'Dropdown options, comma-separated',
+                  style: { width: '100%', padding: '6px 8px', border: '1px solid #d1fae5', borderRadius: '6px', marginTop: '6px', boxSizing: 'border-box', fontSize: '12px' } });
+                o.oninput = function () { fl.options = o.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean); drawPreview(); };
+                optRow.appendChild(o);
+              }
+            }
+            typeS.onchange = function () { fl.type = typeS.value; drawOpt(); drawPreview(); };
+            const reqL = h('label', { style: { fontSize: '12px', display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer' } });
+            const c = h('input', { type: 'checkbox' }); c.checked = !!fl.required; c.onchange = function () { fl.required = c.checked; drawPreview(); };
+            reqL.appendChild(c); reqL.appendChild(document.createTextNode('Required'));
+            const cardEl = h('div', { style: { border: '1px solid #d1fae5', borderRadius: '9px', padding: '10px', marginBottom: '8px', background: '#f8fffb' } },
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } },
+                h('span', { style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '.4px', color: '#94a3b8', fontWeight: 700 } }, 'Field ' + (idx + 1)),
+                btn('🗑 Remove', function () { fields.splice(idx, 1); draw(); })),
+              labelI,
+              h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', marginTop: '6px' } }, typeS, reqL),
+              optRow);
+            drawOpt();
+            fieldsWrap.appendChild(cardEl);
           });
           drawPreview();
         }
