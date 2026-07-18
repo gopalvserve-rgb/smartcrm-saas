@@ -386,6 +386,131 @@ async function api_wapack_retarget_createCampaign(token, args) {
   return { ok: true, campaign: res, targeted: ids.length };
 }
 
+// ══════════════════════════════════════════════════════════════════
+//  SHOWCASE SEED — populates a demo tenant (showcase-whatsapp) with
+//  realistic conversations, agents, campaigns and handoffs so every
+//  pack feature has data to show. Idempotent (skips if already seeded).
+// ══════════════════════════════════════════════════════════════════
+const _DEMO_CUSTOMERS = [
+  ['Rahul Kapoor',   'price + ready to buy'],
+  ['Sneha Patel',    'wants a callback'],
+  ['Vikram Joshi',   'asked for comparison'],
+  ['Meera Reddy',    'wants a demo'],
+  ['Aditya Bose',    'brochure sent'],
+  ['Pooja Nair',     'negotiating'],
+  ['Karan Malhotra', 'asked about integrations'],
+  ['Divya Menon',    'gone quiet after quote'],
+  ['Arjun Shah',     'read, no reply'],
+  ['Nisha Verma',    'delivered, unread'],
+  ['Rohit Sinha',    'number invalid'],
+  ['Tanvi Desai',    'happy customer'],
+  ['Sameer Khan',    'follow-up next week'],
+  ['Ananya Iyer',    'wants pricing sheet']
+];
+const _DEMO_SCRIPTS = [
+  { in: 'Hi, I saw your ad. What is the pricing for 10 users?' },
+  { out: 'Hi 👋 For 10 users the Pro plan at ₹9,999/mo fits well — includes AI bot, WhatsApp Cloud API and call recording. Want a quick demo?' },
+  { in: 'Yes please share brochure also' },
+  { out: 'Sharing the brochure + pricing sheet now. Would 4pm tomorrow work for the demo call?' },
+  { in: 'Perfect. Schedule it.' },
+  { out: 'Booked for 4pm tomorrow. You will get the meeting link 30 mins before. Looking forward! 🙌' }
+];
+
+async function api_wapack_seedDemo(token) {
+  const me = await _gate(token);
+  if (!['admin', 'manager'].includes(String(me.role || ''))) throw new Error('Admin only');
+
+  // Idempotency — skip if we already seeded this tenant.
+  const existing = Number(((await db.query(
+    `SELECT COUNT(*)::int AS n FROM leads WHERE source='WA Demo'`, [])).rows[0] || {}).n || 0);
+  if (existing >= _DEMO_CUSTOMERS.length) {
+    return { ok: true, skipped: true, message: 'Demo data already present.' };
+  }
+
+  // 1. Agents (demo users who never log in — placeholder hash).
+  const AGENTS = [['Priya Sharma', 'team_leader'], ['Amit Rao', 'sales'], ['Neha Gupta', 'sales'], ['Ravi Kumar', 'sales']];
+  const agentIds = [];
+  for (const [nm, role] of AGENTS) {
+    const em = 'agent.' + nm.toLowerCase().replace(/[^a-z]+/g, '.') + '@wa.demo';
+    let id = ((await db.query(`SELECT id FROM users WHERE email=$1`, [em])).rows[0] || {}).id;
+    if (!id) {
+      id = (await db.query(
+        `INSERT INTO users (name, email, role, password_hash, is_active) VALUES ($1,$2,$3,'$demo$disabled$',1) RETURNING id`,
+        [nm, em, role])).rows[0].id;
+    }
+    agentIds.push(id);
+  }
+  const meId = me.id;
+
+  // 2. Customers + conversations + campaign targets.
+  const campaign = (await db.query(
+    `INSERT INTO wa_campaigns (name, relation_type, template_name, status, recipients_total, created_by, created_at)
+     VALUES ('Diwali Offer Blast','leads','festive_offer','completed',$1,$2, now() - interval '4 days') RETURNING id`,
+    [_DEMO_CUSTOMERS.length, meId])).rows[0].id;
+
+  const now = Date.now();
+  for (let i = 0; i < _DEMO_CUSTOMERS.length; i++) {
+    const [name, tag] = _DEMO_CUSTOMERS[i];
+    const phone = '9' + String(100000000 + i * 7654321 + (now % 1000)).slice(-9);
+    const leadId = (await db.query(
+      `INSERT INTO leads (name, phone, whatsapp, source, created_at)
+       VALUES ($1,$2,$2,'WA Demo', now() - ($3||' days')::interval) RETURNING id`,
+      [name, phone, String((i % 5) + 1)])).rows[0].id;
+
+    // How much of the script each customer got (varies last-message direction + unread).
+    const depth = 2 + (i % (_DEMO_SCRIPTS.length));
+    const baseMin = 60 * (i + 1);   // stagger threads
+    for (let s = 0; s < depth; s++) {
+      const step = _DEMO_SCRIPTS[s];
+      const dir = ('in' in step) ? 'in' : 'out';
+      const body = step.in || step.out;
+      await db.query(
+        `INSERT INTO whatsapp_messages (lead_id, direction, from_number, to_number, body, status, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6, now() - ($7||' minutes')::interval)`,
+        [leadId, dir,
+         dir === 'in' ? phone : null,
+         dir === 'out' ? phone : null,
+         body, dir === 'out' ? 'read' : 'received',
+         String(baseMin - s * 7)]);
+    }
+
+    // Campaign target status spread → drives retargeting segments.
+    //   i%5: 0 read+replied, 1 read-no-reply, 2 delivered-not-read, 3 undelivered, 4 failed
+    const bucket = i % 5;
+    let status = 'sent', sentAt = "now() - interval '4 days'", delAt = null, readAt = null;
+    if (bucket === 0 || bucket === 1) { status = 'read'; delAt = sentAt; readAt = "now() - interval '3 days'"; }
+    else if (bucket === 2)            { status = 'delivered'; delAt = sentAt; }
+    else if (bucket === 3)            { status = 'sent'; }
+    else                              { status = 'failed'; }
+    await db.query(
+      `INSERT INTO wa_campaign_targets (campaign_id, lead_id, phone, name, status, sent_at, delivered_at, read_at, created_at)
+       VALUES ($1,$2,$3,$4,$5, ${sentAt}, ${delAt || 'NULL'}, ${readAt || 'NULL'}, now() - interval '4 days')`,
+      [campaign, leadId, phone, name, status]);
+  }
+
+  // 3. Inbox assignments + handoff log so Manager Monitor + Team Inbox scopes populate.
+  const demoLeads = (await db.query(`SELECT id, phone FROM leads WHERE source='WA Demo' ORDER BY id ASC`, [])).rows;
+  for (let i = 0; i < demoLeads.length; i++) {
+    const ph = demoLeads[i].phone;
+    if (i < 3) {  // resolved
+      await _touchInbox(ph, { assigned_to: agentIds[i % agentIds.length], status: 'resolved', resolved_at: db.nowIso() },
+        { action: 'resolve', from_user: agentIds[i % agentIds.length] });
+    } else if (i < 7) {  // assigned & open
+      await _touchInbox(ph, { assigned_to: agentIds[i % agentIds.length], status: 'open' },
+        { action: 'assign', from_user: meId, to_user: agentIds[i % agentIds.length] });
+    } else if (i === 7) {  // a transfer, for the handoff log
+      await _touchInbox(ph, { assigned_to: agentIds[1], status: 'open' },
+        { action: 'transfer', from_user: agentIds[0], to_user: agentIds[1], note: 'Better fit for enterprise' });
+    }
+    // rest stay unassigned
+  }
+
+  return {
+    ok: true,
+    seeded: { customers: _DEMO_CUSTOMERS.length, agents: agentIds.length, campaign, inbox_rows: demoLeads.length }
+  };
+}
+
 // ── Register the pack ─────────────────────────────────────────────
 framework.register({
   id:          PACK_ID,
@@ -416,6 +541,7 @@ module.exports = {
   api_wapack_retarget_segments,
   api_wapack_retarget_audience,
   api_wapack_retarget_createCampaign,
+  api_wapack_seedDemo,
   _installer,
   RETARGET_SEGMENTS
 };
