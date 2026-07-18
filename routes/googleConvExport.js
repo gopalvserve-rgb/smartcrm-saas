@@ -268,8 +268,14 @@ async function _buildRows(settings) {
   let withGclid = 0;
   let withoutGclid = 0;
   for (const lead of (r.rows || [])) {
-    const srcRaw = String(lead.source || '').toLowerCase();
-    if (sourceTokens.length && !sourceTokens.some(t => srcRaw === t || srcRaw.includes(t))) continue;
+    /* GCONV_SOURCE_NORMALIZE_v1 (2026-07-18) — match the source filter after stripping
+     * non-alphanumerics on BOTH sides, so "G-Ads", "G Ads", "Google-Ads", "gads" all match a
+     * "gads"/"google ads" token. The same Google Ads leads arrive under two labels ("Google
+     * Ads" AND "G-Ads"); the hyphen in "G-Ads" meant "gads" was not a substring, so 35 real
+     * G-Ads leads (e.g. 9818111449) were silently dropped from the conversion sheet. */
+    const _norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const srcNorm = _norm(lead.source);
+    if (sourceTokens.length && !sourceTokens.some(t => { const tn = _norm(t); return tn && (srcNorm === tn || srcNorm.indexOf(tn) >= 0); })) continue;
     const statusName = String(lead.status_name || '').trim();
     if (!statusName) continue;
     if (!mappedStatuses.has(statusName.toLowerCase())) continue;
