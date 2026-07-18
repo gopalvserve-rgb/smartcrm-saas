@@ -70,7 +70,12 @@
     const n = Number(v) || 0;
     return '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
-  function role() { try { return (window.CRM && CRM.user && CRM.user.role) || ''; } catch (_) { return ''; } }
+  /* CRM is module-scoped in app.js and NOT on window (PACK_GLOBALS trap), so we can't
+   * read CRM.user here. Fetch the user once via api_me and cache it. */
+  let _me = null;
+  async function loadMe() { if (_me) return _me; try { _me = await api('api_me'); } catch (_) { _me = {}; } return _me; }
+  function role() { return (_me && _me.role) || ''; }
+  function myId() { return _me && _me.id != null ? Number(_me.id) : -1; }
   const C = { brand: '#6366f1', ok: '#10b981', warn: '#f59e0b', err: '#ef4444',
               muted: '#94a3b8', text: '#0f172a', soft: '#475569', border: '#e5e7eb' };
 
@@ -235,6 +240,7 @@
   const S = { tab: 'list', scope: 'all', stages: [] };
 
   async function render(view) {
+    await loadMe();
     view.innerHTML = '';
     view.appendChild(h('h2', { style: { margin: '0 0 .2rem', fontSize: '1.4rem' } }, '👥 Customers'));
     view.appendChild(h('div', { style: { color: C.soft, margin: '0 0 1rem', fontSize: '.85rem' } },
@@ -322,8 +328,7 @@
       kv('Paid', money(c.paid_amount)), kv('Sales rep', c.sales_name), kv('Owner', c.owner_name || 'unassigned')));
 
     // stage mover (owner/admin only)
-    const canMove = role() === 'admin' || role() === 'manager' ||
-      (window.CRM && CRM.user && Number(CRM.user.id) === Number(c.owner_user_id));
+    const canMove = role() === 'admin' || role() === 'manager' || myId() === Number(c.owner_user_id);
     const stageWrap = h('div', { style: { margin: '.6rem 0' } });
     stageWrap.appendChild(label('Delivery stage'));
     if (canMove) {
