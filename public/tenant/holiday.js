@@ -996,26 +996,28 @@
 
       const picker = h('div', { style: { display: 'flex', gap: '8px',
         alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' } });
-      const sel = h('select', { style: { padding: '7px 10px',
+      // NB: named bookingSel (not `sel`) — a local `sel` would shadow the
+      // module-level sel() form-helper used by the apply-package bar below.
+      const bookingSel = h('select', { style: { padding: '7px 10px',
         border: '1px solid #ccfbf1', borderRadius: '7px', fontSize: '13px',
         background: '#fff', minWidth: '300px' },
-        onchange: function () { bookingId = Number(sel.value); load(); }
+        onchange: function () { bookingId = Number(bookingSel.value); load(); }
       });
       picker.appendChild(h('span', { style: { fontSize: '12.5px', color: '#475569' } }, 'Booking:'));
-      picker.appendChild(sel);
+      picker.appendChild(bookingSel);
       view.appendChild(picker);
 
       try {
         const r = await api('api_tour_booking_list',
           { status: '' });  // all bookings
         const opts = r.bookings || [];
-        if (!opts.length) sel.appendChild(h('option', { value: '' }, '(no bookings yet)'));
+        if (!opts.length) bookingSel.appendChild(h('option', { value: '' }, '(no bookings yet)'));
         opts.forEach(function (b) {
           const o = h('option', { value: b.id },
             (b.booking_no || ('#' + b.id)) + ' — ' + (b.lead_name || '?') +
             ' · ' + (b.destination_name || '—'));
           if (b.id === bookingId) o.selected = true;
-          sel.appendChild(o);
+          bookingSel.appendChild(o);
         });
         if (!bookingId && opts.length) bookingId = opts[0].id;
       } catch (_) {}
