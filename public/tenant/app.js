@@ -1861,6 +1861,7 @@ const NAV_GROUPS = [
     { id: 'packholiday',      label: '✈️ Travel Overview',     icon: '✈️', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'travel holiday overview dashboard' },
     { id: 'tourbookings',     label: 'Bookings',                 icon: '🎫', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'travel bookings list' },
     { id: 'tourdestinations', label: 'Destinations',             icon: '🌍', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'destinations master countries' },
+    { id: 'tourpackages',     label: 'Packages & Library',       icon: '📦', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'packages catalogue template component library itinerary' },
     { id: 'touritinerary',    label: 'Itinerary Builder',        icon: '🗺️', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'itinerary day plan trip' },
     { id: 'tourpayments',     label: 'Payments & Collection',    icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'payment collection balance outstanding' },
     { id: 'tourreports',      label: 'Travel Reports',           icon: '📊', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'reports upcoming collection itinerary leaderboard' },

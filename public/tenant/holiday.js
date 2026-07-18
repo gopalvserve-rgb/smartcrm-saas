@@ -34,14 +34,13 @@
     const TEAL2 = '#0f766e';
 
     function fmtINR(n) {
-      /* HOLIDAY_PACK_FIX_v1 — parseFloat-safe. Rejects NaN, empty, non-numeric. */
-      let v = parseFloat(n); if (!isFinite(v)) v = 0;
+      const v = Number(n || 0);
       if (v >= 10000000) return '₹' + (v / 10000000).toFixed(2) + ' Cr';
       if (v >= 100000)   return '₹' + (v / 100000).toFixed(2) + ' L';
       return '₹' + Math.round(v).toLocaleString('en-IN');
     }
-    function fmtINRfull(n) { let v = parseFloat(n); if (!isFinite(v)) v = 0; return '₹' + Math.round(v).toLocaleString('en-IN'); }
-    function num(n) { let v = parseFloat(n); if (!isFinite(v)) v = 0; return v.toLocaleString('en-IN'); }
+    function fmtINRfull(n) { return '₹' + Math.round(Number(n || 0)).toLocaleString('en-IN'); }
+    function num(n) { return Number(n || 0).toLocaleString('en-IN'); }
 
     function kpiTile(label, val, sub, color) {
       color = color || TEAL;
@@ -126,6 +125,83 @@
         }, o[1]));
       });
       return seg;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  PACKAGE_BUILDER_v1 — shared helpers (modal + form inputs)
+    // ════════════════════════════════════════════════════════════════
+    const ACTIVITY_KINDS = ['arrival', 'sightseeing', 'meal', 'transfer',
+                            'leisure', 'adventure', 'shopping', 'departure'];
+    const MEAL_PLANS = [['', 'No meals'], ['bb', 'Breakfast only'],
+                        ['hb', 'Breakfast + Dinner'], ['fb', 'All meals']];
+    const COMPONENT_KINDS = [['hotel', '🏨 Hotels'], ['activity', '🏛️ Activities'],
+                             ['transfer', '🚗 Transfers'], ['meal', '🍽️ Meals'], ['other', '📌 Other']];
+
+    function kindEmoji(k) {
+      const m = { arrival: '✈️', departure: '🛫', sightseeing: '🏛️',
+        meal: '🍽️', transfer: '🚗', leisure: '🌴',
+        adventure: '🪂', shopping: '🛍️', hotel: '🏨', other: '📌' };
+      return m[k] || '📌';
+    }
+
+    function inp(value, ph) {
+      return h('input', { value: value == null ? '' : String(value),
+        placeholder: ph || '', style: {
+          width: '100%', padding: '7px 9px', border: '1px solid #ccfbf1',
+          borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' } });
+    }
+    function sel(options, value) {
+      // options: array of [val,label] or [val]
+      const s = h('select', { style: {
+        width: '100%', padding: '7px 9px', border: '1px solid #ccfbf1',
+        borderRadius: '7px', fontSize: '13px', background: '#fff', boxSizing: 'border-box' } });
+      options.forEach(function (o) {
+        const v = Array.isArray(o) ? o[0] : o;
+        const l = Array.isArray(o) ? (o[1] || o[0]) : o;
+        const opt = h('option', { value: v }, l);
+        if (String(v) === String(value == null ? '' : value)) opt.selected = true;
+        s.appendChild(opt);
+      });
+      return s;
+    }
+    function field(label, el) {
+      return h('div', {},
+        h('label', { style: { display: 'block', fontSize: '10.5px',
+          textTransform: 'uppercase', letterSpacing: '.4px', color: '#64748b',
+          fontWeight: 700, marginBottom: '3px' } }, label),
+        el);
+    }
+    function grid(children, cols) {
+      return h('div', { style: { display: 'grid',
+        gridTemplateColumns: 'repeat(' + (cols || 2) + ', 1fr)', gap: '10px' } }, ...children);
+    }
+
+    // Self-contained modal. body = DOM node. actions = [ [label, fn, kind] ].
+    function modal(title, body, actions) {
+      const overlay = h('div', { style: {
+        position: 'fixed', inset: '0', background: 'rgba(15,23,42,.45)',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+        zIndex: 9999, padding: '40px 16px', overflowY: 'auto' } });
+      function close() { try { document.body.removeChild(overlay); } catch (_) {} }
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+      const foot = h('div', { style: { display: 'flex', justifyContent: 'flex-end',
+        gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #ecfdf5' } });
+      (actions || []).forEach(function (a) {
+        foot.appendChild(btn(a[0], function () { a[1](close); }, a[2]));
+      });
+      foot.appendChild(btn('Cancel', close));
+      const box = h('div', { style: {
+        background: '#fff', borderRadius: '14px', padding: '18px',
+        width: '100%', maxWidth: '640px', boxShadow: '0 20px 60px rgba(0,0,0,.25)' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '14px' } },
+          h('h3', { style: { margin: 0, fontSize: '15px' } }, title),
+          h('button', { onclick: close, style: { border: 0, background: 'transparent',
+            fontSize: '20px', cursor: 'pointer', color: '#94a3b8', lineHeight: 1 } }, '×')),
+        body, foot);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      return { close: close };
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -478,13 +554,7 @@
           const card = h('div', {
             style: { background: '#fff', border: '1px solid #ccfbf1', borderRadius: '12px',
               padding: '14px', cursor: 'pointer', transition: 'all .15s' },
-            /* HOLIDAY_PACK_FIX_v1 — clickable: open Bookings filtered by this destination. */
-            onclick: function () {
-              try {
-                var dname = encodeURIComponent(d.name || '');
-                window.location.hash = '#/tourbookings?destination_id=' + (d.id||'') + '&destination_name=' + dname;
-              } catch (_) {}
-            }
+            onclick: function () { /* future: open detail */ }
           },
             h('div', { style: { fontSize: '40px' } }, d.flag || '🌍'),
             h('h3', { style: { margin: '4px 0', fontSize: '15px' } }, d.name),
@@ -506,69 +576,406 @@
       refresh();
     };
 
+    // ════════════════════════════════════════════════════════════════
+    //  PACKAGE_BUILDER_v1 — Packages catalogue, day templates & library
+    // ════════════════════════════════════════════════════════════════
+    VIEWS.tourpackages = async function (view) {
+      let tab = 'packages';       // packages | library
+      let editingPkg = null;      // package object → show its day-template editor
+      let destinations = [];
 
-    /* HOLIDAY_ITIN_UX_v1 — proper modal form helper */
-    function _showItinModal(opts) {
-      /* opts: { title, fields:[{name,label,type,value,placeholder,options,required}], onSubmit(values), submitLabel } */
-      return new Promise(function (resolve) {
-        var wrap = document.createElement('div');
-        wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;';
-        var card = document.createElement('div');
-        card.style.cssText = 'background:#fff;border-radius:14px;max-width:540px;width:100%;max-height:92vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.35);';
-        card.innerHTML = '<div style="padding:16px 22px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;border-radius:14px 14px 0 0">'
-          + '<h3 style="margin:0;font-size:16px;font-weight:800">' + (opts.title || 'Form') + '</h3>'
-          + '<button id="_itm_x" style="background:rgba(255,255,255,.2);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:18px;line-height:1">×</button>'
-          + '</div><div style="padding:18px 22px" id="_itm_body"></div>'
-          + '<div style="padding:14px 22px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#f9fafb;border-radius:0 0 14px 14px">'
-          +   '<button id="_itm_cancel" style="padding:8px 16px;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;font-weight:600">Cancel</button>'
-          +   '<button id="_itm_save"   style="padding:8px 18px;background:#0f766e;color:#fff;border:0;border-radius:8px;cursor:pointer;font-weight:700">' + (opts.submitLabel || 'Save') + '</button>'
-          + '</div>';
-        wrap.appendChild(card);
-        var body = card.querySelector('#_itm_body');
-        (opts.fields || []).forEach(function (f) {
-          var row = document.createElement('div'); row.style.cssText = 'margin-bottom:14px;';
-          var lbl = document.createElement('label');
-          lbl.style.cssText = 'display:block;font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;letter-spacing:.5px;';
-          lbl.textContent = f.label + (f.required ? ' *' : '');
-          row.appendChild(lbl);
-          var inp;
-          if (f.type === 'select') {
-            inp = document.createElement('select');
-            (f.options || []).forEach(function (o) {
-              var op = document.createElement('option');
-              op.value = o.value; op.textContent = o.label;
-              if (String(f.value) === String(o.value)) op.selected = true;
-              inp.appendChild(op);
-            });
-          } else if (f.type === 'textarea') {
-            inp = document.createElement('textarea'); inp.rows = 3;
-            inp.value = f.value || '';
-          } else {
-            inp = document.createElement('input'); inp.type = f.type || 'text';
-            inp.value = f.value || '';
-          }
-          inp.name = f.name;
-          if (f.placeholder) inp.placeholder = f.placeholder;
-          inp.style.cssText = 'width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box;';
-          row.appendChild(inp);
-          body.appendChild(row);
+      function tabStyle(on) {
+        return { padding: '8px 14px', borderRadius: '7px', border: 0, cursor: 'pointer',
+          fontSize: '12.5px', fontWeight: 700,
+          background: on ? 'linear-gradient(180deg,#14b8a6,#0d9488)' : 'transparent',
+          color: on ? '#fff' : '#475569' };
+      }
+      function card(children) {
+        return h('div', { style: { background: '#fff', border: '1px solid #ccfbf1',
+          borderRadius: '10px', padding: '14px', marginBottom: '12px' } }, ...children);
+      }
+
+      async function loadDestinations() {
+        try { destinations = (await api('api_tour_destinations_list')).destinations || []; }
+        catch (_) { destinations = []; }
+      }
+
+      function render() {
+        view.innerHTML = '';
+        view.appendChild(topbar('Holiday / Packages & Library', '📦 Packages & Library', [
+          btn('🔄 Refresh', function () { editingPkg = null; render(); })
+        ]));
+        const tabs = h('div', { style: { display: 'flex', gap: '6px', background: '#fff',
+          padding: '6px', borderRadius: '10px', border: '1px solid #ccfbf1',
+          marginBottom: '14px', width: 'fit-content' } });
+        [['packages', '📦 Packages'], ['library', '🧱 Component Library']].forEach(function (t) {
+          tabs.appendChild(h('button', { style: tabStyle(tab === t[0]),
+            onclick: function () { tab = t[0]; editingPkg = null; render(); } }, t[1]));
         });
-        document.body.appendChild(wrap);
-        var firstInp = body.querySelector('input,select,textarea');
-        if (firstInp) firstInp.focus();
-        function close(val) { try { document.body.removeChild(wrap); } catch(_) {} resolve(val); }
-        card.querySelector('#_itm_x').onclick     = function () { close(null); };
-        card.querySelector('#_itm_cancel').onclick = function () { close(null); };
-        wrap.onclick = function (ev) { if (ev.target === wrap) close(null); };
-        card.querySelector('#_itm_save').onclick = function () {
-          var out = {};
-          body.querySelectorAll('input,select,textarea').forEach(function (el) { out[el.name] = el.value; });
-          /* required-field check */
-          var missing = (opts.fields || []).find(function (f) { return f.required && !String(out[f.name] || '').trim(); });
-          if (missing) { alert(missing.label + ' is required'); return; }
-          close(out);
-        };
-      });
+        view.appendChild(tabs);
+        const body = h('div'); view.appendChild(body);
+        if (tab === 'packages') { editingPkg ? renderTemplate(body) : renderCatalogue(body); }
+        else renderLibrary(body);
+      }
+
+      // ---- Packages catalogue -------------------------------------
+      async function renderCatalogue(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading packages…</div>';
+        let packages = [];
+        try { packages = (await api('api_tour_packages_list')).packages || []; }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        // day counts (few packages — parallel is fine)
+        const counts = {};
+        await Promise.all(packages.map(async function (p) {
+          try { counts[p.id] = ((await api('api_tour_packageDays_get', { package_id: p.id })).days || []).length; }
+          catch (_) { counts[p.id] = 0; }
+        }));
+
+        body.innerHTML = '';
+        body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '12px' } },
+          h('div', { style: { fontSize: '12.5px', color: '#64748b' } },
+            packages.length + ' package' + (packages.length === 1 ? '' : 's')),
+          btn('＋ New Package', function () { packageModal(null); }, 'primary')));
+
+        if (!packages.length) {
+          body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } },
+            'No packages yet. Click "＋ New Package" to create one clients can choose from.')]));
+          return;
+        }
+
+        const g = h('div', { style: { display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '14px' } });
+        packages.forEach(function (p) {
+          const n = counts[p.id] || 0;
+          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #ccfbf1',
+            borderRadius: '12px', overflow: 'hidden' } },
+            h('div', { style: { height: '70px', background: 'linear-gradient(135deg,#0d9488,#5eead4)',
+              position: 'relative' } },
+              h('span', { style: { position: 'absolute', top: '8px', left: '10px', fontSize: '22px' } }, p.flag || '🌍'),
+              h('span', { style: { position: 'absolute', top: '9px', right: '9px' } },
+                pill(p.kind || 'package', 'teal'))),
+            h('div', { style: { padding: '12px' } },
+              h('h3', { style: { margin: '0 0 3px', fontSize: '14px' } }, p.name || 'Untitled'),
+              h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '8px' } },
+                (p.destination_name || '—') + ' · ' + (p.duration_nights || '?') + 'N'),
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                h('b', { style: { color: TEAL, fontSize: '15px' } }, fmtINRfull(p.price_inr)),
+                n ? pill(n + ' day' + (n === 1 ? '' : 's'), 'ok') : pill('no days yet', 'warn')),
+              h('div', { style: { display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap' } },
+                btn('🗓 Build days', function () { editingPkg = p; render(); }, 'primary'),
+                btn('✏️', function () { packageModal(p); }),
+                btn('⧉', function () { duplicatePackage(p); }))
+            )));
+        });
+        body.appendChild(g);
+      }
+
+      function packageModal(p) {
+        p = p || {};
+        const fName = inp(p.name, 'e.g. Bali 5N Honeymoon');
+        const fDest = sel([['', '— Destination —']].concat(destinations.map(function (d) {
+          return [d.id, (d.flag || '') + ' ' + d.name]; })), p.destination_id || '');
+        const fKind = sel(['honeymoon', 'family', 'leisure', 'adventure', 'business'], p.kind || 'leisure');
+        const fNights = inp(p.duration_nights, 'Nights');
+        const fPax = inp(p.pax == null ? 2 : p.pax, 'Pax');
+        const fPrice = inp(p.price_inr, 'Base price ₹');
+        const fInc = inp(p.inclusions, 'Transfers | Breakfast | …');
+        const fExc = inp(p.exclusions, 'Airfare | Visa | …');
+        const bodyEl = h('div', {},
+          grid([field('Package name', fName), field('Destination', fDest)], 2),
+          h('div', { style: { height: '10px' } }),
+          grid([field('Type', fKind), field('Nights', fNights), field('Pax', fPax), field('Base price (₹)', fPrice)], 4),
+          h('div', { style: { height: '10px' } }),
+          grid([field('Inclusions (pipe-separated)', fInc), field('Exclusions', fExc)], 2));
+        modal(p.id ? 'Edit Package' : 'New Package', bodyEl, [
+          ['💾 Save package', async function (close) {
+            if (!fName.value.trim()) { toast('Name required'); return; }
+            try {
+              await api('api_tour_packages_save', {
+                id: p.id || 0, name: fName.value.trim(), destination_id: fDest.value || null,
+                kind: fKind.value, duration_nights: fNights.value, pax: fPax.value,
+                price_inr: fPrice.value, inclusions: fInc.value, exclusions: fExc.value });
+              toast('Saved'); close(); render();
+            } catch (e) { toast(e.message); }
+          }, 'primary']
+        ]);
+      }
+
+      async function duplicatePackage(p) {
+        try {
+          const nr = await api('api_tour_packages_save', {
+            name: (p.name || 'Package') + ' (copy)', destination_id: p.destination_id,
+            kind: p.kind, duration_nights: p.duration_nights, pax: p.pax,
+            price_inr: p.price_inr, inclusions: p.inclusions, exclusions: p.exclusions });
+          const newId = nr.id;
+          const tpl = await api('api_tour_packageDays_get', { package_id: p.id });
+          for (const d of (tpl.days || [])) {
+            const dr = await api('api_tour_packageDay_save', {
+              package_id: newId, day_no: d.day_no, city: d.city, hotel_name: d.hotel_name,
+              room_type: d.room_type, meal_plan: d.meal_plan, transport: d.transport,
+              sightseeing: d.sightseeing, day_cost_inr: d.day_cost_inr, inclusions: d.inclusions, notes: d.notes });
+            const acts = (tpl.activities || []).filter(function (a) { return a.package_day_id === d.id; });
+            for (const a of acts) {
+              await api('api_tour_packageActivity_save', {
+                package_day_id: dr.id, seq: a.seq, time_str: a.time_str, kind: a.kind, title: a.title, detail: a.detail });
+            }
+          }
+          toast('Package duplicated'); render();
+        } catch (e) { toast(e.message); }
+      }
+
+      // ---- Package day-by-day template editor ----------------------
+      async function renderTemplate(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading template…</div>';
+        let data;
+        try { data = await api('api_tour_packageDays_get', { package_id: editingPkg.id }); }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        const days = data.days || [], acts = data.activities || [];
+
+        body.innerHTML = '';
+        body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' } },
+          h('div', {}, btn('← Back to packages', function () { editingPkg = null; render(); }),
+            h('span', { style: { marginLeft: '10px', fontWeight: 700 } },
+              (editingPkg.flag || '') + ' ' + editingPkg.name),
+            h('span', { style: { marginLeft: '8px' } }, pill(days.length + ' day' + (days.length === 1 ? '' : 's'), 'teal'))),
+          btn('＋ Add Day', function () { pkgDayModal(null, days.length + 1); }, 'primary')));
+
+        if (!days.length) {
+          body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } },
+            'No template days yet. Add days here — every booking that uses this package inherits them.')]));
+          return;
+        }
+        days.forEach(function (d) {
+          const dayActs = acts.filter(function (a) { return a.package_day_id === d.id; });
+          body.appendChild(dayCardView(d, dayActs, {
+            onEditDay: function () { pkgDayModal(d, d.day_no); },
+            onDelDay: async function () {
+              if (!confirm('Delete Day ' + d.day_no + '?')) return;
+              try { await api('api_tour_packageDay_delete', { id: d.id }); toast('Deleted'); render(); } catch (e) { toast(e.message); }
+            },
+            onAddAct: function () { pkgActModal(null, d.id, dayActs.length + 1); },
+            onEditAct: function (a) { pkgActModal(a, d.id, a.seq); },
+            onDelAct: async function (a) {
+              try { await api('api_tour_packageActivity_delete', { id: a.id }); toast('Removed'); render(); } catch (e) { toast(e.message); }
+            }
+          }));
+        });
+      }
+
+      function pkgDayModal(d, dayNo) {
+        d = d || {};
+        const els = dayFormEls(d);
+        modal(d.id ? 'Edit Day ' + dayNo : 'Add Day ' + dayNo, dayFormBody(els), [
+          ['💾 Save day', async function (close) {
+            try {
+              await api('api_tour_packageDay_save', Object.assign(
+                { id: d.id || 0, package_id: editingPkg.id, day_no: dayNo }, dayFormValues(els)));
+              toast('Saved'); close(); render();
+            } catch (e) { toast(e.message); }
+          }, 'primary']
+        ]);
+      }
+
+      function pkgActModal(a, dayId, seq) {
+        a = a || {};
+        const els = actFormEls(a);
+        modal(a.id ? 'Edit Activity' : 'Add Activity', actFormBody(els), [
+          ['💾 Save', async function (close) {
+            try {
+              await api('api_tour_packageActivity_save', Object.assign(
+                { id: a.id || 0, package_day_id: dayId, seq: seq }, actFormValues(els)));
+              toast('Saved'); close(); render();
+            } catch (e) { toast(e.message); }
+          }, 'primary']
+        ]);
+      }
+
+      // ---- Component library ---------------------------------------
+      let libKind = '';
+      async function renderLibrary(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading library…</div>';
+        let comps = [];
+        try { comps = (await api('api_tour_components_list', libKind ? { kind: libKind } : {})).components || []; }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        body.innerHTML = '';
+        body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' } },
+          h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+            [['', 'All']].concat(COMPONENT_KINDS).map(function (k) {
+              const on = libKind === k[0];
+              return h('button', { onclick: function () { libKind = k[0]; render(); },
+                style: { border: '1px solid #ccfbf1', borderRadius: '99px', padding: '4px 11px',
+                  fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                  background: on ? TEAL : '#fff', color: on ? '#fff' : '#475569' } }, k[1]);
+            })),
+          btn('＋ New Component', function () { componentModal(null); }, 'primary')));
+
+        if (!comps.length) {
+          body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } },
+            'No components yet. Add reusable hotels, activities, transfers & meals to pick from in any package or trip.')]));
+          return;
+        }
+        const g = h('div', { style: { display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '10px' } });
+        comps.forEach(function (c) {
+          g.appendChild(h('div', { style: { border: '1px solid #ccfbf1', borderRadius: '10px',
+            padding: '10px', background: '#fff', display: 'flex', gap: '10px' } },
+            h('div', { style: { fontSize: '20px' } }, kindEmoji(c.kind)),
+            h('div', { style: { flex: 1 } },
+              h('h3', { style: { margin: '0 0 2px', fontSize: '13.5px' } }, c.name),
+              h('div', { style: { fontSize: '12px', color: '#64748b' } },
+                [c.city, c.rate_inr ? fmtINRfull(c.rate_inr) + (c.rate_unit ? '/' + c.rate_unit : '') : null]
+                  .filter(Boolean).join(' · ')),
+              c.description ? h('div', { style: { fontSize: '11.5px', color: '#94a3b8', marginTop: '2px' } }, c.description) : null),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+              btn('✏️', function () { componentModal(c); }),
+              btn('🗑', async function () {
+                if (!confirm('Delete ' + c.name + '?')) return;
+                try { await api('api_tour_component_delete', { id: c.id }); toast('Deleted'); render(); } catch (e) { toast(e.message); }
+              }))));
+        });
+        body.appendChild(g);
+      }
+
+      function componentModal(c) {
+        c = c || {};
+        const fKind = sel(COMPONENT_KINDS, c.kind || 'hotel');
+        const fName = inp(c.name, 'e.g. The Royal Purnama');
+        const fCity = inp(c.city, 'City');
+        const fRate = inp(c.rate_inr, 'Rate ₹');
+        const fUnit = sel([['', 'unit'], ['night', 'per night'], ['pax', 'per pax'],
+                           ['trip', 'per trip'], ['day', 'per day']], c.rate_unit || '');
+        const fPhoto = inp(c.photo_url, 'Photo URL (optional)');
+        const fDesc = inp(c.description, 'Short description');
+        const bodyEl = h('div', {},
+          grid([field('Type', fKind), field('Name', fName)], 2),
+          h('div', { style: { height: '10px' } }),
+          grid([field('City', fCity), field('Rate (₹)', fRate), field('Rate unit', fUnit)], 3),
+          h('div', { style: { height: '10px' } }),
+          field('Description', fDesc),
+          h('div', { style: { height: '10px' } }),
+          field('Photo URL', fPhoto));
+        modal(c.id ? 'Edit Component' : 'New Component', bodyEl, [
+          ['💾 Save', async function (close) {
+            if (!fName.value.trim()) { toast('Name required'); return; }
+            try {
+              await api('api_tour_component_save', {
+                id: c.id || 0, kind: fKind.value, name: fName.value.trim(), city: fCity.value,
+                rate_inr: fRate.value, rate_unit: fUnit.value, photo_url: fPhoto.value, description: fDesc.value });
+              toast('Saved'); close(); render();
+            } catch (e) { toast(e.message); }
+          }, 'primary']
+        ]);
+      }
+
+      await loadDestinations();
+      render();
+    };
+
+    // ── Shared day/activity form builders (used by templates + itinerary) ──
+    function dayFormEls(d) {
+      d = d || {};
+      return {
+        date: inp(d.day_date ? String(d.day_date).slice(0, 10) : '', 'YYYY-MM-DD'),
+        city: inp(d.city, 'City'),
+        hotel: inp(d.hotel_name, 'Hotel name'),
+        room: inp(d.room_type, 'Room type'),
+        meal: sel(MEAL_PLANS, d.meal_plan || ''),
+        transport: inp(d.transport, 'e.g. Private AC car'),
+        sightseeing: inp(d.sightseeing, 'Key sights'),
+        cost: inp(d.day_cost_inr, 'Day cost ₹'),
+        inclusions: inp(d.inclusions, 'Inclusions / notes for this day')
+      };
+    }
+    function dayFormBody(e, showDate) {
+      const rows = [];
+      if (showDate) rows.push(grid([field('Day date', e.date), field('City', e.city)], 2));
+      else rows.push(grid([field('City', e.city), field('Hotel', e.hotel)], 2));
+      rows.push(h('div', { style: { height: '10px' } }));
+      if (showDate) rows.push(grid([field('Hotel', e.hotel), field('Room type', e.room),
+        field('Meal plan', e.meal), field('Day cost (₹)', e.cost)], 4));
+      else rows.push(grid([field('Room type', e.room), field('Meal plan', e.meal),
+        field('Day cost (₹)', e.cost)], 3));
+      rows.push(h('div', { style: { height: '10px' } }));
+      rows.push(grid([field('Transport', e.transport), field('Sightseeing', e.sightseeing)], 2));
+      rows.push(h('div', { style: { height: '10px' } }));
+      rows.push(field('Inclusions / notes', e.inclusions));
+      return h('div', {}, ...rows);
+    }
+    function dayFormValues(e) {
+      return {
+        day_date: e.date ? e.date.value : null, city: e.city.value, hotel_name: e.hotel.value,
+        room_type: e.room.value, meal_plan: e.meal.value, transport: e.transport.value,
+        sightseeing: e.sightseeing.value, day_cost_inr: e.cost.value, inclusions: e.inclusions.value
+      };
+    }
+    function actFormEls(a) {
+      a = a || {};
+      return {
+        time: inp(a.time_str, 'e.g. 09:00 AM'),
+        kind: sel(ACTIVITY_KINDS, a.kind || 'sightseeing'),
+        title: inp(a.title, 'Activity title'),
+        detail: inp(a.detail, 'Details (optional)')
+      };
+    }
+    function actFormBody(e) {
+      return h('div', {},
+        grid([field('Time', e.time), field('Type', e.kind)], 2),
+        h('div', { style: { height: '10px' } }),
+        field('Title', e.title),
+        h('div', { style: { height: '10px' } }),
+        field('Detail', e.detail));
+    }
+    function actFormValues(e) {
+      return { time_str: e.time.value, kind: e.kind.value, title: e.title.value, detail: e.detail.value };
+    }
+
+    // Reusable day card (read view) with edit/delete/activity actions
+    function dayCardView(d, dayActs, cb) {
+      const meta = [d.hotel_name || 'No hotel', d.room_type, mealLabel(d.meal_plan)].filter(Boolean).join(' · ');
+      const chips = [];
+      if (d.transport)   chips.push('🚗 ' + d.transport);
+      if (d.sightseeing) chips.push('🏛️ ' + d.sightseeing);
+      if (d.day_cost_inr) chips.push('💰 ' + fmtINRfull(d.day_cost_inr));
+      const actRows = dayActs.length
+        ? dayActs.map(function (a) {
+            return h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center',
+              padding: '6px 0', borderBottom: '1px solid #ecfdf5', fontSize: '12.5px' } },
+              h('div', { style: { color: TEAL2, fontWeight: 600, minWidth: '70px' } }, a.time_str || ''),
+              h('div', { style: { fontSize: '14px' } }, kindEmoji(a.kind)),
+              h('div', { style: { flex: 1 } },
+                h('b', {}, a.title),
+                a.detail ? h('div', { style: { color: '#64748b', fontSize: '11.5px' } }, a.detail) : null),
+              cb.onEditAct ? btn('✏️', function () { cb.onEditAct(a); }) : null,
+              cb.onDelAct ? btn('🗑', function () { cb.onDelAct(a); }) : null);
+          })
+        : [h('div', { style: { color: '#64748b', fontSize: '12px', fontStyle: 'italic' } }, 'No activities yet.')];
+      return h('div', { style: { background: '#fff', border: '1px solid #ccfbf1',
+        borderRadius: '10px', padding: '14px', marginBottom: '10px' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between',
+          alignItems: 'flex-start', marginBottom: '6px', gap: '8px', flexWrap: 'wrap' } },
+          h('div', {},
+            h('h4', { style: { margin: 0, fontSize: '14px' } },
+              'Day ' + d.day_no + ' · ' + (d.city || '—') +
+              (d.day_date ? '  ' : '')),
+            d.day_date ? h('span', { style: { fontSize: '11.5px', color: '#94a3b8' } }, String(d.day_date).slice(0, 10)) : null,
+            h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px' } }, meta)),
+          h('div', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+            cb.onMoveUp ? btn('↑', cb.onMoveUp) : null,
+            cb.onMoveDown ? btn('↓', cb.onMoveDown) : null,
+            btn('✏️ Edit day', cb.onEditDay),
+            btn('＋ Activity', cb.onAddAct),
+            btn('🗑', cb.onDelDay))),
+        chips.length ? h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap',
+          margin: '4px 0 8px' } }, ...chips.map(function (c) { return pill(c, 'gray'); })) : null,
+        d.inclusions ? h('div', { style: { fontSize: '11.5px', color: '#475569', marginBottom: '6px' } }, '✔ ' + d.inclusions) : null,
+        h('div', {}, ...actRows));
+    }
+    function mealLabel(m) {
+      const map = { bb: 'Breakfast', hb: 'Breakfast + Dinner', fb: 'All meals' };
+      return m ? (map[m] || m) : null;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -634,200 +1041,177 @@
         const itn = data.itinerary || {};
         const days = data.days || [];
         const acts = data.activities || [];
+        const cfields = data.cfields || [];
 
+        // ---- Itinerary edit helpers (close over itn / load) ----
+        function itinDayModal(d, dayNo) {
+          d = d || {};
+          const els = dayFormEls(d);
+          // custom fields
+          const cvals = (function () { try { return d.custom_json ? JSON.parse(d.custom_json) : {}; } catch (_) { return {}; } })();
+          const cInputs = {};
+          const cfBody = [];
+          if (cfields.length) {
+            cfields.forEach(function (cf) {
+              const el = inp(cvals[cf.field_key] || '', cf.label);
+              cInputs[cf.field_key] = el;
+              cfBody.push(field(cf.label, el));
+            });
+          }
+          const body = h('div', {},
+            dayFormBody(els, true),
+            cfields.length ? h('div', { style: { marginTop: '14px', paddingTop: '12px',
+              borderTop: '1px dashed #ccfbf1' } },
+              h('div', { style: { fontSize: '10.5px', textTransform: 'uppercase',
+                letterSpacing: '.4px', color: '#64748b', fontWeight: 700, marginBottom: '8px' } },
+                '🧩 Custom fields'),
+              grid(cfBody, 2)) : null);
+          modal(d.id ? 'Edit Day ' + dayNo : 'Add Day ' + dayNo, body, [
+            ['💾 Save day', async function (close) {
+              const custom = {};
+              Object.keys(cInputs).forEach(function (k) { custom[k] = cInputs[k].value; });
+              try {
+                await api('api_tour_itinerary_upsertDay', Object.assign(
+                  { id: d.id || 0, itinerary_id: itn.id, day_no: dayNo, custom_json: custom },
+                  dayFormValues(els)));
+                toast('Saved'); close(); load();
+              } catch (e) { toast(e.message); }
+            }, 'primary']
+          ]);
+        }
+        function itinActModal(a, dayId) {
+          a = a || {};
+          const els = actFormEls(a);
+          modal(a.id ? 'Edit Activity' : 'Add Activity', actFormBody(els), [
+            ['💾 Save', async function (close) {
+              try {
+                if (a.id) {
+                  await api('api_tour_itinerary_updateActivity', Object.assign({ id: a.id, seq: a.seq || 1 }, actFormValues(els)));
+                } else {
+                  await api('api_tour_itinerary_addActivity', Object.assign(
+                    { day_id: dayId, seq: (acts.filter(function (x) { return x.day_id === dayId; }).length + 1) }, actFormValues(els)));
+                }
+                toast('Saved'); close(); load();
+              } catch (e) { toast(e.message); }
+            }, 'primary']
+          ]);
+        }
+        async function reorder(idx, dir) {
+          const arr = days.map(function (d) { return d.id; });
+          const j = idx + dir;
+          if (j < 0 || j >= arr.length) return;
+          const tmp = arr[idx]; arr[idx] = arr[j]; arr[j] = tmp;
+          try { await api('api_tour_itinerary_reorderDays', { order: arr }); load(); }
+          catch (e) { toast(e.message); }
+        }
+
+        // ---- Header ----
         wrap.appendChild(h('div', { style: { background: '#fff',
           border: '1px solid #ccfbf1', borderRadius: '10px', padding: '14px', marginBottom: '12px' } },
           h('div', { style: { display: 'flex', justifyContent: 'space-between',
-            alignItems: 'center', marginBottom: '8px' } },
+            alignItems: 'center', marginBottom: '8px', gap: '8px', flexWrap: 'wrap' } },
             h('h3', { style: { margin: 0, fontSize: '14px' } }, '📋 ' + (itn.title || 'Itinerary')),
-            h('span', {}, statusBadge(itn.status))),
+            h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+              statusBadge(itn.status),
+              btn('🧩 Custom fields', function () { cfieldsModal(); }))),
           h('div', { style: { fontSize: '12.5px', color: '#64748b' } },
             days.length + ' day' + (days.length === 1 ? '' : 's') + ' planned · ' +
-            acts.length + ' activit' + (acts.length === 1 ? 'y' : 'ies'))
+            acts.length + ' activit' + (acts.length === 1 ? 'y' : 'ies') +
+            (itn.package_id ? ' · seeded from a package' : ''))
         ));
+
+        // ---- Apply-package bar ----
+        let packages = [];
+        try { packages = (await api('api_tour_packages_list')).packages || []; } catch (_) {}
+        const pkgSel = sel([['', '— pick a package —']].concat(packages.map(function (p) {
+          return [p.id, (p.flag || '') + ' ' + p.name + ' · ' + (p.duration_nights || '?') + 'N']; })), '');
+        pkgSel.style.minWidth = '260px'; pkgSel.style.width = 'auto';
+        wrap.appendChild(h('div', { style: { background: 'linear-gradient(180deg,#f0fdfa,#fff)',
+          border: '2px dashed #14b8a6', borderRadius: '10px', padding: '12px 14px', marginBottom: '12px' } },
+          h('div', { style: { fontWeight: 700, fontSize: '13px', marginBottom: '2px' } }, '📦 Start from a package'),
+          h('div', { style: { fontSize: '11.5px', color: '#64748b', marginBottom: '10px' } },
+            'Loads all template days & activities. Everything stays editable for this client.'),
+          h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+            pkgSel,
+            btn('✨ Apply package', async function () {
+              const pid = Number(pkgSel.value || 0);
+              if (!pid) { toast('Pick a package first'); return; }
+              try {
+                let res = await api('api_tour_itinerary_seedFromPackage', { booking_id: bookingId, package_id: pid });
+                if (res && res.needs_replace) {
+                  if (!confirm('This trip already has ' + res.existing_days + ' day(s). Replace them with the package template?')) return;
+                  res = await api('api_tour_itinerary_seedFromPackage', { booking_id: bookingId, package_id: pid, replace: true });
+                }
+                if (res && res.ok) { toast('Applied · ' + res.days + ' days'); load(); }
+                else toast((res && res.error) || 'Could not apply package');
+              } catch (e) { toast(e.message); }
+            }, 'primary'))));
 
         if (!days.length) {
           wrap.appendChild(h('div', { style: { background: '#f0fdfa',
             border: '1px dashed #ccfbf1', borderRadius: '10px',
             padding: '24px', textAlign: 'center', color: '#64748b' } },
-            'No days planned yet. Click "+ Add Day" below to start building.'));
+            'No days yet. Apply a package above, or click "＋ Add Day" to build manually.'));
         }
 
-        days.forEach(function (d) {
+        days.forEach(function (d, idx) {
           const dayActs = acts.filter(function (a) { return a.day_id === d.id; });
-          const dayCard = h('div', { style: { background: '#fff',
-            border: '1px solid #ccfbf1', borderRadius: '12px',
-            padding: '0', marginBottom: '12px', overflow: 'hidden',
-            boxShadow: '0 1px 3px rgba(0,0,0,.05)' } });
-          /* Header row — pretty pill for day# + city + meta + edit/delete */
-          const dayHeader = h('div', { style: { display: 'flex',
-            justifyContent: 'space-between', alignItems: 'center',
-            padding: '12px 16px', background: 'linear-gradient(135deg,#f0fdfa,#ecfdf5)',
-            borderBottom: '1px solid #ccfbf1' } },
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-              h('span', { style: { background: TEAL, color: '#fff',
-                borderRadius: '6px', padding: '3px 10px', fontSize: '11px',
-                fontWeight: 800, letterSpacing: '.5px' } }, 'DAY ' + d.day_no),
-              h('div', {},
-                h('div', { style: { fontSize: '15px', fontWeight: 700, color: '#0f172a' } },
-                  d.city || 'No city set'),
-                h('div', { style: { fontSize: '11.5px', color: '#64748b', marginTop: '2px' } },
-                  (d.day_date ? new Date(d.day_date).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) + ' · ' : '')
-                  + (d.hotel_name || 'Hotel not set')
-                  + (d.room_type ? ' · ' + d.room_type : '')
-                  + ' · ' + (d.meal_plan ? d.meal_plan.toUpperCase() : 'No meal'))
-              )
-            ),
-            h('div', { style: { display: 'flex', gap: '6px' } },
-              h('button', { style: { padding: '4px 10px', background: '#fff',
-                border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer',
-                fontSize: '11px', fontWeight: 600, color: '#374151' },
-                onclick: function () { _editDay(d); } }, '✏ Edit'),
-              h('button', { style: { padding: '4px 10px', background: '#fff',
-                border: '1px solid #fca5a5', borderRadius: '6px', cursor: 'pointer',
-                fontSize: '11px', fontWeight: 600, color: '#dc2626' },
-                onclick: function () { _delDay(d); } }, '🗑 Delete')
-            )
-          );
-          dayCard.appendChild(dayHeader);
-          /* Activities table */
-          const body = h('div', { style: { padding: '12px 16px' } });
-          if (dayActs.length) {
-            dayActs.forEach(function (a) {
-              body.appendChild(h('div', { style: { display: 'flex', gap: '12px',
-                alignItems: 'flex-start', padding: '8px 0',
-                borderBottom: '1px solid #f1f5f9', fontSize: '13px' } },
-                h('div', { style: { color: TEAL2, fontWeight: 700, minWidth: '80px',
-                  fontSize: '12.5px' } }, a.time_str || '—'),
-                h('div', { style: { fontSize: '18px', minWidth: '24px' } }, kindEmoji(a.kind)),
-                h('div', { style: { flex: 1 } },
-                  h('div', { style: { fontWeight: 600, color: '#0f172a' } }, a.title),
-                  a.detail ? h('div', { style: { color: '#64748b', fontSize: '12px', marginTop: '2px' } }, a.detail) : null
-                ),
-                h('button', { style: { padding: '2px 8px', background: 'transparent',
-                  border: '1px solid #fca5a5', borderRadius: '4px', cursor: 'pointer',
-                  fontSize: '11px', color: '#dc2626' },
-                  onclick: function () { _delAct(a); } }, '×')
-              ));
-            });
-          } else {
-            body.appendChild(h('div', { style: { color: '#94a3b8', fontSize: '12.5px',
-              fontStyle: 'italic', padding: '6px 0' } }, 'No activities yet — click "+ Add Activity"'));
-          }
-          body.appendChild(h('div', { style: { marginTop: '10px' } },
-            h('button', { style: { padding: '6px 12px', background: '#fff',
-              border: '1px dashed ' + TEAL, color: TEAL2, borderRadius: '6px',
-              cursor: 'pointer', fontSize: '12px', fontWeight: 700 },
-              onclick: function () { _addAct(d); } }, '+ Add Activity')
-          ));
-          dayCard.appendChild(body);
-          wrap.appendChild(dayCard);
+          wrap.appendChild(dayCardView(d, dayActs, {
+            onMoveUp:   idx > 0 ? function () { reorder(idx, -1); } : null,
+            onMoveDown: idx < days.length - 1 ? function () { reorder(idx, 1); } : null,
+            onEditDay:  function () { itinDayModal(d, d.day_no); },
+            onDelDay:   async function () {
+              if (!confirm('Delete Day ' + d.day_no + '?')) return;
+              try { await api('api_tour_itinerary_deleteDay', { id: d.id }); toast('Deleted'); load(); } catch (e) { toast(e.message); }
+            },
+            onAddAct:   function () { itinActModal(null, d.id); },
+            onEditAct:  function (a) { itinActModal(a, d.id); },
+            onDelAct:   async function (a) {
+              try { await api('api_tour_itinerary_deleteActivity', { id: a.id }); toast('Removed'); load(); } catch (e) { toast(e.message); }
+            }
+          }));
         });
 
-        // Big Add Day button
-        const addDayBtn = h('div', { style: { marginTop: '14px' } },
-          btn('+ Add Day', function () { _addDay(); }, 'primary'));
-        wrap.appendChild(addDayBtn);
+        // Add day button
+        wrap.appendChild(h('div', { style: { marginTop: '14px' } },
+          btn('＋ Add Day', function () { itinDayModal(null, days.length + 1); }, 'primary')));
 
-        /* ── HOLIDAY_ITIN_UX_v1 — modal handlers ── */
-        function _addDay() {
-          var dayNo = days.length + 1;
-          var lastCity = days.length ? days[days.length - 1].city || '' : '';
-          _showItinModal({
-            title: '➕ Add Day ' + dayNo,
-            submitLabel: 'Add Day',
-            fields: [
-              { name:'day_date',   label:'Date',        type:'date',  value:'' },
-              { name:'city',       label:'City',        type:'text',  value:lastCity, placeholder:'e.g. Zurich', required:true },
-              { name:'hotel_name', label:'Hotel',       type:'text',  value:'',       placeholder:'e.g. Marriott Downtown' },
-              { name:'room_type',  label:'Room Type',   type:'text',  value:'',       placeholder:'e.g. Deluxe Double' },
-              { name:'meal_plan',  label:'Meal Plan',   type:'select', value:'bb',
-                options:[
-                  {value:'',    label:'— none —'},
-                  {value:'bb',  label:'BB (Breakfast only)'},
-                  {value:'hb',  label:'HB (Half Board)'},
-                  {value:'fb',  label:'FB (Full Board)'},
-                  {value:'ai',  label:'AI (All-Inclusive)'}
-                ] },
-              { name:'notes',      label:'Notes',       type:'textarea', value:'', placeholder:'Anything special about this day…' }
-            ]
-          }).then(function (v) {
-            if (!v) return;
-            api('api_tour_itinerary_upsertDay', Object.assign({
-              itinerary_id: itn.id, day_no: dayNo
-            }, v)).then(function () {
-              toast('✓ Day added'); load();
-            }).catch(function (e) { toast(e.message); });
-          });
-        }
-        function _editDay(d) {
-          _showItinModal({
-            title: '✏ Edit Day ' + d.day_no,
-            submitLabel: 'Save Changes',
-            fields: [
-              { name:'day_date',   label:'Date',        type:'date',  value:(d.day_date || '').slice(0,10) },
-              { name:'city',       label:'City',        type:'text',  value:d.city || '', required:true },
-              { name:'hotel_name', label:'Hotel',       type:'text',  value:d.hotel_name || '' },
-              { name:'room_type',  label:'Room Type',   type:'text',  value:d.room_type || '' },
-              { name:'meal_plan',  label:'Meal Plan',   type:'select', value:d.meal_plan || '',
-                options:[
-                  {value:'',    label:'— none —'},
-                  {value:'bb',  label:'BB (Breakfast only)'},
-                  {value:'hb',  label:'HB (Half Board)'},
-                  {value:'fb',  label:'FB (Full Board)'},
-                  {value:'ai',  label:'AI (All-Inclusive)'}
-                ] },
-              { name:'notes',      label:'Notes',       type:'textarea', value:d.notes || '' }
-            ]
-          }).then(function (v) {
-            if (!v) return;
-            api('api_tour_itinerary_upsertDay', Object.assign({
-              id: d.id, itinerary_id: itn.id, day_no: d.day_no
-            }, v)).then(function () {
-              toast('✓ Day updated'); load();
-            }).catch(function (e) { toast(e.message); });
-          });
-        }
-        function _delDay(d) {
-          if (!confirm('Delete Day ' + d.day_no + ' (' + (d.city || 'no city') + ')? All activities on this day will also be deleted.')) return;
-          api('api_tour_itinerary_deleteDay', { id: d.id })
-            .then(function () { toast('✓ Day deleted'); load(); })
-            .catch(function (e) { toast(e.message); });
-        }
-        function _addAct(d) {
-          _showItinModal({
-            title: '➕ Add Activity to Day ' + d.day_no,
-            submitLabel: 'Add Activity',
-            fields: [
-              { name:'time_str', label:'Time',   type:'text', value:'', placeholder:'e.g. 09:00 AM' },
-              { name:'kind',     label:'Type',   type:'select', value:'sightseeing',
-                options:[
-                  {value:'sightseeing', label:'🏛️ Sightseeing'},
-                  {value:'meal',        label:'🍽️ Meal'},
-                  {value:'transfer',    label:'🚗 Transfer'},
-                  {value:'arrival',     label:'✈️ Arrival'},
-                  {value:'departure',   label:'🛫 Departure'},
-                  {value:'leisure',     label:'🌴 Leisure'},
-                  {value:'adventure',   label:'🪂 Adventure'},
-                  {value:'shopping',    label:'🛍️ Shopping'}
-                ] },
-              { name:'title',    label:'Title',  type:'text', value:'', placeholder:'e.g. Visit Eiffel Tower', required:true },
-              { name:'detail',   label:'Detail', type:'textarea', value:'', placeholder:'More info, meeting point, ticket price…' }
-            ]
-          }).then(function (v) {
-            if (!v) return;
-            api('api_tour_itinerary_addActivity', Object.assign({
-              day_id: d.id, seq: (dayActs.length || 0) + 1
-            }, v)).then(function () {
-              toast('✓ Activity added'); load();
-            }).catch(function (e) { toast(e.message); });
-          });
-        }
-        function _delAct(a) {
-          if (!confirm('Delete this activity?')) return;
-          api('api_tour_itinerary_deleteActivity', { id: a.id })
-            .then(function () { toast('✓ Deleted'); load(); })
-            .catch(function (e) { toast(e.message); });
+        // ---- Custom-field manager ----
+        function cfieldsModal() {
+          const listWrap = h('div');
+          function drawList() {
+            listWrap.innerHTML = '';
+            if (!cfields.length) {
+              listWrap.appendChild(h('div', { style: { color: '#64748b', fontSize: '12.5px', padding: '6px 0' } },
+                'No custom fields yet. Add fields like Flight no., Visa status, Guide language…'));
+            }
+            cfields.forEach(function (cf) {
+              listWrap.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #ecfdf5', fontSize: '13px' } },
+                h('span', {}, cf.label + ' ', h('span', { style: { color: '#94a3b8', fontSize: '11px' } }, '(' + cf.field_key + ')')),
+                btn('🗑', async function () {
+                  try { await api('api_tour_itinCfield_delete', { id: cf.id }); toast('Deleted'); reloadCfields(); } catch (e) { toast(e.message); }
+                })));
+            });
+          }
+          async function reloadCfields() {
+            try { const r = await api('api_tour_itinCfields_list'); cfields.length = 0; (r.fields || []).forEach(function (x) { cfields.push(x); }); drawList(); }
+            catch (e) { toast(e.message); }
+          }
+          const newInput = inp('', 'New field label, e.g. Flight no.');
+          const body = h('div', {},
+            h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '10px' } },
+              'Custom fields appear on every day\'s editor for this pack.'),
+            listWrap,
+            h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+              newInput,
+              btn('＋ Add', async function () {
+                if (!newInput.value.trim()) return;
+                try { await api('api_tour_itinCfield_save', { label: newInput.value.trim() }); newInput.value = ''; reloadCfields(); }
+                catch (e) { toast(e.message); }
+              }, 'primary')));
+          drawList();
+          modal('🧩 Itinerary custom fields', body, []);
         }
       }
       function statusBadge(s) {
