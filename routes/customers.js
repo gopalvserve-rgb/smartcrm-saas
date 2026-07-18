@@ -528,7 +528,9 @@ async function api_customers_ruleSave(token, payload) {
     await db.update('buyer_rules', Number(p.id), row);
     return { ok: true, id: Number(p.id) };
   }
-  if (!row.product_id) throw new Error('Pick a product (only the built-in fallback may apply to every product)');
+  /* product_id null is now allowed for an admin rule = "All products". It sorts AFTER
+   * product-specific rules but BEFORE the fallback (priority 9999) in _pickAssignee, so
+   * an admin can route every product through a team without touching the fixed fallback. */
   const id = await db.insert('buyer_rules',
     Object.assign({ is_fallback: 0, rr_position: 0, created_by: me.id, created_at: db.nowIso() }, row));
   return { ok: true, id };
@@ -636,8 +638,10 @@ async function api_customers_report(token, payload) {
   const add = (frag, val) => { args.push(val); where.push(frag.replace('$$', '$' + args.length)); };
   if (p.from)       add('c.created_at >= $$', p.from);
   if (p.to)         add('c.created_at <= $$', String(p.to).length <= 10 ? p.to + ' 23:59:59' : p.to);
-  if (p.product_id) add('c.product_id = $$', Number(p.product_id));
-  if (p.stage_id)   add('c.stage_id = $$', Number(p.stage_id));
+  if (p.product_id)    add('c.product_id = $$', Number(p.product_id));
+  if (p.stage_id)      add('c.stage_id = $$', Number(p.stage_id));
+  if (p.owner_user_id) add('c.owner_user_id = $$', Number(p.owner_user_id));   // user-wise report filter
+  if (p.sales_user_id) add('c.sales_user_id = $$', Number(p.sales_user_id));
   const W = where.join(' AND ');
 
   const totals = await db.query(
