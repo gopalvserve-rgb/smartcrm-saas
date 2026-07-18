@@ -59,30 +59,13 @@ function _assertEnabled() {
 const _digits = (v) => String(v == null ? '' : v).replace(/\D/g, '');
 const _num = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
 
-/* Default journey — seeded once, on first use, ONLY on an allowed tenant.
- * Deliberately generic; Gopal will rename these to his real stages. */
-const DEFAULT_STAGES = [
-  { name: 'Docs Pending',   color: '#f59e0b', sort_order: 10, expected_days: 2 },
-  { name: 'Payment Clear',  color: '#06b6d4', sort_order: 20, expected_days: 2 },
-  { name: 'In Progress',    color: '#6366f1', sort_order: 30, expected_days: 7 },
-  { name: 'Dispatch',       color: '#8b5cf6', sort_order: 40, expected_days: 3 },
-  { name: 'Handover',       color: '#10b981', sort_order: 50, expected_days: 1, is_final: 1 }
-];
-
 async function ensureSeed() {
   if (!isEnabled()) return;
   try {
-    const r = await db.query('SELECT COUNT(*)::int AS n FROM buyer_stages');
-    if (!Number(r.rows[0].n)) {
-      for (const s of DEFAULT_STAGES) {
-        await db.query(
-          `INSERT INTO buyer_stages (name, color, sort_order, expected_days, is_final, is_active)
-           VALUES ($1,$2,$3,$4,$5,1)`,
-          [s.name, s.color, s.sort_order, s.expected_days || null, s.is_final || 0]
-        );
-      }
-      console.log('[customers] seeded ' + DEFAULT_STAGES.length + ' default stages on ' + _slug());
-    }
+    /* STAGES_FROM_CLOSURE_v1 (2026-07-18) — Gopal: "Here Stages Should come from Sales
+     * Closure stage, No need Of separate Delivery Stage." So the delivery journey IS the
+     * project_stages set (Sales Closure). We no longer seed or read buyer_stages — that
+     * table is left in place but unused. Nothing to seed here for stages. */
     /* The fallback rule can never be deleted (see api_customers_ruleDelete). A
      * converted sale that matches no rule would otherwise land with owner=NULL —
      * an order nobody is delivering, sitting silently until the customer calls
@@ -108,6 +91,18 @@ async function ensureSeed() {
  * rr_position ATOMICALLY in the UPDATE ... RETURNING so two reps converting at
  * the same moment can't both get handed the same person.
  * ------------------------------------------------------------------------- */
+/* STAGES_FROM_CLOSURE_v1 — the delivery stages ARE the Sales Closure stages
+ * (project_stages). project_stages has no color / is_final, so we synthesize:
+ * colour by position, and "final" = the last stage by sort_order. */
+async function _closureStages() {
+  const rows = (await db.getAll('project_stages'))
+    .filter(r => Number(r.is_active) === 1)
+    .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
+  return rows;
+}
+async function _firstStageId() { const r = await _closureStages(); return r[0] ? Number(r[0].id) : null; }
+async function _finalStageId() { const r = await _closureStages(); return r.length ? Number(r[r.length - 1].id) : null; }
+
 async function _pickAssignee(productId) {
   const { rows } = await db.query(
     `SELECT * FROM buyer_rules
@@ -227,9 +222,7 @@ async function api_customers_convert(token, payload) {
 
   const pick = await _pickAssignee(productId);
 
-  const firstStage = await db.query(
-    `SELECT id FROM buyer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC LIMIT 1`);
-  const stageId = firstStage.rows[0] ? Number(firstStage.rows[0].id) : null;
+  const stageId = await _firstStageId();
 
   /* product_name is SNAPSHOT, not a live join: renaming a product later must not
    * silently rewrite what past customers were sold. (The Inventory module already
@@ -342,10 +335,10 @@ async function api_customers_list(token, payload) {
   const cnt = await db.query(`SELECT COUNT(*)::int AS n FROM buyers c WHERE ${W}`, args);
   const rows = await db.query(
     `SELECT c.*,
-            s.name AS stage_name, s.color AS stage_color, s.expected_days, s.is_final AS stage_final,
+            s.name AS stage_name, s.expected_days,
             uo.name AS owner_name, us.name AS sales_name
        FROM buyers c
-       LEFT JOIN buyer_stages s ON s.id = c.stage_id
+       LEFT JOIN project_stages s ON s.id = c.stage_id
        LEFT JOIN users uo ON uo.id = c.owner_user_id
        LEFT JOIN users us ON us.id = c.sales_user_id
       WHERE ${W}
@@ -368,10 +361,10 @@ async function api_customers_get(token, id) {
   _assertEnabled();
   const v = await _visibleWhere(me);
   const r = await db.query(
-    `SELECT c.*, s.name AS stage_name, s.color AS stage_color,
+    `SELECT c.*, s.name AS stage_name,
             uo.name AS owner_name, us.name AS sales_name
        FROM buyers c
-       LEFT JOIN buyer_stages s ON s.id = c.stage_id
+       LEFT JOIN project_stages s ON s.id = c.stage_id
        LEFT JOIN users uo ON uo.id = c.owner_user_id
        LEFT JOIN users us ON us.id = c.sales_user_id
       WHERE c.id = $${v.args.length + 1} AND ${v.sql}`, [...v.args, Number(id)]);
@@ -380,8 +373,8 @@ async function api_customers_get(token, id) {
     `SELECT h.*, u.name AS changed_by_name, f.name AS from_name, t.name AS to_name
        FROM buyer_stage_history h
        LEFT JOIN users u ON u.id = h.changed_by
-       LEFT JOIN buyer_stages f ON f.id = h.from_stage_id
-       LEFT JOIN buyer_stages t ON t.id = h.to_stage_id
+       LEFT JOIN project_stages f ON f.id = h.from_stage_id
+       LEFT JOIN project_stages t ON t.id = h.to_stage_id
       WHERE h.customer_id = $1 ORDER BY h.changed_at DESC`, [Number(id)]);
   const watch = await db.query(
     `SELECT w.*, u.name FROM buyer_watchers w LEFT JOIN users u ON u.id = w.user_id
@@ -405,10 +398,10 @@ async function api_customers_setStage(token, payload) {
     throw new Error('Only the assigned owner can move the stage');
   }
   const prev = c.stage_started_at ? Math.floor((Date.now() - new Date(c.stage_started_at).getTime()) / 1000) : null;
-  const st = await db.findById('buyer_stages', stageId);
+  const finalId = await _finalStageId();
   await db.update('buyers', id, {
     stage_id: stageId, stage_started_at: db.nowIso(), updated_at: db.nowIso(),
-    closed_at: (st && Number(st.is_final) === 1) ? db.nowIso() : null
+    closed_at: (finalId && Number(stageId) === Number(finalId)) ? db.nowIso() : null
   });
   await db.query(
     `INSERT INTO buyer_stage_history (customer_id, from_stage_id, to_stage_id, duration_prev_s, changed_by, note)
@@ -470,25 +463,24 @@ async function api_customers_removeWatcher(token, payload) {
 async function api_customers_stages(token) {
   await authUser(token);
   if (!isEnabled()) return [];
-  await ensureSeed();
-  const r = await db.query('SELECT * FROM buyer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
-  return r.rows;
+  // Delivery stages ARE the Sales Closure stages (project_stages). Synthesize a
+  // colour by position and mark the last one final, so the SPA dropdown + pills work.
+  const rows = await _closureStages();
+  const PALETTE = ['#f59e0b', '#06b6d4', '#6366f1', '#8b5cf6', '#10b981', '#ec4899', '#14b8a6'];
+  const lastId = rows.length ? Number(rows[rows.length - 1].id) : null;
+  return rows.map((r, i) => ({
+    id: Number(r.id), name: r.name,
+    color: PALETTE[i % PALETTE.length],
+    sort_order: Number(r.sort_order) || 10,
+    expected_days: Number(r.expected_days) || null,
+    is_final: Number(r.id) === lastId ? 1 : 0
+  }));
 }
-async function api_customers_stageSave(token, payload) {
-  const me = await authUser(token);
-  _assertEnabled();
-  if (me.role !== 'admin') throw new Error('Admins only');
-  const p = payload || {};
-  if (!p.name) throw new Error('name required');
-  const row = {
-    name: p.name, color: p.color || '#6366f1',
-    sort_order: Number(p.sort_order) || 100,
-    expected_days: p.expected_days ? Number(p.expected_days) : null,
-    is_final: p.is_final ? 1 : 0, is_active: 1
-  };
-  if (p.id) { await db.update('buyer_stages', Number(p.id), row); return { ok: true, id: Number(p.id) }; }
-  const id = await db.insert('buyer_stages', Object.assign({ created_at: db.nowIso() }, row));
-  return { ok: true, id };
+async function api_customers_stageSave(token) {
+  await authUser(token);
+  // STAGES_FROM_CLOSURE_v1 — delivery stages are the Sales Closure stages now.
+  // Edit them under Sales Closure / project-stage settings, not here.
+  throw new Error('Delivery stages come from Sales Closure — edit them there.');
 }
 
 async function api_customers_rules(token) {
@@ -657,13 +649,13 @@ async function api_customers_report(token, payload) {
        FROM buyers c WHERE ${W}`, args);
 
   const byStage = await db.query(
-    `SELECT s.id AS stage_id, s.name AS stage, s.color, s.sort_order,
+    `SELECT s.id AS stage_id, s.name AS stage, s.sort_order,
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume
-       FROM buyer_stages s
+       FROM project_stages s
        LEFT JOIN buyers c ON c.stage_id = s.id AND ${W}
       WHERE s.is_active = 1
-      GROUP BY s.id, s.name, s.color, s.sort_order
+      GROUP BY s.id, s.name, s.sort_order
       ORDER BY s.sort_order ASC`, args);
 
   // "saler wise" — the SALES rep who won it (sales_user_id), not the back-office owner.
@@ -705,7 +697,7 @@ async function api_customers_report(token, payload) {
             COUNT(c.id)::int AS count,
             COALESCE(SUM(c.sale_amount),0)::float AS volume
        FROM buyers c
-       LEFT JOIN buyer_stages s ON s.id = c.stage_id
+       LEFT JOIN project_stages s ON s.id = c.stage_id
       WHERE ${W}
       GROUP BY c.product_name, s.name, s.sort_order
       ORDER BY c.product_name ASC, s.sort_order ASC`, args);
