@@ -84,8 +84,15 @@
     return h('span', { style: { display: 'inline-block', padding: '.12rem .5rem', borderRadius: '99px',
       fontSize: '.7rem', fontWeight: 700, background: bg, color: fg, whiteSpace: 'nowrap' } }, txt);
   }
+  function stageColorById(id) {
+    const st = (S.stages || []).find(function (x) { return Number(x.id) === Number(id); });
+    return (st && st.color) || '#94a3b8';
+  }
   function stagePill(row) {
-    return pill(row.stage_name || '—', (row.stage_color || '#e5e7eb') + '22', row.stage_color || '#475569');
+    // STAGES_FROM_CLOSURE_v1 — the list/detail joins no longer carry a colour (stages come
+    // from Sales Closure, which has no colour column), so resolve it from the stages cache.
+    const col = row.stage_color || (row.stage_id != null ? stageColorById(row.stage_id) : '#94a3b8');
+    return pill(row.stage_name || '—', col + '22', col);
   }
   function card(children, extra) {
     return h('div', { style: Object.assign({ background: '#fff', border: '1px solid ' + C.border,
@@ -286,6 +293,7 @@
 
   async function render(view) {
     await loadMe();
+    if (!S.stages || !S.stages.length) { try { S.stages = (await api('api_customers_stages')) || []; } catch (_) {} }
     view.innerHTML = '';
     view.appendChild(h('h2', { style: { margin: '0 0 .2rem', fontSize: '1.4rem' } }, '👥 Customers'));
     view.appendChild(h('div', { style: { color: C.soft, margin: '0 0 1rem', fontSize: '.85rem' } },
@@ -441,7 +449,7 @@
       kpi('Completed', t.completed || 0, C.ok)));
 
     panel.appendChild(reportTable('By stage', ['Stage', 'Count', 'Volume'], (r.by_stage || []).map(function (x) {
-      return [stagePill({ stage_name: x.stage, stage_color: x.color }), x.count, money(x.volume)]; })));
+      return [stagePill({ stage_name: x.stage, stage_id: x.stage_id }), x.count, money(x.volume)]; })));
     panel.appendChild(reportTable('Salesperson-wise (who won it)', ['Salesperson', 'Count', 'Volume', 'Collected'],
       (r.by_sales || []).map(function (x) { return [x.name, x.count, money(x.volume), money(x.collected)]; })));
     panel.appendChild(reportTable('By product', ['Product', 'Count', 'Volume'],
