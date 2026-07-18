@@ -2948,6 +2948,28 @@ async function openChangelogModal() {
       } catch (_) {}
     }
 
+    /* DASH_DEFAULT_TODAY_v1 (2026-07-17) — Gopal: "When open CRM Dashboard is the 1st
+     * screen, by default the date range should be Today for all tenants."
+     *
+     * Until now the dashboard bar opened with an EMPTY range = All time, unless the user
+     * had saved a default. This makes Today the out-of-the-box default, but ONLY:
+     *   - on the dashboard bar (key==='dashboard') — every other date bar is unchanged;
+     *   - on first load (noSavedDefault is false only on the very first render — the
+     *     dashboard passes noSavedDefault:true on every re-render, so a user's just-picked
+     *     range is never overwritten mid-session, e.g. clicking All time sticks);
+     *   - when nothing else already set a range — a user's SAVED default still wins
+     *     (appliedDefault is already true by here), and so does showcase's All-time rule
+     *     (that block emptied the inputs above, and showcase is explicitly excluded).
+     * On a fresh CRM open (login / reload) CRM._dashDateInit resets, so you land on Today. */
+    try {
+      if (opts.key === 'dashboard' && !opts.noSavedDefault && !appliedDefault
+          && !fromInp.value && !toInp.value
+          && (window.TENANT_SLUG || '').toLowerCase() !== 'showcase') {
+        const _todayPreset = PRESETS.find(function (p) { return p.id === 'today'; });
+        if (_todayPreset) { _setRange(fromInp, toInp, _todayPreset.range()); appliedDefault = true; }
+      }
+    } catch (_) {}
+
     repaint();
     return { bar, repaint, appliedDefault };
   };
