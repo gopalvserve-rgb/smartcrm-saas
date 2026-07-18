@@ -289,161 +289,11 @@
   /* =========================================================================
    * CUSTOMERS PAGE — tabs: List · Reports · Settings(admin)
    * ======================================================================= */
-  const S = { tab: 'list', scope: 'all', stages: [], users: null, products: null, cfDefs: null,
-    filter: { preset: 'all', from: '', to: '', stage_id: '', owner_user_id: '', sales_user_id: '', product_id: '' } };
-
-  async function loadLookups() {
-    if (!S.stages || !S.stages.length) { try { S.stages = (await api('api_customers_stages')) || []; } catch (_) {} }
-    if (!S.users)   { try { S.users = (await api('api_users_list')) || []; } catch (_) { S.users = []; } }
-    if (!S.products){ try { S.products = (await api('api_products_list')) || []; } catch (_) { S.products = []; } }
-    if (!S.cfDefs) { try { S.cfDefs = (await api('api_customers_fields')) || []; } catch (_) { S.cfDefs = []; } }
-  }
-  function _ymd(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
-  function _ago(n) { const d = new Date(); d.setDate(d.getDate() - n); return d; }
-  function applyPreset(id) {
-    const t = new Date();
-    S.filter.preset = id;
-    if (id === 'today') { S.filter.from = _ymd(t); S.filter.to = _ymd(t); }
-    else if (id === 'yest') { S.filter.from = _ymd(_ago(1)); S.filter.to = _ymd(_ago(1)); }
-    else if (id === 'd7') { S.filter.from = _ymd(_ago(6)); S.filter.to = _ymd(t); }
-    else if (id === 'd30') { S.filter.from = _ymd(_ago(29)); S.filter.to = _ymd(t); }
-    else if (id === 'all') { S.filter.from = ''; S.filter.to = ''; }
-    // 'custom' keeps whatever the user typed
-  }
-  function filterPayload() {
-    const f = S.filter, out = {};
-    if (f.from) out.from = f.from;
-    if (f.to) out.to = f.to;
-    if (f.stage_id) out.stage_id = Number(f.stage_id);
-    if (f.owner_user_id) out.owner_user_id = Number(f.owner_user_id);
-    if (f.sales_user_id) out.sales_user_id = Number(f.sales_user_id);
-    if (f.product_id) out.product_id = Number(f.product_id);
-    return out;
-  }
-  function _selStyle() { return { border: '1px solid ' + C.border, borderRadius: '6px', padding: '.34rem .5rem',
-    fontSize: '.8rem', background: '#fff', color: C.text }; }
-  /* Reusable filter bar for List + Report. onApply() re-queries the current view. */
-  function filterBar(onApply) {
-    const bar = card(null, { marginBottom: '.7rem', padding: '.6rem .7rem' });
-    const chips = h('div', { style: { display: 'flex', gap: '.3rem', flexWrap: 'wrap', marginBottom: '.5rem' } });
-    [['today','Today'],['yest','Yesterday'],['d7','Last 7 days'],['d30','Last 30 days'],['all','All time'],['custom','Custom']]
-      .forEach(function (pr) {
-        const on = S.filter.preset === pr[0];
-        chips.appendChild(h('button', { type: 'button', style: { padding: '.28rem .6rem', borderRadius: '99px', fontSize: '.76rem',
-          fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? C.brand : C.border),
-          background: on ? C.brand : '#fff', color: on ? '#fff' : C.text },
-          onclick: function () { applyPreset(pr[0]); onApply(); } }, pr[1]));
-      });
-    bar.appendChild(chips);
-
-    // custom date inputs (only when Custom)
-    if (S.filter.preset === 'custom') {
-      const from = h('input', { type: 'date', value: S.filter.from || '', style: _selStyle() });
-      const to = h('input', { type: 'date', value: S.filter.to || '', style: _selStyle() });
-      from.addEventListener('change', function () { S.filter.from = from.value; onApply(); });
-      to.addEventListener('change', function () { S.filter.to = to.value; onApply(); });
-      bar.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginBottom: '.5rem' } },
-        h('span', { style: { fontSize: '.76rem', color: C.soft } }, 'From'), from,
-        h('span', { style: { fontSize: '.76rem', color: C.soft } }, 'to'), to));
-    }
-
-    // dropdown row: Stage / Owner / Sales rep / Product
-    const mkSel = function (key, placeholder, opts) {
-      const sel = h('select', { style: _selStyle() }, h('option', { value: '' }, placeholder),
-        opts.map(function (o) { const el = h('option', { value: o.v }, o.t);
-          if (String(S.filter[key]) === String(o.v)) el.selected = 'selected'; return el; }));
-      sel.addEventListener('change', function () { S.filter[key] = sel.value; onApply(); });
-      return sel;
-    };
-    const userOpts = (S.users || []).map(function (u) { return { v: u.id, t: u.name }; });
-    const row = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } });
-    row.appendChild(mkSel('stage_id', 'Stage: any', (S.stages || []).map(function (st) { return { v: st.id, t: st.name }; })));
-    row.appendChild(mkSel('owner_user_id', 'Owner: any', userOpts));
-    row.appendChild(mkSel('sales_user_id', 'Sales rep: any', userOpts));
-    row.appendChild(mkSel('product_id', 'Product: any', (S.products || []).map(function (p) { return { v: p.id, t: p.name }; })));
-    // clear
-    const hasAny = S.filter.from || S.filter.to || S.filter.stage_id || S.filter.owner_user_id || S.filter.sales_user_id || S.filter.product_id;
-    if (hasAny) row.appendChild(h('button', { type: 'button', style: { padding: '.3rem .6rem', borderRadius: '6px', fontSize: '.76rem',
-      cursor: 'pointer', border: '1px solid ' + C.border, background: '#fff', color: C.err },
-      onclick: function () { S.filter = { preset: 'all', from: '', to: '', stage_id: '', owner_user_id: '', sales_user_id: '', product_id: '' }; onApply(); } }, '✕ Clear'));
-    bar.appendChild(row);
-    return bar;
-  }
-
-  /* ---- column model for the List ---- */
-  function allColumns() {
-    const base = [
-      { key: 'customer', label: 'Customer', always: true },
-      { key: 'product',  label: 'Product' },
-      { key: 'value',    label: 'Value', align: 'right' },
-      { key: 'paid',     label: 'Paid', align: 'right' },
-      { key: 'stage',    label: 'Stage' },
-      { key: 'owner',    label: 'Owner' },
-      { key: 'sales',    label: 'Sales rep' },
-      { key: 'age',      label: 'Age' },
-      { key: 'phone',    label: 'Phone' },
-      { key: 'created',  label: 'Converted on' }
-    ];
-    const cf = (S.cfDefs || []).map(function (f) { return { key: 'cf:' + f.key, label: f.label, cf: f }; });
-    return base.concat(cf);
-  }
-  const DEFAULT_COLS = ['customer', 'product', 'value', 'stage', 'owner', 'sales', 'age'];
-  function savedColKeys() {
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem('crm_cust_cols_' + slug()) || 'null'); } catch (_) {}
-    return Array.isArray(saved) ? saved : DEFAULT_COLS.slice();
-  }
-  function saveColKeys(keys) { try { localStorage.setItem('crm_cust_cols_' + slug(), JSON.stringify(keys)); } catch (_) {} }
-  function visibleColumns() {
-    const keys = savedColKeys(); const all = allColumns();
-    return all.filter(function (c) { return c.always || keys.indexOf(c.key) >= 0; });
-  }
-  function _extra(r) { let ex = r.extra_json; if (typeof ex === 'string') { try { ex = JSON.parse(ex || '{}'); } catch (_) { ex = {}; } } return ex || {}; }
-  function cellFor(col, r, late) {
-    const rt = Object.assign({ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, td());
-    switch (col.key) {
-      case 'customer': return h('td', { style: td() }, h('div', { style: { fontWeight: 600 } }, r.name || '—'),
-        h('div', { style: { color: C.muted, fontSize: '.72rem' } }, '#' + r.id + (Number(r.is_repeat) ? ' · repeat' : '')));
-      case 'product': return h('td', { style: td() }, r.product_name || '—');
-      case 'value':   return h('td', { style: rt }, money(r.sale_amount));
-      case 'paid':    return h('td', { style: rt }, money(r.paid_amount));
-      case 'stage':   return h('td', { style: td() }, stagePill(r), late ? h('div', {}, pill((r.days_in_stage) + 'd · late', '#fee2e2', '#991b1b')) : null);
-      case 'owner':   return h('td', { style: td() }, r.owner_name || h('span', { style: { color: C.err } }, 'unassigned'));
-      case 'sales':   return h('td', { style: td() }, r.sales_name || '—');
-      case 'age':     return h('td', { style: td() }, r.days_in_stage != null ? r.days_in_stage + 'd' : '—');
-      case 'phone':   return h('td', { style: td() }, r.phone || '—');
-      case 'created': return h('td', { style: td() }, r.created_at ? new Date(r.created_at).toLocaleDateString() : '—');
-      default:
-        if (col.key.slice(0, 3) === 'cf:') { const v = _extra(r)[col.cf.key]; return h('td', { style: td() }, (v != null && String(v).trim()) ? String(v) : '—'); }
-        return h('td', { style: td() }, '');
-    }
-  }
-  function openColumnPicker(onDone) {
-    const all = allColumns(); const cur = savedColKeys();
-    const body = h('div', {});
-    body.appendChild(h('div', { style: { color: C.soft, fontSize: '.82rem', marginBottom: '.6rem' } }, 'Choose which columns show on the Customers list.'));
-    const boxes = {};
-    all.forEach(function (c) {
-      const cb = h('input', { type: 'checkbox' });
-      if (c.always) { cb.checked = true; cb.disabled = 'disabled'; }
-      else cb.checked = cur.indexOf(c.key) >= 0;
-      boxes[c.key] = cb;
-      body.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.45rem', padding: '.25rem 0', fontSize: '.85rem' } },
-        cb, c.label, c.cf ? h('span', { style: { color: C.muted, fontSize: '.7rem' } }, ' (custom)') : null));
-    });
-    const save = btn('Save', 'primary', function () {
-      const keys = all.filter(function (c) { return !c.always && boxes[c.key].checked; }).map(function (c) { return c.key; });
-      saveColKeys(keys); shell._close(); onDone();
-    });
-    body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' } },
-      btn('Cancel', null, function () { shell._close(); }), save));
-    const shell = modalShell('🧩 Choose columns', body);
-    document.body.appendChild(shell);
-  }
+  const S = { tab: 'list', scope: 'all', stages: [] };
 
   async function render(view) {
     await loadMe();
-    await loadLookups();
+    if (!S.stages || !S.stages.length) { try { S.stages = (await api('api_customers_stages')) || []; } catch (_) {} }
     view.innerHTML = '';
     view.appendChild(h('h2', { style: { margin: '0 0 .2rem', fontSize: '1.4rem' } }, '👥 Customers'));
     view.appendChild(h('div', { style: { color: C.soft, margin: '0 0 1rem', fontSize: '.85rem' } },
@@ -479,47 +329,44 @@
 
   async function renderList(panel) {
     panel.innerHTML = '';
-    // scope + Columns button
-    const topBar = h('div', { style: { display: 'flex', gap: '.4rem', marginBottom: '.5rem', alignItems: 'center', flexWrap: 'wrap' } });
-    [['all', 'All I can see'], ['mine', '👤 Assigned to me'], ['shared', '🤝 I won / watching']].forEach(function (sc) {
-      const on = S.scope === sc[0];
-      topBar.appendChild(h('button', { type: 'button', style: { padding: '.3rem .65rem', borderRadius: '6px',
+    const scopeBar = h('div', { style: { display: 'flex', gap: '.4rem', marginBottom: '.7rem' } });
+    [['all', 'All I can see'], ['mine', '👤 Assigned to me'], ['shared', '🤝 I won / watching']].forEach(function (s) {
+      const on = S.scope === s[0];
+      scopeBar.appendChild(h('button', { type: 'button', style: { padding: '.3rem .65rem', borderRadius: '6px',
         fontSize: '.76rem', fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? C.brand : C.border),
         background: on ? C.brand : '#fff', color: on ? '#fff' : C.text },
-        onclick: function () { S.scope = sc[0]; renderList(panel); } }, sc[1]));
+        onclick: function () { S.scope = s[0]; renderList(panel); } }, s[1]));
     });
-    topBar.appendChild(h('span', { style: { flex: 1 } }));
-    topBar.appendChild(btn('🧩 Columns', null, function () { openColumnPicker(function () { renderList(panel); }); }));
-    panel.appendChild(topBar);
-
-    // filter bar
-    panel.appendChild(filterBar(function () { renderList(panel); }));
+    panel.appendChild(scopeBar);
 
     const wrap = card(h('div', { style: { color: C.muted, padding: '1rem' } }, 'Loading…'), { padding: '0' });
     panel.appendChild(wrap);
     let data;
-    try { data = await api('api_customers_list', Object.assign({ scope: S.scope, page_size: 500 }, filterPayload())); }
+    try { data = await api('api_customers_list', { scope: S.scope, page_size: 200 }); }
     catch (e) { wrap.innerHTML = ''; wrap.appendChild(h('div', { style: { padding: '1rem', color: C.err } }, e.message)); return; }
     wrap.innerHTML = '';
     const rows = data.rows || [];
-    // count line
-    panel.insertBefore(h('div', { style: { fontSize: '.76rem', color: C.muted, margin: '0 0 .4rem .2rem' } },
-      (data.total != null ? data.total : rows.length) + ' customer' + ((data.total === 1) ? '' : 's')), wrap);
     if (!rows.length) { wrap.appendChild(h('div', { style: { padding: '1.3rem', color: C.muted, textAlign: 'center' } },
-      'No customers match. Clear filters, or convert a Sale-Done lead.')); return; }
+      'No customers yet. Open a Sale-Done lead and click “Convert to Customer”.')); return; }
 
-    const cols = visibleColumns();
     const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '.82rem' } });
-    tbl.appendChild(h('thead', {}, h('tr', {}, cols.map(function (c) {
-      return h('th', { style: { textAlign: c.align === 'right' ? 'right' : 'left', fontSize: '.66rem', textTransform: 'uppercase',
-        color: C.muted, padding: '.5rem .55rem', borderBottom: '1px solid ' + C.border, letterSpacing: '.03em' } }, c.label);
-    }))));
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      ['Customer', 'Product', 'Value', 'Stage', 'Owner', 'Sales rep', 'Age'].map(function (th, i) {
+        return h('th', { style: { textAlign: i === 2 ? 'right' : 'left', fontSize: '.66rem', textTransform: 'uppercase',
+          color: C.muted, padding: '.5rem .55rem', borderBottom: '1px solid ' + C.border, letterSpacing: '.03em' } }, th);
+      }))));
     const tb = h('tbody', {});
     rows.forEach(function (r) {
       const late = r.expected_days && r.days_in_stage != null && r.days_in_stage > Number(r.expected_days);
-      const tr = h('tr', { style: { cursor: 'pointer' }, onclick: function () { openDetail(r.id); } });
-      cols.forEach(function (c) { tr.appendChild(cellFor(c, r, late)); });
-      tb.appendChild(tr);
+      tb.appendChild(h('tr', { style: { cursor: 'pointer' }, onclick: function () { openDetail(r.id); } },
+        h('td', { style: td() }, h('div', { style: { fontWeight: 600 } }, r.name || '—'),
+          h('div', { style: { color: C.muted, fontSize: '.72rem' } }, '#' + r.id + (Number(r.is_repeat) ? ' · repeat' : ''))),
+        h('td', { style: td() }, r.product_name || '—'),
+        h('td', { style: Object.assign({ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, td()) }, money(r.sale_amount)),
+        h('td', { style: td() }, stagePill(r), late ? h('div', {}, pill((r.days_in_stage) + 'd · late', '#fee2e2', '#991b1b')) : null),
+        h('td', { style: td() }, r.owner_name || h('span', { style: { color: C.err } }, 'unassigned')),
+        h('td', { style: td() }, r.sales_name || '—'),
+        h('td', { style: td() }, r.days_in_stage != null ? r.days_in_stage + 'd' : '—')));
     });
     tbl.appendChild(tb);
     wrap.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
@@ -588,13 +435,10 @@
 
   async function renderReports(panel) {
     panel.innerHTML = '';
-    panel.appendChild(filterBar(function () { renderReports(panel); }));
-    const loading = h('div', { style: { color: C.muted, padding: '.5rem 0' } }, 'Loading…');
-    panel.appendChild(loading);
+    panel.appendChild(h('div', { style: { color: C.muted, padding: '.5rem 0' } }, 'Loading…'));
     let r;
-    try { r = await api('api_customers_report', filterPayload()); }
-    catch (e) { loading.remove(); panel.appendChild(card(h('div', { style: { color: C.err } }, e.message))); return; }
-    loading.remove();
+    try { r = await api('api_customers_report', {}); } catch (e) { panel.innerHTML = ''; panel.appendChild(card(h('div', { style: { color: C.err } }, e.message))); return; }
+    panel.innerHTML = '';
     const t = r.totals || {};
     // KPI strip
     const kpi = function (lab, val, col) { return card(h('div', {}, h('div', { style: { fontSize: '.7rem', color: C.muted, textTransform: 'uppercase' } }, lab),
@@ -724,7 +568,7 @@
         return pill(m.name + (Number(r.next_user_id) === Number(m.id) && r.mode === 'round_robin' ? ' →next' : ''),
           '#eef2ff', '#3730a3'); });
       tb.appendChild(h('tr', { style: { background: Number(r.is_fallback) ? '#fffbeb' : '' } },
-        h('td', { style: td() }, Number(r.is_fallback) ? h('b', {}, 'Fallback — any product') : (r.product_id == null ? h('b', {}, '🌐 All products') : (r.product_name || '(product #' + r.product_id + ')'))),
+        h('td', { style: td() }, Number(r.is_fallback) ? h('b', {}, 'Fallback — any product') : (r.product_name || '(product #' + r.product_id + ')')),
         h('td', { style: td() }, r.mode),
         h('td', { style: td() }, h('div', { style: { display: 'flex', gap: '.25rem', flexWrap: 'wrap' } }, members.length ? members : h('span', { style: { color: C.err } }, 'none set'))),
         h('td', { style: td() }, Number(r.is_fallback) ? '—' : r.priority),
@@ -744,12 +588,7 @@
     rule = rule || {};
     const isFallback = Number(rule.is_fallback) === 1;
     const body = h('div', {});
-    /* value '__all__' = All products (product_id null). Distinct from the fallback:
-     * an admin All-products rule can round-robin a team; the fallback is fixed. */
-    const fProd = h('select', { style: sel() },
-      h('option', { value: '' }, isFallback ? '(any product — fallback)' : '— pick a product —'),
-      isFallback ? null : (function () { const o = h('option', { value: '__all__' }, '🌐 All products');
-        if (!rule.id ? false : (rule.product_id == null)) o.selected = 'selected'; return o; })(),
+    const fProd = h('select', { style: sel() }, h('option', { value: '' }, isFallback ? '(any product — fallback)' : '— pick a product —'),
       products.map(function (p) { const o = h('option', { value: p.id }, p.name); if (Number(rule.product_id) === Number(p.id)) o.selected = 'selected'; return o; }));
     if (isFallback) fProd.disabled = 'disabled';
     const fMode = h('select', { style: sel() }, ['round_robin', 'fixed', 'least_busy'].map(function (m) {
@@ -785,10 +624,9 @@
     save.addEventListener('click', async function () {
       const ids = Array.from(picked);
       if (!ids.length) { toast('Pick at least one member', 'err'); return; }
-      if (!isFallback && !fProd.value) { toast('Pick a product (or “All products”)', 'err'); return; }
-      const _pid = (fProd.value === '__all__' || !fProd.value) ? null : Number(fProd.value);
+      if (!isFallback && !fProd.value) { toast('Pick a product', 'err'); return; }
       try {
-        await api('api_customers_ruleSave', { id: rule.id || undefined, product_id: _pid,
+        await api('api_customers_ruleSave', { id: rule.id || undefined, product_id: fProd.value ? Number(fProd.value) : null,
           mode: fMode.value, priority: Number(fPrio.value) || 100, user_ids: ids });
         shell._close(); renderRules(panel);
       } catch (e) { toast(e.message, 'err'); }
