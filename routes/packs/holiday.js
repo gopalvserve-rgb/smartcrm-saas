@@ -208,6 +208,84 @@ async function _installer({ db: D }) {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `, []);
+
+  // ══════════════════════════════════════════════════════════════════
+  // PACKAGE_BUILDER_v1 (2026-07-18) — packages become real day-by-day
+  // templates; a reusable component library; admin-defined itinerary
+  // custom fields; richer itinerary-day columns. All namespaced tour_*,
+  // all additive. Holiday pack only (nav gated + APIs requireActive).
+  // ══════════════════════════════════════════════════════════════════
+
+  // 9. Package template days — a package's day-by-day plan (reused per booking)
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_package_days (
+      id           SERIAL PRIMARY KEY,
+      package_id   INT NOT NULL,
+      day_no       INT NOT NULL,
+      city         TEXT,
+      hotel_name   TEXT,
+      room_type    TEXT,
+      meal_plan    TEXT,                 -- bb | hb | fb | none
+      transport    TEXT,
+      sightseeing  TEXT,
+      day_cost_inr NUMERIC(12,2),
+      inclusions   TEXT,
+      notes        TEXT
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_pkg_days_idx ON tour_package_days(package_id)`, []);
+
+  // 10. Package template activities — activities per template day
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_package_activities (
+      id              SERIAL PRIMARY KEY,
+      package_day_id  INT NOT NULL,
+      seq             INT NOT NULL DEFAULT 1,
+      time_str        TEXT,
+      kind            TEXT,
+      title           TEXT,
+      detail          TEXT
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_pkg_act_idx ON tour_package_activities(package_day_id)`, []);
+
+  // 11. Component library — reusable building blocks (hotel/activity/transfer/meal)
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_components (
+      id          SERIAL PRIMARY KEY,
+      kind        TEXT NOT NULL,        -- hotel | activity | transfer | meal | other
+      name        TEXT NOT NULL,
+      city        TEXT,
+      description TEXT,
+      rate_inr    NUMERIC(12,2),
+      rate_unit   TEXT,                 -- night | pax | trip | day
+      photo_url   TEXT,
+      is_active   INT NOT NULL DEFAULT 1,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_components_kind_idx ON tour_components(kind)`, []);
+
+  // 12. Itinerary custom-field definitions (admin-extendable, per-day key/value)
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_itin_cfields (
+      id         SERIAL PRIMARY KEY,
+      field_key  TEXT NOT NULL,
+      label      TEXT NOT NULL,
+      sort_order INT NOT NULL DEFAULT 100,
+      is_active  INT NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+
+  // 13. Richer columns on itinerary days (additive — old installs get them here)
+  await D.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS transport    TEXT`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS sightseeing  TEXT`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS day_cost_inr NUMERIC(12,2)`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS inclusions   TEXT`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS custom_json  TEXT`, []).catch(() => {});
+  // Link an itinerary back to the package it was seeded from (audit / re-seed)
+  await D.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS package_id INT`, []).catch(() => {});
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -222,22 +300,19 @@ async function api_tour_summary(/*token*/) {
       COUNT(*)::int                                                  AS bookings_total,
       COUNT(*) FILTER (WHERE status IN ('booked','confirmed','traveling'))::int AS bookings_active,
       COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()))::int    AS bookings_month,
-      COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', now()) THEN COALESCE(total_inr,0) ELSE 0 END),0)::float8 AS revenue_month,
+      COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', now()) THEN total_inr ELSE 0 END),0)::numeric AS revenue_month,
       COUNT(*) FILTER (WHERE status='traveling')::int                          AS travelling_now,
       COUNT(*) FILTER (WHERE travel_start_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days')::int AS upcoming_30d
     FROM tour_bookings
-  `, []).catch(() => ({ rows: [{}] }));
-  /* HOLIDAY_PACK_FIX_v1 — cast money to ::float8 so pg driver returns real
-   * JS numbers (not strings) — string "NaN" or empty numeric was rendering
-   * as ₹NaN in the KPI tiles. */
+  `, []);
   const r2 = await db.query(`
     SELECT
-      COALESCE(SUM(COALESCE(balance_inr,0)) FILTER (WHERE status IN ('booked','confirmed','traveling')),0)::float8 AS outstanding,
-      COALESCE(SUM(COALESCE(balance_inr,0)) FILTER (WHERE status IN ('booked','confirmed','traveling')
-                                          AND travel_start_date < CURRENT_DATE),0)::float8 AS overdue,
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')),0)::numeric AS outstanding,
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')
+                                          AND travel_start_date < CURRENT_DATE),0)::numeric AS overdue,
       COUNT(*) FILTER (WHERE visa_status='pending')::int                                   AS visa_pending
     FROM tour_bookings
-  `, []).catch(() => ({ rows: [{ outstanding: 0, overdue: 0, visa_pending: 0 }] }));
+  `, []);
   const r3 = await db.query(`
     SELECT COUNT(*)::int AS itin_no_plan
       FROM tour_bookings b
@@ -414,11 +489,6 @@ async function api_tour_booking_setStatus(_token, args) {
 }
 
 async function api_tour_itinerary_byBooking(_token, args) {
-  /* HOLIDAY_PACK_FIX_v1 — self-heal legacy tour_itineraries missing status/etc. */
-  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft'`, []); } catch(_) {}
-  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS pdf_url TEXT`, []); } catch(_) {}
-  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`, []); } catch(_) {}
-  try { await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS title TEXT`, []); } catch(_) {}
   const bid = Number((args && args.booking_id) || 0);
   if (!bid) return { itinerary: null, days: [], activities: [] };
   let it = (await db.query(
@@ -440,10 +510,19 @@ async function api_tour_itinerary_byBooking(_token, args) {
         `SELECT * FROM tour_itinerary_activities WHERE day_id = ANY($1::int[]) ORDER BY day_id, seq`,
         [days.map(d => d.id)])).rows
     : [];
-  return { itinerary: it, days: days, activities: acts };
+  // PACKAGE_BUILDER_v1 — also return admin-defined custom-field defs so the
+  // builder can render them, and the list of packages for the "apply" picker.
+  let cfields = [];
+  try {
+    cfields = (await db.query(
+      `SELECT id, field_key, label, sort_order FROM tour_itin_cfields
+        WHERE is_active=1 ORDER BY sort_order ASC, id ASC`, [])).rows;
+  } catch (_) {}
+  return { itinerary: it, days: days, activities: acts, cfields: cfields };
 }
 
 async function api_tour_itinerary_upsertDay(_token, args) {
+  await framework.requireActive(PACK_ID);
   args = args || {};
   const id = Number(args.id || 0);
   const fields = {
@@ -454,6 +533,12 @@ async function api_tour_itinerary_upsertDay(_token, args) {
     hotel_name: args.hotel_name || null,
     room_type: args.room_type || null,
     meal_plan: args.meal_plan || null,
+    transport: args.transport || null,
+    sightseeing: args.sightseeing || null,
+    day_cost_inr: (args.day_cost_inr === '' || args.day_cost_inr == null) ? null : Number(args.day_cost_inr),
+    inclusions: args.inclusions || null,
+    custom_json: (args.custom_json && typeof args.custom_json === 'object')
+      ? JSON.stringify(args.custom_json) : (args.custom_json || null),
     notes: args.notes || null
   };
   if (id > 0) {
@@ -481,33 +566,6 @@ async function api_tour_itinerary_addActivity(_token, args) {
      args.time_str || null, args.kind || 'sightseeing',
      args.title || '', args.detail || null]);
   return { ok: true, id: r.rows[0].id };
-}
-
-/* HOLIDAY_ITIN_UX_v1 — delete + reorder helpers */
-async function api_tour_itinerary_deleteDay(_token, args) {
-  const id = Number((args && args.id) || 0);
-  if (!id) throw new Error('id required');
-  await db.query(`DELETE FROM tour_itinerary_activities WHERE day_id = $1`, [id]).catch(()=>{});
-  await db.query(`DELETE FROM tour_itinerary_days WHERE id = $1`, [id]);
-  return { ok: true };
-}
-
-async function api_tour_itinerary_deleteActivity(_token, args) {
-  const id = Number((args && args.id) || 0);
-  if (!id) throw new Error('id required');
-  await db.query(`DELETE FROM tour_itinerary_activities WHERE id = $1`, [id]);
-  return { ok: true };
-}
-
-async function api_tour_itinerary_updateActivity(_token, args) {
-  args = args || {};
-  const id = Number(args.id || 0);
-  if (!id) throw new Error('id required');
-  await db.query(
-    `UPDATE tour_itinerary_activities SET time_str = $1, kind = $2, title = $3, detail = $4 WHERE id = $5`,
-    [args.time_str || null, args.kind || 'sightseeing', args.title || '', args.detail || null, id]
-  );
-  return { ok: true };
 }
 
 async function api_tour_payment_record(_token, args) {
@@ -699,11 +757,6 @@ async function api_tour_seedDemo(/*token*/) {
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS source TEXT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'enquiry'`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS cost_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
-  // HOLIDAY_PACK_FIX_v1 — patch tour_itineraries missing columns on legacy installs
-  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft'`, []).catch(() => {});
-  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS pdf_url TEXT`, []).catch(() => {});
-  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`, []).catch(() => {});
-  await db.query(`ALTER TABLE tour_itineraries ADD COLUMN IF NOT EXISTS title TEXT`, []).catch(() => {});
   // Also patch tour_packages — old installs may not have destination_id either.
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS destination_id INT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS kind TEXT`, []).catch(() => {});
@@ -713,6 +766,13 @@ async function api_tour_seedDemo(/*token*/) {
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS inclusions TEXT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS exclusions TEXT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS is_active INT NOT NULL DEFAULT 1`, []).catch(() => {});
+  // PACKAGE_BUILDER_v1 — richer itinerary-day columns on old installs
+  await db.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS transport    TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS sightseeing  TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS day_cost_inr NUMERIC(12,2)`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS inclusions   TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itinerary_days ADD COLUMN IF NOT EXISTS custom_json  TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_itineraries   ADD COLUMN IF NOT EXISTS package_id INT`, []).catch(() => {});
 
   await _ensureTables();
   await _seedHolidayStages();
@@ -884,6 +944,311 @@ async function api_tour_seedDemo(/*token*/) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════
+// PACKAGE_BUILDER_v1 APIs (2026-07-18) — all Holiday-pack-gated.
+// ══════════════════════════════════════════════════════════════════
+
+// ── Package day-by-day template ───────────────────────────────────
+async function api_tour_packageDays_get(_token, args) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const pid = Number((args && args.package_id) || 0);
+  if (!pid) return { days: [], activities: [] };
+  const days = (await db.query(
+    `SELECT * FROM tour_package_days WHERE package_id=$1 ORDER BY day_no ASC, id ASC`, [pid])).rows;
+  const acts = days.length
+    ? (await db.query(
+        `SELECT * FROM tour_package_activities WHERE package_day_id = ANY($1::int[]) ORDER BY package_day_id, seq`,
+        [days.map(d => d.id)])).rows
+    : [];
+  return { days: days, activities: acts };
+}
+
+async function api_tour_packageDay_save(_token, args) {
+  await framework.requireActive(PACK_ID);
+  args = args || {};
+  const id = Number(args.id || 0);
+  const fields = {
+    package_id: Number(args.package_id || 0),
+    day_no: Number(args.day_no || 1),
+    city: args.city || null,
+    hotel_name: args.hotel_name || null,
+    room_type: args.room_type || null,
+    meal_plan: args.meal_plan || null,
+    transport: args.transport || null,
+    sightseeing: args.sightseeing || null,
+    day_cost_inr: (args.day_cost_inr === '' || args.day_cost_inr == null) ? null : Number(args.day_cost_inr),
+    inclusions: args.inclusions || null,
+    notes: args.notes || null
+  };
+  if (!fields.package_id) throw new Error('package_id required');
+  if (id > 0) {
+    const cols = Object.keys(fields);
+    const sets = cols.map((c, i) => `${c}=$${i + 1}`).join(', ');
+    const vals = cols.map(c => fields[c]); vals.push(id);
+    await db.query(`UPDATE tour_package_days SET ${sets} WHERE id=$${cols.length + 1}`, vals);
+    return { ok: true, id };
+  }
+  const cols = Object.keys(fields);
+  const ph = cols.map((_, i) => `$${i + 1}`).join(', ');
+  const r = await db.query(
+    `INSERT INTO tour_package_days (${cols.join(', ')}) VALUES (${ph}) RETURNING id`,
+    cols.map(c => fields[c]));
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_tour_packageDay_delete(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM tour_package_activities WHERE package_day_id=$1`, [id]);
+  await db.query(`DELETE FROM tour_package_days WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+async function api_tour_packageActivity_save(_token, args) {
+  await framework.requireActive(PACK_ID);
+  args = args || {};
+  const id = Number(args.id || 0);
+  if (id > 0) {
+    await db.query(
+      `UPDATE tour_package_activities SET seq=$1, time_str=$2, kind=$3, title=$4, detail=$5 WHERE id=$6`,
+      [Number(args.seq || 1), args.time_str || null, args.kind || 'sightseeing',
+       args.title || '', args.detail || null, id]);
+    return { ok: true, id };
+  }
+  const dayId = Number(args.package_day_id || 0);
+  if (!dayId) throw new Error('package_day_id required');
+  const r = await db.query(
+    `INSERT INTO tour_package_activities (package_day_id, seq, time_str, kind, title, detail)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [dayId, Number(args.seq || 1), args.time_str || null, args.kind || 'sightseeing',
+     args.title || '', args.detail || null]);
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_tour_packageActivity_delete(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM tour_package_activities WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+// ── Seed an itinerary from a package template ─────────────────────
+async function api_tour_itinerary_seedFromPackage(_token, args) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  args = args || {};
+  const bookingId = Number(args.booking_id || 0);
+  const pkgId     = Number(args.package_id || 0);
+  const replace   = !!args.replace;
+  if (!bookingId || !pkgId) throw new Error('booking_id and package_id required');
+
+  // Resolve / create the itinerary container for this booking
+  let it = (await db.query(
+    `SELECT * FROM tour_itineraries WHERE booking_id=$1 ORDER BY id DESC LIMIT 1`, [bookingId])).rows[0] || null;
+  if (!it) {
+    it = (await db.query(
+      `INSERT INTO tour_itineraries (booking_id, title, status, package_id)
+       VALUES ($1,$2,'draft',$3) RETURNING *`,
+      [bookingId, 'Itinerary for Booking #' + bookingId, pkgId])).rows[0];
+  }
+
+  // Guard: don't silently overwrite an existing plan
+  const existing = (await db.query(
+    `SELECT id FROM tour_itinerary_days WHERE itinerary_id=$1`, [it.id])).rows;
+  if (existing.length && !replace) {
+    return { ok: false, needs_replace: true, existing_days: existing.length };
+  }
+  if (existing.length && replace) {
+    await db.query(
+      `DELETE FROM tour_itinerary_activities WHERE day_id = ANY($1::int[])`,
+      [existing.map(d => d.id)]);
+    await db.query(`DELETE FROM tour_itinerary_days WHERE itinerary_id=$1`, [it.id]);
+  }
+
+  // Pull template
+  const pkg = (await db.query(`SELECT * FROM tour_packages WHERE id=$1`, [pkgId])).rows[0] || null;
+  const tDays = (await db.query(
+    `SELECT * FROM tour_package_days WHERE package_id=$1 ORDER BY day_no ASC, id ASC`, [pkgId])).rows;
+  if (!tDays.length) return { ok: false, error: 'This package has no template days yet. Add days to the package first.' };
+
+  const startDate = args.start_date || null;  // 'YYYY-MM-DD'
+  let dayCount = 0, actCount = 0;
+  for (const td of tDays) {
+    let dayDate = null;
+    if (startDate) {
+      const base = new Date(startDate + 'T00:00:00');
+      base.setDate(base.getDate() + (Number(td.day_no || 1) - 1));
+      dayDate = base.toISOString().slice(0, 10);
+    }
+    const nd = (await db.query(
+      `INSERT INTO tour_itinerary_days
+         (itinerary_id, day_no, day_date, city, hotel_name, room_type, meal_plan,
+          transport, sightseeing, day_cost_inr, inclusions, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [it.id, td.day_no, dayDate, td.city, td.hotel_name, td.room_type, td.meal_plan,
+       td.transport, td.sightseeing, td.day_cost_inr, td.inclusions, td.notes])).rows[0];
+    dayCount++;
+    const tActs = (await db.query(
+      `SELECT * FROM tour_package_activities WHERE package_day_id=$1 ORDER BY seq ASC, id ASC`, [td.id])).rows;
+    for (const ta of tActs) {
+      await db.query(
+        `INSERT INTO tour_itinerary_activities (day_id, seq, time_str, kind, title, detail)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [nd.id, ta.seq, ta.time_str, ta.kind, ta.title, ta.detail]);
+      actCount++;
+    }
+  }
+
+  // Stamp the source package + a sensible title
+  await db.query(
+    `UPDATE tour_itineraries SET package_id=$1, title=COALESCE(NULLIF(title,''),$2), updated_at=now() WHERE id=$3`,
+    [pkgId, (pkg && pkg.name) ? pkg.name : it.title, it.id]);
+
+  return { ok: true, itinerary_id: it.id, days: dayCount, activities: actCount };
+}
+
+// ── Itinerary day / activity edit + delete + reorder ──────────────
+async function api_tour_itinerary_deleteDay(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM tour_itinerary_activities WHERE day_id=$1`, [id]);
+  await db.query(`DELETE FROM tour_itinerary_days WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+async function api_tour_itinerary_updateActivity(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(
+    `UPDATE tour_itinerary_activities SET seq=$1, time_str=$2, kind=$3, title=$4, detail=$5 WHERE id=$6`,
+    [Number(args.seq || 1), args.time_str || null, args.kind || 'sightseeing',
+     args.title || '', args.detail || null, id]);
+  return { ok: true };
+}
+
+async function api_tour_itinerary_deleteActivity(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM tour_itinerary_activities WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+async function api_tour_itinerary_reorderDays(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const order = (args && Array.isArray(args.order)) ? args.order : [];
+  if (!order.length) return { ok: true, moved: 0 };
+  let n = 0;
+  for (let i = 0; i < order.length; i++) {
+    const dayId = Number(order[i]);
+    if (!dayId) continue;
+    await db.query(`UPDATE tour_itinerary_days SET day_no=$1 WHERE id=$2`, [i + 1, dayId]);
+    n++;
+  }
+  return { ok: true, moved: n };
+}
+
+// ── Component library ─────────────────────────────────────────────
+async function api_tour_components_list(_token, args) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  args = args || {};
+  const params = [];
+  let where = 'is_active=1';
+  if (args.kind) { params.push(String(args.kind)); where += ` AND kind=$${params.length}`; }
+  const r = await db.query(
+    `SELECT * FROM tour_components WHERE ${where} ORDER BY kind ASC, name ASC`, params);
+  return { components: r.rows || [] };
+}
+
+async function api_tour_component_save(_token, args) {
+  await framework.requireActive(PACK_ID);
+  args = args || {};
+  const id = Number(args.id || 0);
+  const fields = {
+    kind: args.kind || 'other',
+    name: args.name || null,
+    city: args.city || null,
+    description: args.description || null,
+    rate_inr: (args.rate_inr === '' || args.rate_inr == null) ? null : Number(args.rate_inr),
+    rate_unit: args.rate_unit || null,
+    photo_url: args.photo_url || null,
+    is_active: args.is_active === 0 ? 0 : 1
+  };
+  if (!fields.name) throw new Error('name required');
+  if (id > 0) {
+    const cols = Object.keys(fields);
+    const sets = cols.map((c, i) => `${c}=$${i + 1}`).join(', ');
+    const vals = cols.map(c => fields[c]); vals.push(id);
+    await db.query(`UPDATE tour_components SET ${sets} WHERE id=$${cols.length + 1}`, vals);
+    return { ok: true, id };
+  }
+  const cols = Object.keys(fields);
+  const ph = cols.map((_, i) => `$${i + 1}`).join(', ');
+  const r = await db.query(
+    `INSERT INTO tour_components (${cols.join(', ')}) VALUES (${ph}) RETURNING id`,
+    cols.map(c => fields[c]));
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_tour_component_delete(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`UPDATE tour_components SET is_active=0 WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+// ── Itinerary custom-field definitions ────────────────────────────
+async function api_tour_itinCfields_list(/*token*/) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const r = await db.query(
+    `SELECT * FROM tour_itin_cfields WHERE is_active=1 ORDER BY sort_order ASC, id ASC`, []);
+  return { fields: r.rows || [] };
+}
+
+async function api_tour_itinCfield_save(_token, args) {
+  await framework.requireActive(PACK_ID);
+  args = args || {};
+  const id = Number(args.id || 0);
+  const label = (args.label || '').trim();
+  if (!label && id <= 0) throw new Error('label required');
+  // Derive a stable snake_case key from the label on create
+  const key = (args.field_key || label).toString().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || ('field_' + Date.now().toString(36));
+  if (id > 0) {
+    await db.query(
+      `UPDATE tour_itin_cfields SET label=$1, sort_order=$2, is_active=$3 WHERE id=$4`,
+      [label, Number(args.sort_order || 100), args.is_active === 0 ? 0 : 1, id]);
+    return { ok: true, id };
+  }
+  // Reactivate a soft-deleted key of the same name instead of duplicating
+  const dup = (await db.query(`SELECT id FROM tour_itin_cfields WHERE field_key=$1 LIMIT 1`, [key])).rows[0];
+  if (dup) {
+    await db.query(`UPDATE tour_itin_cfields SET label=$1, is_active=1, sort_order=$2 WHERE id=$3`,
+      [label, Number(args.sort_order || 100), dup.id]);
+    return { ok: true, id: dup.id, reactivated: true };
+  }
+  const r = await db.query(
+    `INSERT INTO tour_itin_cfields (field_key, label, sort_order) VALUES ($1,$2,$3) RETURNING id`,
+    [key, label, Number(args.sort_order || 100)]);
+  return { ok: true, id: r.rows[0].id, field_key: key };
+}
+
+async function api_tour_itinCfield_delete(_token, args) {
+  await framework.requireActive(PACK_ID);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`UPDATE tour_itin_cfields SET is_active=0 WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
 // ── Register the pack ─────────────────────────────────────────────
 framework.register({
   id:          PACK_ID,
@@ -897,6 +1262,7 @@ framework.register({
     { id: 'packholiday',      label: 'Travel Overview',     icon: '✈️', view: 'packholiday' },
     { id: 'tourbookings',     label: 'Bookings',            icon: '🎫', view: 'tourbookings' },
     { id: 'tourdestinations', label: 'Destinations',        icon: '🌍', view: 'tourdestinations' },
+    { id: 'tourpackages',     label: 'Packages & Library',  icon: '📦', view: 'tourpackages' },
     { id: 'touritinerary',    label: 'Itinerary Builder',   icon: '🗺️', view: 'touritinerary' },
     { id: 'tourpayments',     label: 'Payments & Collection', icon: '💰', view: 'tourpayments' },
     { id: 'tourreports',      label: 'Travel Reports',      icon: '📊', view: 'tourreports' },
@@ -918,9 +1284,23 @@ module.exports = {
   api_tour_itinerary_byBooking,
   api_tour_itinerary_upsertDay,
   api_tour_itinerary_addActivity,
+  // PACKAGE_BUILDER_v1
+  api_tour_packageDays_get,
+  api_tour_packageDay_save,
+  api_tour_packageDay_delete,
+  api_tour_packageActivity_save,
+  api_tour_packageActivity_delete,
+  api_tour_itinerary_seedFromPackage,
   api_tour_itinerary_deleteDay,
-  api_tour_itinerary_deleteActivity,
   api_tour_itinerary_updateActivity,
+  api_tour_itinerary_deleteActivity,
+  api_tour_itinerary_reorderDays,
+  api_tour_components_list,
+  api_tour_component_save,
+  api_tour_component_delete,
+  api_tour_itinCfields_list,
+  api_tour_itinCfield_save,
+  api_tour_itinCfield_delete,
   api_tour_payment_record,
   api_tour_payment_list,
   api_tour_report_upcoming,
