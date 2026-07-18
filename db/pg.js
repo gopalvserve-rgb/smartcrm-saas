@@ -745,6 +745,10 @@ const SCHEMA = {
               'changed_by', 'note', 'changed_at'],
     json: []
   },
+  buyer_custom_fields: {
+    columns: ['key', 'label', 'field_type', 'options', 'is_required', 'sort_order', 'is_active', 'created_at'],
+    json: []
+  },
   sub_statuses: {  // SUB_STATUS_v1 — Vserve beta: optional 2nd-level dropdown per parent status
     columns: ['parent_status_id', 'name', 'color', 'sort_order',
               'is_active', 'is_required', 'created_at', 'updated_at']

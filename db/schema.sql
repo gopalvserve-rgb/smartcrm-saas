@@ -1816,3 +1816,20 @@ CREATE TABLE IF NOT EXISTS buyer_stage_history (
   changed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_hist ON buyer_stage_history(customer_id);
+
+-- CUSTOMER_MODULE_v1 — admin-defined custom fields on the Convert-to-Customer
+-- form. Mirrors the leads `custom_fields` table exactly (Gopal: "can admin Add
+-- More Fields Here as per their Requirements, Like custom field in Leads").
+-- Values land in buyers.extra_json (already whitelisted), keyed by `key`.
+CREATE TABLE IF NOT EXISTS buyer_custom_fields (
+  id           SERIAL PRIMARY KEY,
+  key          TEXT NOT NULL,
+  label        TEXT NOT NULL,
+  field_type   TEXT NOT NULL DEFAULT 'text',  -- text|number|date|select|textarea
+  options      TEXT,                          -- pipe-separated, for select
+  is_required  INTEGER NOT NULL DEFAULT 0,
+  sort_order   INTEGER NOT NULL DEFAULT 10,
+  is_active    INTEGER NOT NULL DEFAULT 1,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_buyer_cf_key ON buyer_custom_fields(key);
