@@ -597,11 +597,19 @@ async function api_customers_fieldSave(token, payload) {
     await db.update('buyer_custom_fields', Number(p.id), row);
     return { ok: true, id: Number(p.id) };
   }
-  // guard against a duplicate key
-  try {
-    const ex = await db.query('SELECT id FROM buyer_custom_fields WHERE key = $1 LIMIT 1', [key]);
-    if (ex.rows[0]) throw new Error('A field with key "' + key + '" already exists');
-  } catch (e) { if (/already exists/.test(e.message)) throw e; }
+  // If this key already exists: reactivate + update it when it was soft-deleted
+  // (admin removed the field then re-adds one with the same label — very common,
+  // e.g. remove "Roof type" then add it back). Only a still-ACTIVE duplicate is
+  // a real conflict.
+  const ex = await db.query('SELECT id, is_active FROM buyer_custom_fields WHERE key = $1 LIMIT 1', [key]);
+  if (ex.rows[0]) {
+    if (Number(ex.rows[0].is_active) === 1) throw new Error('A field with key "' + key + '" already exists');
+    const rid = Number(ex.rows[0].id);
+    delete row.key;                 // never rewrite the key
+    row.is_active = 1;
+    await db.update('buyer_custom_fields', rid, row);
+    return { ok: true, id: rid, reactivated: true };
+  }
   const id = await db.insert('buyer_custom_fields', Object.assign({ created_at: db.nowIso() }, row));
   return { ok: true, id };
 }
