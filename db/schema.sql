@@ -1703,3 +1703,116 @@ CREATE TABLE IF NOT EXISTS payment_link_txns (
 );
 CREATE INDEX IF NOT EXISTS idx_payment_txns_link ON payment_link_txns(link_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_txns_gtxn ON payment_link_txns(gateway_txn_id);
+
+-- ============================================================================
+-- CUSTOMER_MODULE_v1 (2026-07-17) — vserve only (gated in routes/customers.js)
+-- ----------------------------------------------------------------------------
+-- Gopal: once a sale is done the rep clicks "Convert to Customer"; a record is
+-- created in the Customer section and auto-assigned to a back-office member by
+-- a PRODUCT-based rule. The customer stays visible to BOTH the sales rep who
+-- won it and the assigned owner.
+--
+-- WHY ONE `customers` TABLE AND NOT customers + orders:
+--   Repeat business is "rare, but it happens" (Gopal). So each converted sale is
+--   ONE row here, and the PHONE is the natural customer key: a repeat buyer gets
+--   a second row sharing the phone, flagged is_repeat. Reports can therefore give
+--   BOTH "sales count" (rows) and "unique customers" (distinct phone) without a
+--   second table and a second UI. If repeat business ever becomes common, this
+--   splits cleanly into customers + orders because the phone grouping is already
+--   the seam.
+--
+-- ACCOUNTABILITY MODEL (Gopal: "one owner + specialists"):
+--   sales_user_id  — the rep who won it. Permanent. Never reassigned.
+--   owner_user_id  — the ONE accountable back-office person, set by rule.
+--   customer_watchers — specialists pulled in per stage; they keep access after.
+--   Visibility = sales_user_id OR owner_user_id OR watcher. That is the whole
+--   "visible to both" requirement.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS customer_stages (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL,
+  color         TEXT DEFAULT '#6366f1',
+  sort_order    INTEGER NOT NULL DEFAULT 100,
+  is_final      INTEGER NOT NULL DEFAULT 0,   -- 1 = journey complete (Handover/Closed)
+  expected_days INTEGER,                      -- per-stage SLA; NULL = no SLA
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS customers (
+  id               SERIAL PRIMARY KEY,
+  lead_id          INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  name             TEXT NOT NULL,
+  phone            TEXT NOT NULL,              -- customer key; repeat buyer = same phone
+  email            TEXT,
+  company          TEXT,
+  product_id       INTEGER REFERENCES products(id) ON DELETE SET NULL,
+  product_name     TEXT,                       -- snapshot: product renames must not rewrite history
+  sale_amount      NUMERIC(14,2) NOT NULL DEFAULT 0,   -- "Volume" in the reports
+  paid_amount      NUMERIC(14,2) NOT NULL DEFAULT 0,
+  currency         TEXT NOT NULL DEFAULT 'INR',
+  payment_mode     TEXT,
+  payment_ref      TEXT,
+  stage_id         INTEGER REFERENCES customer_stages(id) ON DELETE SET NULL,
+  stage_started_at TIMESTAMPTZ,
+  sales_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- rep who won it
+  owner_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- accountable back-office
+  assign_rule_id   INTEGER,
+  address          TEXT,
+  site_contact     TEXT,
+  target_date      DATE,
+  notes            TEXT,
+  extra_json       JSONB,                      -- custom_fields values, same as leads
+  is_repeat        INTEGER NOT NULL DEFAULT 0,
+  converted_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_customers_phone   ON customers(phone);
+CREATE INDEX IF NOT EXISTS idx_customers_owner   ON customers(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_customers_sales   ON customers(sales_user_id);
+CREATE INDEX IF NOT EXISTS idx_customers_stage   ON customers(stage_id);
+CREATE INDEX IF NOT EXISTS idx_customers_lead    ON customers(lead_id);
+-- One conversion per lead. Without this a double-click makes two customers and
+-- the reports silently double-count the sale.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_lead ON customers(lead_id) WHERE lead_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS customer_assign_rules (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT,
+  product_id    INTEGER REFERENCES products(id) ON DELETE CASCADE,  -- NULL = fallback (any product)
+  mode          TEXT NOT NULL DEFAULT 'round_robin',                -- round_robin | fixed | least_busy
+  user_ids      JSONB NOT NULL DEFAULT '[]'::jsonb,                 -- rotation pool
+  rr_position   INTEGER NOT NULL DEFAULT 0,                         -- next index into user_ids
+  priority      INTEGER NOT NULL DEFAULT 100,                       -- lower = checked first
+  is_fallback   INTEGER NOT NULL DEFAULT 0,                         -- the undeletable catch-all
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cust_rules_prod ON customer_assign_rules(product_id);
+
+CREATE TABLE IF NOT EXISTS customer_watchers (
+  id          SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role        TEXT DEFAULT 'watcher',   -- watcher | specialist
+  added_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cust_watch ON customer_watchers(customer_id, user_id);
+
+CREATE TABLE IF NOT EXISTS customer_stage_history (
+  id              SERIAL PRIMARY KEY,
+  customer_id     INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  from_stage_id   INTEGER,
+  to_stage_id     INTEGER,
+  duration_prev_s INTEGER,          -- how long it sat in the previous stage -> TAT reporting
+  changed_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  note            TEXT,
+  changed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cust_hist ON customer_stage_history(customer_id);

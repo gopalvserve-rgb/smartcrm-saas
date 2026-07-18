@@ -711,6 +711,41 @@ const SCHEMA = {
               'paid_at', 'raw_json'],
     json: ['raw_json']
   },
+  /* CUSTOMER_MODULE_v1 (2026-07-17) — vserve only.
+   * EVERY column a write touches must be listed here or db.insert/db.update
+   * DROPS IT SILENTLY — no error, no warning, the value just never lands.
+   * That has bitten this codebase 5 times (SCHEMA_DROP_FIX_v1: sub_status_id,
+   * campaign_id, qualified, is_hidden were dead on every lead write; LS_v1: the
+   * AI Score columns rendered '–' for the same reason). Adding a column to
+   * schema.sql without adding it here is a silent data-loss bug. */
+  customer_stages: {
+    columns: ['name', 'color', 'sort_order', 'is_final', 'expected_days', 'is_active', 'created_at'],
+    json: []
+  },
+  customers: {
+    columns: ['lead_id', 'name', 'phone', 'email', 'company',
+              'product_id', 'product_name', 'sale_amount', 'paid_amount', 'currency',
+              'payment_mode', 'payment_ref',
+              'stage_id', 'stage_started_at',
+              'sales_user_id', 'owner_user_id', 'assign_rule_id',
+              'address', 'site_contact', 'target_date', 'notes', 'extra_json',
+              'is_repeat', 'converted_by', 'created_at', 'updated_at', 'closed_at'],
+    json: ['extra_json']
+  },
+  customer_assign_rules: {
+    columns: ['name', 'product_id', 'mode', 'user_ids', 'rr_position', 'priority',
+              'is_fallback', 'is_active', 'created_by', 'created_at', 'updated_at'],
+    json: ['user_ids']
+  },
+  customer_watchers: {
+    columns: ['customer_id', 'user_id', 'role', 'added_by', 'added_at'],
+    json: []
+  },
+  customer_stage_history: {
+    columns: ['customer_id', 'from_stage_id', 'to_stage_id', 'duration_prev_s',
+              'changed_by', 'note', 'changed_at'],
+    json: []
+  },
   sub_statuses: {  // SUB_STATUS_v1 — Vserve beta: optional 2nd-level dropdown per parent status
     columns: ['parent_status_id', 'name', 'color', 'sort_order',
               'is_active', 'is_required', 'created_at', 'updated_at']
