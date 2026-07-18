@@ -420,12 +420,19 @@ async function api_wapack_seedDemo(token) {
   const me = await _gate(token);
   if (!['admin', 'manager'].includes(String(me.role || ''))) throw new Error('Admin only');
 
-  // Idempotency — skip if we already seeded this tenant.
-  const existing = Number(((await db.query(
-    `SELECT COUNT(*)::int AS n FROM leads WHERE source='WA Demo'`, [])).rows[0] || {}).n || 0);
-  if (existing >= _DEMO_CUSTOMERS.length) {
-    return { ok: true, skipped: true, message: 'Demo data already present.' };
+  // Idempotent by WIPE-AND-RESEED — clean any prior demo data first so a
+  // re-run (or a half-finished earlier run) always ends in a clean state.
+  const oldLeads = (await db.query(`SELECT id, phone FROM leads WHERE source='WA Demo'`, [])).rows;
+  if (oldLeads.length) {
+    const ids = oldLeads.map(l => l.id);
+    const phones = oldLeads.map(l => l.phone);
+    await db.query(`DELETE FROM whatsapp_messages   WHERE lead_id = ANY($1::int[])`, [ids]).catch(() => {});
+    await db.query(`DELETE FROM wa_campaign_targets WHERE lead_id = ANY($1::int[])`, [ids]).catch(() => {});
+    await db.query(`DELETE FROM wapack_inbox        WHERE phone   = ANY($1::text[])`, [phones]).catch(() => {});
+    await db.query(`DELETE FROM wapack_inbox_log    WHERE phone   = ANY($1::text[])`, [phones]).catch(() => {});
+    await db.query(`DELETE FROM leads               WHERE id      = ANY($1::int[])`, [ids]).catch(() => {});
   }
+  await db.query(`DELETE FROM wa_campaigns WHERE name='Diwali Offer Blast'`, []).catch(() => {});
 
   // 1. Agents (demo users who never log in — placeholder hash).
   const AGENTS = [['Priya Sharma', 'team_leader'], ['Amit Rao', 'sales'], ['Neha Gupta', 'sales'], ['Ravi Kumar', 'sales']];
@@ -458,7 +465,8 @@ async function api_wapack_seedDemo(token) {
       [name, phone, String((i % 5) + 1)])).rows[0].id;
 
     // How much of the script each customer got (varies last-message direction + unread).
-    const depth = 2 + (i % (_DEMO_SCRIPTS.length));
+    // Cap at the script length so we never index past the end.
+    const depth = Math.min(_DEMO_SCRIPTS.length, 2 + (i % (_DEMO_SCRIPTS.length - 1)));
     const baseMin = 60 * (i + 1);   // stagger threads
     for (let s = 0; s < depth; s++) {
       const step = _DEMO_SCRIPTS[s];
