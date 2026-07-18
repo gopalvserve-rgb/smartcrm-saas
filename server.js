@@ -2874,6 +2874,17 @@ const PORT = Number(process.env.PORT || 3000);
 async function boot() {
   console.log('[boot] migrating control planeÃ¢ÂÂ¦');
   await control.migrate();
+
+  /* ZERO_DOWNTIME_DEPLOY_v1 (2026-07-18) — bind the port the moment the control-plane
+   * schema is migrated, instead of at the very END of boot(). Previously app.listen was
+   * the last line of boot(), so a freshly-deployed instance answered NOTHING until the
+   * whole boot finished (seed + tenant warm-ups). On Railway every push restarts the one
+   * instance, so that boot window = a visible "CRM not opening" outage on each deploy
+   * (that's what bit us on 2026-07-18). All request-serving routes + middleware are
+   * registered at MODULE LOAD (top-level), so they're ready here; only a couple of niche
+   * webhook routes and the background sweeps are registered a beat later, which is fine.
+   * Result: a redeployed instance goes live in ~1s → near-invisible deploys. */
+  app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT + ' (early-bind after control.migrate)'));
   // First-boot seed + per-boot settings backfill. seed-once is fully
   // idempotent Ã¢ÂÂ it inserts the super-admin only if none exists, every
   // package only if the row is missing by name, and every default
@@ -3253,6 +3264,12 @@ try {
   }
 } catch (e) { console.warn('[gconv] could not register public export routes:', e.message); }
 
-app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
-boot().catch
+boot().catch(function (e) {
+  /* ZERO_DOWNTIME_DEPLOY_v1 — the file previously ended at a bare `boot().catch` with no
+   * handler, so any startup rejection (e.g. control.migrate failing) was an unhandled
+   * promise rejection. Log it loudly instead. We deliberately do NOT process.exit here:
+   * with the healthcheck gating traffic, a failed boot simply never becomes healthy and
+   * Railway keeps the previous instance serving — safer than a crash-loop. */
+  console.error('[boot] FATAL error during startup:', (e && e.stack) || e);
+});
