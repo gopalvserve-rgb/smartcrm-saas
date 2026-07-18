@@ -965,8 +965,11 @@ async function apiRaw(fn, ...args) {
       // freshly-posted admin announcement appears for already-logged-in users
       // without them needing to refresh.
       refreshAnnouncements();
+      // POPUP_BROADCAST_v1 — super-admin pop-ups (styled text / image + link)
+      refreshPlatformPopups();
       // MOBILE_PERF_v1: 60s on desktop, 10min on APK
       setInterval(() => refreshAnnouncements().catch(() => {}), _IS_APK ? 600_000 : 60_000);
+      setInterval(() => refreshPlatformPopups().catch(() => {}), _IS_APK ? 600_000 : 120_000);
       // In-app chat notification popup — polls every 10s while the user is
       // anywhere in the CRM. Always starts (the backend endpoint silently
       // refuses for users with chat disabled). Skips popping when the chat
@@ -39292,6 +39295,104 @@ async function refreshAnnouncements() {
     );
     bar.appendChild(card);
   });
+}
+
+/* ---------------- POPUP_BROADCAST_v1 — super-admin pop-ups -------------
+ * Platform-wide pop-ups pushed from the super-admin panel (control DB
+ * platform_announcements where display_mode='popup'). Fetched via the
+ * /api/saas dispatcher (sapi). Rendered as a centered modal: styled text
+ * and/or a clickable image with a CTA link. Dismissal is remembered
+ * per-browser in localStorage so it doesn't nag on every poll.
+ * -------------------------------------------------------------------- */
+let _popupShowing = false;
+
+function _popupSeen(id) {
+  try { return localStorage.getItem('pa_popup_seen_' + id) === '1'; } catch (_) { return false; }
+}
+function _markPopupSeen(id) {
+  try { localStorage.setItem('pa_popup_seen_' + id, '1'); } catch (_) {}
+}
+
+async function refreshPlatformPopups() {
+  if (_popupShowing) return;
+  let rows;
+  try { rows = await sapi('api_saas_announcements_publicActive'); }
+  catch (_) { return; }
+  const popups = (rows || []).filter(r => r.display_mode === 'popup' && !_popupSeen(r.id));
+  if (!popups.length) return;
+  renderPlatformPopup(popups[0]);   // one at a time; newest first (list is DESC)
+}
+
+function renderPlatformPopup(p) {
+  _popupShowing = true;
+  const bg  = p.bg_color   || '#ffffff';
+  const fg  = p.text_color || '#0f172a';
+  const acc = p.accent_color || '#4f46e5';
+  const canDismiss = Number(p.dismissible) !== 0;
+
+  function close() {
+    _markPopupSeen(p.id);
+    _popupShowing = false;
+    try { document.body.removeChild(overlay); } catch (_) {}
+  }
+  function openLink() {
+    if (p.link_url) { try { window.open(p.link_url, '_blank', 'noopener'); } catch (_) {} }
+    close();
+  }
+
+  const overlay = h('div', { style: {
+    position: 'fixed', inset: '0', background: 'rgba(15,23,42,.55)', zIndex: 100000,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' } });
+  if (canDismiss) overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  const box = h('div', { style: {
+    background: bg, color: fg, borderRadius: '16px', overflow: 'hidden',
+    width: '100%', maxWidth: '460px', boxShadow: '0 24px 70px rgba(0,0,0,.35)',
+    position: 'relative' } });
+
+  if (canDismiss) {
+    box.appendChild(h('button', { onclick: close, title: 'Dismiss', style: {
+      position: 'absolute', top: '8px', right: '10px', zIndex: 2, border: 0,
+      background: 'rgba(0,0,0,.25)', color: '#fff', width: '26px', height: '26px',
+      borderRadius: '50%', cursor: 'pointer', fontSize: '15px', lineHeight: '26px', padding: 0 } }, '✕'));
+  }
+
+  if (p.image_url) {
+    box.appendChild(h('img', {
+      src: p.image_url, alt: p.title || '',
+      onclick: p.link_url ? openLink : null,
+      style: { display: 'block', width: '100%', maxHeight: '260px', objectFit: 'cover',
+        cursor: p.link_url ? 'pointer' : 'default' } }));
+  }
+
+  const hasText = (p.title && p.title.trim()) || (p.body && p.body.trim());
+  if (hasText) {
+    const textWrap = h('div', { style: { padding: '18px 20px 20px' } });
+    if (p.title) textWrap.appendChild(h('h3', { style: { margin: '0 0 8px', fontSize: '18px', color: fg } }, p.title));
+    if (p.body) {
+      const bodyEl = h('div', { style: { fontSize: '13.5px', lineHeight: 1.5, color: fg, opacity: .95 } });
+      bodyEl.innerHTML = p.body;   // super-admin authored; HTML allowed (designer style)
+      textWrap.appendChild(bodyEl);
+    }
+    box.appendChild(textWrap);
+  }
+
+  const actions = h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end',
+    padding: hasText ? '0 20px 18px' : '14px 18px 16px' } });
+  if (p.link_url) {
+    actions.appendChild(h('button', { onclick: openLink, style: {
+      background: acc, color: '#fff', border: 0, padding: '9px 18px', borderRadius: '9px',
+      fontWeight: 700, fontSize: '13px', cursor: 'pointer' } }, p.cta_text || 'Learn more'));
+  }
+  if (!canDismiss) {
+    actions.appendChild(h('button', { onclick: close, style: {
+      background: 'transparent', color: fg, border: '1px solid ' + acc, padding: '9px 16px',
+      borderRadius: '9px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' } }, 'Got it'));
+  }
+  if (p.link_url || !canDismiss) box.appendChild(actions);
+
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 /* ---------------- In-app chat notification popup ----------------------
