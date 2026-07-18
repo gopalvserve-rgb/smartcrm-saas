@@ -508,6 +508,7 @@ async function api_packs_listInstalled(token) {
     else if (slug === 'showcase-re') expected = 'realestate';
     else if (slug === 'showcase-solar') expected = 'solar';
     else if (slug === 'showcase-holiday') expected = 'holiday';
+    else if (slug === 'showcase-whatsapp' || slug === 'showcase-wa') expected = 'whatsapp';
     else if (slug === 'showcase-finance') expected = 'finance';
     else if (slug === 'showcase-manufacturer' || slug === 'showcase-mfg') expected = 'manufacturer';
     else if (slug === 'showcase-ecommerce' || slug === 'showcase-ec') expected = 'ecommerce';
