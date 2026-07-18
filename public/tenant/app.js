@@ -9720,6 +9720,17 @@ async function openLeadModal(id) {
         title: 'Pick a template — opens WhatsApp from MY number with text pre-filled'
       }, '💬 My WhatsApp') : null,
       _digits ? h('button', { type: 'button', class: 'btn sm wa-cloud-btn', onclick: () => openInitiateChatModal(lead) }, '🟢 WA Template') : null,
+      /* CUSTOMER_MODULE_v1 — "Convert to Customer" in the prominent Quick-actions row
+       * (Gopal: "Add Convert Customer Button on lead So that from Here we can convert").
+       * Shows on EVERY lead when the module is loaded (vserve). The rep fills product +
+       * amount in the modal, so it works from any status, not just Sale Done. */
+      (id && window.CustomersUI && typeof window.CustomersUI.openConvert === 'function')
+        ? h('button', { type: 'button', class: 'btn sm',
+            style: { background: '#dcfce7', color: '#166534', borderColor: '#86efac', fontWeight: '700' },
+            title: 'Convert this lead into a Customer and auto-assign delivery',
+            onclick: () => { try { window.CustomersUI.openConvert(Object.assign({ id: id }, lead)); } catch (e) { toast('Convert failed: ' + e.message, 'err'); } }
+          }, '🎉 Convert to Customer')
+        : null,
       _digits ? h('button', { type: 'button', class: 'btn sm', onclick: () => sendCalendlyLink(lead) }, '📅 Send Calendly') : null,
       lead.email ? h('a', { class: 'btn sm', href: 'mailto:' + lead.email }, '✉ Email') : null,
       h('button', {
@@ -10208,24 +10219,6 @@ async function openLeadModal(id) {
   actionsRow.appendChild(h('button', { type: 'button', class: 'btn', onclick: () => modal.remove() }, 'Cancel'));
   if (id && ['admin', 'manager', 'team_leader'].includes(CRM.user.role)) {
     actionsRow.appendChild(h('button', { type: 'button', class: 'btn', onclick: () => openDuplicateAndReassignModal(id, lead, () => { modal.remove(); loadLeads && loadLeads(); }) }, '📋 Duplicate & reassign'));
-  }
-  /* CUSTOMER_MODULE_v1 — "Convert to Customer" on a closed-sale lead. Shows only
-   * when customers.js is loaded (vserve) AND this lead sits at a final/won status
-   * (Sale Done / Won / Closed). Delegates to the module's modal; the backend
-   * re-validates and freezes nothing on the lead itself. */
-  if (id && window.CustomersUI && typeof window.CustomersUI.openConvert === 'function') {
-    try {
-      const _st = (CRM.cache.statuses || []).find(x => Number(x.id) === Number(lead.status_id));
-      const _stName = String((_st && _st.name) || '').toLowerCase();
-      const _isClosedSale = (_st && Number(_st.is_final) === 1) ||
-        /sale done|won|closed|converted|payment/.test(_stName);
-      if (_isClosedSale) {
-        actionsRow.appendChild(h('button', { type: 'button', class: 'btn',
-          style: { background: '#dcfce7', color: '#166534', borderColor: '#86efac', fontWeight: '700' },
-          onclick: () => { try { window.CustomersUI.openConvert(lead); } catch (e) { toast('Convert failed: ' + e.message, 'err'); } }
-        }, '🎉 Convert to Customer'));
-      }
-    } catch (_) {}
   }
   actionsRow.appendChild(h('button', { type: 'submit', form: 'lead-form', class: 'btn primary' }, id ? 'Save changes' : 'Create lead'));
   body.appendChild(actionsRow);
