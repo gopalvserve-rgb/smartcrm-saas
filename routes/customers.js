@@ -1,604 +1,663 @@
-/**
- * Customers — post-sale lifecycle layer for Stockbox.
+/* ============================================================================
+ * CUSTOMER_MODULE_v1 (2026-07-17) — vserve only
+ * ============================================================================
+ * Gopal's brief, in his words:
+ *   "Once sales done, the sales team will click convert to customer and fill few
+ *    details… a new entry will be created in Customer Section and will be added
+ *    as customer, that will be assigned as per rule… on the basis of Product the
+ *    customer will be assigned to other team member… the same customer is visible
+ *    to sale person the owner who created and the same will be sent the new person
+ *    as per rule."
+ *   Reports: "on Stage, saler Wise Volume, Count, Type Of product."
+ *   Volume  = "Customer Value Sale Amount for Sum", Count = "Count of Customer".
  *
- * A customer is created when a lead is converted (typically on Won), and
- * lives independently from there. They can:
- *   - buy multiple products over time (customer_sales)
- *   - renew subscriptions (each renewal is a new sale row)
- *   - upgrade / cross-sell
- *   - lapse / churn — without changing the original lead's funnel state
+ * THE MODEL (decided with Gopal, not invented here)
+ *   Lead   — stays, frozen at Sale Done. The rep keeps it and keeps the credit.
+ *            We never touch leads.status_id here; conversion is additive.
+ *   Customer — ONE row per converted sale. The PHONE is the customer key, so a
+ *            repeat buyer is a second row sharing the phone (is_repeat=1).
+ *            Gopal: repeat is "rare, but it happens" — so reports give BOTH
+ *            row count (sales) and distinct-phone count (unique customers)
+ *            without a second table and a second UI to maintain.
+ *   Owner  — "one owner + specialists". owner_user_id is the ONE accountable
+ *            back-office person, chosen by rule. Specialists join as watchers.
+ *            One accountable person is the entire point: with per-stage
+ *            reassignment an order in flight has nobody's name on it, and that
+ *            is exactly how things get dropped between departments.
  *
- * Customer aggregates (lifetime_value, total_purchases, last_purchase_at,
- * next_renewal_at) are recomputed from customer_sales after every write
- * so list views stay fast.
- */
+ * VISIBILITY — the actual requirement
+ *   A customer is visible to: the sales rep who won it (sales_user_id), the
+ *   assigned owner (owner_user_id), any watcher, and admin/manager. Nothing is
+ *   copied, nothing duplicated — one row, two roles.
+ *
+ * WHY NO departments TABLE
+ *   I flagged departments as a prerequisite for department-based routing. Gopal's
+ *   rule is product -> team member, so departments aren't needed at all. Dropped
+ *   the prerequisite rather than build something nobody asked for.
+ *   (users.department is free TEXT today — routing on it would misroute on a typo.)
+ *
+ * SAFETY
+ *   - vserve only, by slug. Every other tenant gets enabled:false and no tables.
+ *   - Additive: reads leads, writes only customer_* tables. Zero writes to leads,
+ *     zero contact with recordings / call log / reports.js (all LOCKED).
+ * ========================================================================== */
 const db = require('../db/pg');
 const { authUser, getVisibleUserIds } = require('../utils/auth');
 
-// ---------- helpers ----------------------------------------------------
+const ALLOWED_SLUGS = ['vserve'];
 
-async function _userMap() {
-  const users = await db.getAll('users');
-  return Object.fromEntries(users.map(u => [Number(u.id), u]));
+function _slug() {
+  try {
+    const st = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (st && st.slug) ? String(st.slug) : '';
+  } catch (_) { return ''; }
+}
+function isEnabled() { return ALLOWED_SLUGS.indexOf(_slug()) >= 0; }
+function _assertEnabled() {
+  if (!isEnabled()) throw new Error('Customer module is not enabled for this tenant');
+}
+const _digits = (v) => String(v == null ? '' : v).replace(/\D/g, '');
+const _num = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
+
+/* Default journey — seeded once, on first use, ONLY on an allowed tenant.
+ * Deliberately generic; Gopal will rename these to his real stages. */
+const DEFAULT_STAGES = [
+  { name: 'Docs Pending',   color: '#f59e0b', sort_order: 10, expected_days: 2 },
+  { name: 'Payment Clear',  color: '#06b6d4', sort_order: 20, expected_days: 2 },
+  { name: 'In Progress',    color: '#6366f1', sort_order: 30, expected_days: 7 },
+  { name: 'Dispatch',       color: '#8b5cf6', sort_order: 40, expected_days: 3 },
+  { name: 'Handover',       color: '#10b981', sort_order: 50, expected_days: 1, is_final: 1 }
+];
+
+async function ensureSeed() {
+  if (!isEnabled()) return;
+  try {
+    const r = await db.query('SELECT COUNT(*)::int AS n FROM customer_stages');
+    if (!Number(r.rows[0].n)) {
+      for (const s of DEFAULT_STAGES) {
+        await db.query(
+          `INSERT INTO customer_stages (name, color, sort_order, expected_days, is_final, is_active)
+           VALUES ($1,$2,$3,$4,$5,1)`,
+          [s.name, s.color, s.sort_order, s.expected_days || null, s.is_final || 0]
+        );
+      }
+      console.log('[customers] seeded ' + DEFAULT_STAGES.length + ' default stages on ' + _slug());
+    }
+    /* The fallback rule can never be deleted (see api_customers_ruleDelete). A
+     * converted sale that matches no rule would otherwise land with owner=NULL —
+     * an order nobody is delivering, sitting silently until the customer calls
+     * angry. There is always a catch-all. */
+    const f = await db.query('SELECT COUNT(*)::int AS n FROM customer_assign_rules WHERE is_fallback = 1');
+    if (!Number(f.rows[0].n)) {
+      const admin = await db.query(`SELECT id FROM users WHERE role = 'admin' AND is_active = 1 ORDER BY id ASC LIMIT 1`);
+      const uid = admin.rows[0] ? Number(admin.rows[0].id) : null;
+      await db.query(
+        `INSERT INTO customer_assign_rules (name, product_id, mode, user_ids, priority, is_fallback, is_active)
+         VALUES ('Fallback — nothing matched', NULL, 'fixed', $1::jsonb, 9999, 1, 1)`,
+        [JSON.stringify(uid ? [uid] : [])]
+      );
+      console.log('[customers] seeded fallback rule on ' + _slug());
+    }
+  } catch (e) { console.warn('[customers] ensureSeed:', e.message); }
 }
 
-function _hydrate(c, usersById) {
-  return Object.assign({}, c, {
-    assigned_name: usersById[Number(c.assigned_to)]?.name || ''
-  });
+/* ---------------------------------------------------------------------------
+ * THE RULE ENGINE
+ * Lowest priority number wins; a product-specific rule always beats the
+ * fallback because the fallback sits at priority 9999. Round-robin advances
+ * rr_position ATOMICALLY in the UPDATE ... RETURNING so two reps converting at
+ * the same moment can't both get handed the same person.
+ * ------------------------------------------------------------------------- */
+async function _pickAssignee(productId) {
+  const { rows } = await db.query(
+    `SELECT * FROM customer_assign_rules
+      WHERE is_active = 1
+        AND (product_id = $1 OR product_id IS NULL)
+      ORDER BY (product_id IS NULL) ASC, priority ASC, id ASC`,
+    [productId || null]
+  );
+  for (const rule of rows) {
+    let pool = [];
+    try { pool = Array.isArray(rule.user_ids) ? rule.user_ids : JSON.parse(rule.user_ids || '[]'); }
+    catch (_) { pool = []; }
+    pool = pool.map(Number).filter(Boolean);
+    if (!pool.length) continue;
+
+    // Only hand work to users who still exist and are active — a rule pointing at
+    // a left employee must fall through to the next rule, not black-hole the sale.
+    const act = await db.query(
+      `SELECT id FROM users WHERE id = ANY($1::int[]) AND is_active = 1`, [pool]);
+    const live = act.rows.map(r => Number(r.id));
+    const ordered = pool.filter(id => live.includes(id));
+    if (!ordered.length) continue;
+
+    if (rule.mode === 'fixed') return { user_id: ordered[0], rule_id: rule.id, rule_name: rule.name };
+
+    if (rule.mode === 'least_busy') {
+      const b = await db.query(
+        `SELECT u.id, COUNT(c.id)::int AS n
+           FROM users u
+           LEFT JOIN customers c
+             ON c.owner_user_id = u.id
+            AND c.closed_at IS NULL
+          WHERE u.id = ANY($1::int[])
+          GROUP BY u.id ORDER BY n ASC, u.id ASC LIMIT 1`, [ordered]);
+      if (b.rows[0]) return { user_id: Number(b.rows[0].id), rule_id: rule.id, rule_name: rule.name };
+    }
+
+    // round_robin (default) — atomic bump
+    const up = await db.query(
+      `UPDATE customer_assign_rules
+          SET rr_position = (rr_position + 1), updated_at = NOW()
+        WHERE id = $1 RETURNING rr_position`, [rule.id]);
+    const pos = Number(up.rows[0].rr_position) - 1;
+    return { user_id: ordered[pos % ordered.length], rule_id: rule.id, rule_name: rule.name };
+  }
+  return { user_id: null, rule_id: null, rule_name: null };
 }
 
-async function _isVisible(me, visible, customer) {
-  if (me.role === 'admin') return true;
-  if (!customer.assigned_to) return false;
-  return visible.includes(Number(customer.assigned_to));
+/** Who is this rep about to hand the customer to? Read-only — no RR bump. */
+async function api_customers_previewAssignee(token, payload) {
+  await authUser(token);
+  if (!isEnabled()) return { ok: true, enabled: false };
+  await ensureSeed();
+  const productId = payload && payload.product_id ? Number(payload.product_id) : null;
+  const { rows } = await db.query(
+    `SELECT * FROM customer_assign_rules
+      WHERE is_active = 1 AND (product_id = $1 OR product_id IS NULL)
+      ORDER BY (product_id IS NULL) ASC, priority ASC, id ASC`, [productId]);
+  for (const rule of rows) {
+    let pool = [];
+    try { pool = Array.isArray(rule.user_ids) ? rule.user_ids : JSON.parse(rule.user_ids || '[]'); } catch (_) {}
+    pool = pool.map(Number).filter(Boolean);
+    if (!pool.length) continue;
+    const act = await db.query(`SELECT id, name FROM users WHERE id = ANY($1::int[]) AND is_active = 1`, [pool]);
+    const live = act.rows.map(r => Number(r.id));
+    const ordered = pool.filter(id => live.includes(id));
+    if (!ordered.length) continue;
+    const idx = rule.mode === 'fixed' ? 0 : (Number(rule.rr_position) % ordered.length);
+    const uid = ordered[idx];
+    const u = act.rows.find(x => Number(x.id) === uid);
+    return { ok: true, enabled: true, user_id: uid, user_name: u ? u.name : ('#' + uid),
+             rule_id: rule.id, rule_name: rule.name, mode: rule.mode, is_fallback: !!Number(rule.is_fallback) };
+  }
+  return { ok: true, enabled: true, user_id: null, user_name: null, note: 'No rule matched and no fallback pool set.' };
 }
 
-/**
- * Recompute and persist the rolled-up fields on the customer row from
- * its sales history. Called after every sale write.
- */
-async function _refreshAggregates(customerId) {
-  const sales = (await db.getAll('customer_sales'))
-    .filter(s => Number(s.customer_id) === Number(customerId));
-  const lifetime = sales
-    .filter(s => s.payment_status !== 'refunded')
-    .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-  const total = sales.length;
-  const lastPurchase = sales
-    .map(s => s.sold_at)
-    .filter(Boolean)
-    .sort((a, b) => String(b).localeCompare(String(a)))[0] || null;
-  const futureRenewals = sales
-    .filter(s => s.status === 'active' && s.subscription_end)
-    .map(s => s.subscription_end)
-    .sort((a, b) => String(a).localeCompare(String(b)));
-  const nextRenewal = futureRenewals[0] || null;
-  await db.update('customers', customerId, {
-    lifetime_value: lifetime,
-    total_purchases: total,
-    last_purchase_at: lastPurchase,
-    next_renewal_at: nextRenewal,
+/* ---------------------------------------------------------------------------
+ * CONVERT — the one write the sales rep makes.
+ * ------------------------------------------------------------------------- */
+async function api_customers_convert(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  await ensureSeed();
+  const p = payload || {};
+  const leadId = Number(p.lead_id) || null;
+  if (!leadId) throw new Error('lead_id required');
+
+  const lead = await db.findById('leads', leadId);
+  if (!lead) throw new Error('Lead not found');
+
+  // Idempotency. There is also a UNIQUE index on customers(lead_id) — belt and
+  // braces, because a double-clicked button that creates two customers would
+  // silently double-count the sale in every report below.
+  const dupe = await db.query('SELECT id FROM customers WHERE lead_id = $1 LIMIT 1', [leadId]);
+  if (dupe.rows[0]) throw new Error('This lead is already converted (customer #' + dupe.rows[0].id + ')');
+
+  const phone = _digits(p.phone || lead.phone || lead.whatsapp);
+  if (!phone) throw new Error('Customer phone is required — it is the key that links repeat orders');
+
+  // Repeat detection by phone tail. Same customer buying again = a second row.
+  let isRepeat = 0;
+  try {
+    const r = await db.query(
+      `SELECT id FROM customers WHERE right(regexp_replace(phone,'[^0-9]','','g'),10) = $1 LIMIT 1`,
+      [phone.slice(-10)]);
+    if (r.rows[0]) isRepeat = 1;
+  } catch (_) {}
+
+  const productId = p.product_id ? Number(p.product_id) : (lead.product_id ? Number(lead.product_id) : null);
+  let productName = p.product_name || lead.product || null;
+  if (productId && !productName) {
+    try {
+      const pr = await db.findById('products', productId);
+      if (pr) productName = pr.name;
+    } catch (_) {}
+  }
+
+  const pick = await _pickAssignee(productId);
+
+  const firstStage = await db.query(
+    `SELECT id FROM customer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC LIMIT 1`);
+  const stageId = firstStage.rows[0] ? Number(firstStage.rows[0].id) : null;
+
+  /* product_name is SNAPSHOT, not a live join: renaming a product later must not
+   * silently rewrite what past customers were sold. (The Inventory module already
+   * matches stock by product NAME and a rename breaks it — INVENTORY_STOCK_v1.) */
+  const id = await db.insert('customers', {
+    lead_id: leadId,
+    name: p.name || lead.name || ('Customer ' + phone.slice(-4)),
+    phone,
+    email: p.email || lead.email || null,
+    company: p.company || lead.company || null,
+    product_id: productId,
+    product_name: productName,
+    sale_amount: _num(p.sale_amount != null ? p.sale_amount : lead.value),
+    paid_amount: _num(p.paid_amount),
+    currency: p.currency || lead.currency || 'INR',
+    payment_mode: p.payment_mode || null,
+    payment_ref: p.payment_ref || null,
+    stage_id: stageId,
+    stage_started_at: db.nowIso(),
+    sales_user_id: lead.assigned_to || me.id,   // the rep KEEPS the credit, permanently
+    owner_user_id: pick.user_id,
+    assign_rule_id: pick.rule_id,
+    address: p.address || lead.address || null,
+    site_contact: p.site_contact || null,
+    target_date: p.target_date || null,
+    notes: p.notes || null,
+    extra_json: p.extra_json ? JSON.stringify(p.extra_json) : null,
+    is_repeat: isRepeat,
+    converted_by: me.id,
+    created_at: db.nowIso(),
     updated_at: db.nowIso()
   });
-}
 
-// ---------- list / get -------------------------------------------------
-
-async function api_customers_list(token, filters) {
-  const me = await authUser(token);
-  const visible = await getVisibleUserIds(me);
-  const usersById = await _userMap();
-  let rows = (await db.getAll('customers'))
-    .filter(c => _isVisibleSync(me, visible, c));
-  const f = filters || {};
-  if (f.status)       rows = rows.filter(c => c.status === f.status);
-  if (f.assigned_to)  rows = rows.filter(c => Number(c.assigned_to) === Number(f.assigned_to));
-  if (f.risk_profile) rows = rows.filter(c => c.risk_profile === f.risk_profile);
-  if (f.q) {
-    const q = String(f.q).toLowerCase();
-    rows = rows.filter(c =>
-      String(c.name || '').toLowerCase().includes(q) ||
-      String(c.phone || '').toLowerCase().includes(q) ||
-      String(c.email || '').toLowerCase().includes(q) ||
-      String(c.pan || '').toLowerCase().includes(q)
+  try {
+    await db.query(
+      `INSERT INTO customer_stage_history (customer_id, from_stage_id, to_stage_id, changed_by, note)
+       VALUES ($1, NULL, $2, $3, $4)`,
+      [id, stageId, me.id, 'Converted from lead #' + leadId +
+        (pick.user_id ? (' · auto-assigned by rule: ' + (pick.rule_name || pick.rule_id)) : ' · NO RULE MATCHED')]
     );
-  }
-  // "Renewal due" filter: subscription expires within N days
-  if (f.renewal_in_days) {
-    const cutoff = new Date(Date.now() + Number(f.renewal_in_days) * 86400000).toISOString();
-    rows = rows.filter(c => c.next_renewal_at && String(c.next_renewal_at) <= cutoff);
-  }
-  rows.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-  return rows.map(c => _hydrate(c, usersById));
+  } catch (_) {}
+
+  /* Audit on the LEAD too, so the rep's timeline shows where their customer went.
+   * lead_actions only — we do NOT touch leads.status_id. The lead stays exactly
+   * where the rep left it (Sale Done) and their conversion numbers stay stable. */
+  try {
+    await db.query(
+      `INSERT INTO lead_actions (lead_id, user_id, action_type, meta_json, created_at)
+       VALUES ($1, $2, 'note', $3, NOW())`,
+      [leadId, me.id, JSON.stringify({
+        customer_module: 'CUSTOMER_MODULE_v1', customer_id: id,
+        note: 'Converted to Customer #' + id + (pick.user_id ? (' — assigned to user #' + pick.user_id) : '')
+      })]
+    );
+  } catch (_) {}
+
+  return { ok: true, id, is_repeat: !!isRepeat,
+           owner_user_id: pick.user_id, rule_id: pick.rule_id, rule_name: pick.rule_name,
+           unassigned: !pick.user_id };
 }
 
-function _isVisibleSync(me, visible, customer) {
-  if (me.role === 'admin') return true;
-  if (!customer.assigned_to) return false;
-  return visible.includes(Number(customer.assigned_to));
+/* ---------------------------------------------------------------------------
+ * VISIBILITY — the "visible to both" rule, in one place.
+ * ------------------------------------------------------------------------- */
+async function _visibleWhere(me) {
+  if (me.role === 'admin') return { sql: '1=1', args: [] };
+  const visible = (await getVisibleUserIds(me)).map(Number);
+  const ids = visible.length ? visible : [Number(me.id)];
+  // sales rep OR assigned owner OR watcher — and managers/TLs get the same for
+  // everyone beneath them, which is what getVisibleUserIds already encodes.
+  return {
+    sql: `(c.sales_user_id = ANY($1::int[])
+           OR c.owner_user_id = ANY($1::int[])
+           OR EXISTS (SELECT 1 FROM customer_watchers w
+                       WHERE w.customer_id = c.id AND w.user_id = ANY($1::int[])))`,
+    args: [ids]
+  };
+}
+
+async function api_customers_list(token, payload) {
+  const me = await authUser(token);
+  if (!isEnabled()) return { ok: true, enabled: false, rows: [], total: 0 };
+  await ensureSeed();
+  const p = payload || {};
+  const v = await _visibleWhere(me);
+  const args = [...v.args];
+  const where = [v.sql];
+
+  const add = (frag, val) => { args.push(val); where.push(frag.replace('$$', '$' + args.length)); };
+  if (p.stage_id)      add('c.stage_id = $$', Number(p.stage_id));
+  if (p.product_id)    add('c.product_id = $$', Number(p.product_id));
+  if (p.owner_user_id) add('c.owner_user_id = $$', Number(p.owner_user_id));
+  if (p.sales_user_id) add('c.sales_user_id = $$', Number(p.sales_user_id));
+  if (p.from)          add('c.created_at >= $$', p.from);
+  if (p.to)            add('c.created_at <= $$', String(p.to).length <= 10 ? p.to + ' 23:59:59' : p.to);
+  if (p.q) {
+    args.push('%' + String(p.q).toLowerCase() + '%');
+    where.push(`(LOWER(c.name) LIKE $${args.length} OR c.phone LIKE $${args.length}
+                 OR LOWER(COALESCE(c.company,'')) LIKE $${args.length})`);
+  }
+  // scope=mine|shared: "mine" means I'm accountable for delivery; "shared" means
+  // I won it or I'm a specialist — I watch it but someone else drives it.
+  if (p.scope === 'mine')   add('c.owner_user_id = $$', Number(me.id));
+  if (p.scope === 'shared') add('(c.owner_user_id IS DISTINCT FROM $$ AND (c.sales_user_id = $$ OR EXISTS (SELECT 1 FROM customer_watchers w2 WHERE w2.customer_id = c.id AND w2.user_id = $$)))', Number(me.id));
+
+  const page = Math.max(1, Number(p.page) || 1);
+  const size = Math.min(200, Math.max(1, Number(p.page_size) || 50));
+  const W = where.join(' AND ');
+
+  const cnt = await db.query(`SELECT COUNT(*)::int AS n FROM customers c WHERE ${W}`, args);
+  const rows = await db.query(
+    `SELECT c.*,
+            s.name AS stage_name, s.color AS stage_color, s.expected_days, s.is_final AS stage_final,
+            uo.name AS owner_name, us.name AS sales_name
+       FROM customers c
+       LEFT JOIN customer_stages s ON s.id = c.stage_id
+       LEFT JOIN users uo ON uo.id = c.owner_user_id
+       LEFT JOIN users us ON us.id = c.sales_user_id
+      WHERE ${W}
+      ORDER BY c.created_at DESC
+      LIMIT ${size} OFFSET ${(page - 1) * size}`, args);
+
+  const meId = Number(me.id);
+  const out = rows.rows.map(r => Object.assign({}, r, {
+    is_mine: Number(r.owner_user_id) === meId,
+    is_watching: Number(r.sales_user_id) === meId && Number(r.owner_user_id) !== meId,
+    // SLA: red when it has sat in the stage longer than that stage allows.
+    days_in_stage: r.stage_started_at
+      ? Math.floor((Date.now() - new Date(r.stage_started_at).getTime()) / 86400000) : null
+  }));
+  return { ok: true, enabled: true, rows: out, total: Number(cnt.rows[0].n), page, page_size: size };
 }
 
 async function api_customers_get(token, id) {
   const me = await authUser(token);
-  const visible = await getVisibleUserIds(me);
-  const customer = await db.findById('customers', id);
-  if (!customer) throw new Error('Customer not found');
-  if (!_isVisibleSync(me, visible, customer)) throw new Error('Forbidden');
-
-  const usersById = await _userMap();
-  const products = await db.getAll('products');
-  const productById = Object.fromEntries(products.map(p => [Number(p.id), p]));
-
-  const sales = (await db.getAll('customer_sales'))
-    .filter(s => Number(s.customer_id) === Number(id))
-    .sort((a, b) => String(b.sold_at).localeCompare(String(a.sold_at)))
-    .map(s => Object.assign({}, s, {
-      sold_by_name: usersById[Number(s.sold_by)]?.name || '',
-      product_name: s.product_name || productById[Number(s.product_id)]?.name || ''
-    }));
-
-  const remarks = (await db.getAll('customer_remarks'))
-    .filter(r => Number(r.customer_id) === Number(id))
-    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-    .map(r => Object.assign({}, r, { user_name: usersById[Number(r.user_id)]?.name || 'System' }));
-
-  return {
-    customer: _hydrate(customer, usersById),
-    sales,
-    remarks
-  };
+  _assertEnabled();
+  const v = await _visibleWhere(me);
+  const r = await db.query(
+    `SELECT c.*, s.name AS stage_name, s.color AS stage_color,
+            uo.name AS owner_name, us.name AS sales_name
+       FROM customers c
+       LEFT JOIN customer_stages s ON s.id = c.stage_id
+       LEFT JOIN users uo ON uo.id = c.owner_user_id
+       LEFT JOIN users us ON us.id = c.sales_user_id
+      WHERE c.id = $${v.args.length + 1} AND ${v.sql}`, [...v.args, Number(id)]);
+  if (!r.rows[0]) throw new Error('Not found');
+  const hist = await db.query(
+    `SELECT h.*, u.name AS changed_by_name, f.name AS from_name, t.name AS to_name
+       FROM customer_stage_history h
+       LEFT JOIN users u ON u.id = h.changed_by
+       LEFT JOIN customer_stages f ON f.id = h.from_stage_id
+       LEFT JOIN customer_stages t ON t.id = h.to_stage_id
+      WHERE h.customer_id = $1 ORDER BY h.changed_at DESC`, [Number(id)]);
+  const watch = await db.query(
+    `SELECT w.*, u.name FROM customer_watchers w LEFT JOIN users u ON u.id = w.user_id
+      WHERE w.customer_id = $1`, [Number(id)]);
+  return { ok: true, customer: r.rows[0], history: hist.rows, watchers: watch.rows };
 }
 
-// ---------- create / update / delete ----------------------------------
-
-async function api_customers_create(token, payload) {
+/** Move the journey forward. Only the accountable owner (or admin) may. */
+async function api_customers_setStage(token, payload) {
   const me = await authUser(token);
+  _assertEnabled();
   const p = payload || {};
-  if (!p.name) throw new Error('Name required');
-  if (!p.phone && !p.email) throw new Error('Phone or email required');
-  const id = await db.insert('customers', {
-    from_lead_id:  p.from_lead_id || null,
-    name:          String(p.name).trim(),
-    phone:         (p.phone || '').replace(/\s+/g, ''),
-    alt_phone:     p.alt_phone || '',
-    whatsapp:      p.whatsapp || p.phone || '',
-    email:         (p.email || '').trim(),
-    pan:           (p.pan || '').toUpperCase().trim(),
-    date_of_birth: p.date_of_birth || null,
-    gender:        p.gender || '',
-    occupation:    p.occupation || '',
-    income_range:  p.income_range || '',
-    risk_profile:  p.risk_profile || '',
-    address:       p.address || '',
-    city:          p.city || '',
-    state:         p.state || '',
-    pincode:       p.pincode || '',
-    country:       p.country || 'India',
-    company:       p.company || '',
-    customer_since: p.customer_since || db.nowIso().slice(0, 10),
-    status:        p.status || 'active',
-    tags:          p.tags || '',
-    notes:         p.notes || '',
-    assigned_to:   p.assigned_to || me.id,
-    extra_json:    p.extra ? JSON.stringify(p.extra) : '',
-    created_by:    me.id,
-    created_at:    db.nowIso(),
-    updated_at:    db.nowIso()
+  const id = Number(p.id), stageId = Number(p.stage_id);
+  if (!id || !stageId) throw new Error('id and stage_id required');
+  const c = await db.findById('customers', id);
+  if (!c) throw new Error('Not found');
+  /* The sales rep watches but does not drive delivery — otherwise "who is
+   * accountable for this order" goes fuzzy again, which is the whole problem
+   * this module exists to solve. */
+  if (me.role !== 'admin' && me.role !== 'manager' && Number(c.owner_user_id) !== Number(me.id)) {
+    throw new Error('Only the assigned owner can move the stage');
+  }
+  const prev = c.stage_started_at ? Math.floor((Date.now() - new Date(c.stage_started_at).getTime()) / 1000) : null;
+  const st = await db.findById('customer_stages', stageId);
+  await db.update('customers', id, {
+    stage_id: stageId, stage_started_at: db.nowIso(), updated_at: db.nowIso(),
+    closed_at: (st && Number(st.is_final) === 1) ? db.nowIso() : null
   });
+  await db.query(
+    `INSERT INTO customer_stage_history (customer_id, from_stage_id, to_stage_id, duration_prev_s, changed_by, note)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [id, c.stage_id || null, stageId, prev, me.id, p.note || null]);
+  return { ok: true };
+}
+
+async function api_customers_update(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  const p = payload || {};
+  const id = Number(p.id);
+  if (!id) throw new Error('id required');
+  const c = await db.findById('customers', id);
+  if (!c) throw new Error('Not found');
+  const mayEdit = me.role === 'admin' || me.role === 'manager' ||
+                  Number(c.owner_user_id) === Number(me.id) ||
+                  Number(c.sales_user_id) === Number(me.id);
+  if (!mayEdit) throw new Error('Not allowed');
+  const patch = { updated_at: db.nowIso() };
+  ['name','email','company','sale_amount','paid_amount','payment_mode','payment_ref',
+   'address','site_contact','target_date','notes'].forEach(k => {
+    if (p[k] !== undefined) patch[k] = p[k];
+  });
+  if (p.extra_json !== undefined) patch.extra_json = JSON.stringify(p.extra_json || {});
+  // Reassigning the owner is an admin/manager act — not something a rep does.
+  if (p.owner_user_id !== undefined && (me.role === 'admin' || me.role === 'manager')) {
+    patch.owner_user_id = p.owner_user_id ? Number(p.owner_user_id) : null;
+  }
+  await db.update('customers', id, patch);
+  return { ok: true };
+}
+
+/** Pull a specialist in. They keep access afterwards — context shouldn't evaporate. */
+async function api_customers_addWatcher(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  const p = payload || {};
+  if (!p.id || !p.user_id) throw new Error('id and user_id required');
+  await db.query(
+    `INSERT INTO customer_watchers (customer_id, user_id, role, added_by)
+     VALUES ($1,$2,$3,$4) ON CONFLICT (customer_id, user_id) DO NOTHING`,
+    [Number(p.id), Number(p.user_id), p.role || 'specialist', me.id]);
+  return { ok: true };
+}
+async function api_customers_removeWatcher(token, payload) {
+  await authUser(token);
+  _assertEnabled();
+  const p = payload || {};
+  await db.query('DELETE FROM customer_watchers WHERE customer_id = $1 AND user_id = $2',
+    [Number(p.id), Number(p.user_id)]);
+  return { ok: true };
+}
+
+/* ---------------------------------------------------------------------------
+ * STAGES + RULES (admin)
+ * ------------------------------------------------------------------------- */
+async function api_customers_stages(token) {
+  await authUser(token);
+  if (!isEnabled()) return [];
+  await ensureSeed();
+  const r = await db.query('SELECT * FROM customer_stages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
+  return r.rows;
+}
+async function api_customers_stageSave(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  if (me.role !== 'admin') throw new Error('Admins only');
+  const p = payload || {};
+  if (!p.name) throw new Error('name required');
+  const row = {
+    name: p.name, color: p.color || '#6366f1',
+    sort_order: Number(p.sort_order) || 100,
+    expected_days: p.expected_days ? Number(p.expected_days) : null,
+    is_final: p.is_final ? 1 : 0, is_active: 1
+  };
+  if (p.id) { await db.update('customer_stages', Number(p.id), row); return { ok: true, id: Number(p.id) }; }
+  const id = await db.insert('customer_stages', Object.assign({ created_at: db.nowIso() }, row));
   return { ok: true, id };
 }
 
-/**
- * Convert a Won lead into a customer. Carries over contact + attribution
- * data, links back via from_lead_id, and (optionally) creates the first
- * customer_sales row from the lead's value/product so the sale is on
- * record from minute zero.
- */
-async function api_customers_convertFromLead(token, leadId, salePayload) {
-  const me = await authUser(token);
-  const lead = await db.findById('leads', leadId);
-  if (!lead) throw new Error('Lead not found');
-
-  const existing = (await db.getAll('customers'))
-    .find(c => Number(c.from_lead_id) === Number(leadId));
-  if (existing) {
-    return { ok: true, id: existing.id, already_existed: true };
-  }
-
-  const customerId = await db.insert('customers', {
-    from_lead_id:   lead.id,
-    name:           lead.name || '',
-    phone:          lead.phone || '',
-    alt_phone:      lead.alt_phone || '',
-    whatsapp:       lead.whatsapp || lead.phone || '',
-    email:          lead.email || '',
-    address:        lead.address || '',
-    city:           lead.city || '',
-    state:          lead.state || '',
-    pincode:        lead.pincode || '',
-    country:        lead.country || 'India',
-    company:        lead.company || '',
-    tags:           lead.tags || '',
-    notes:          lead.notes || '',
-    assigned_to:    lead.assigned_to || me.id,
-    customer_since: db.nowIso().slice(0, 10),
-    status:         'active',
-    created_by:     me.id,
-    created_at:     db.nowIso(),
-    updated_at:     db.nowIso()
-  });
-
-  // Auto-record the closing sale, defaulting to the lead's value/product.
-  // Caller can pass an explicit salePayload to override (e.g. choosing a
-  // different sale_type or amount).
-  if (salePayload !== false) {
-    const sp = salePayload || {};
-    await api_customers_addSale(token, customerId, {
-      product_id:      sp.product_id || lead.product_id || null,
-      product_name:    sp.product_name || '',
-      sale_type:       sp.sale_type || 'new',
-      amount:          sp.amount != null ? sp.amount : (lead.value || 0),
-      currency:        sp.currency || lead.currency || 'INR',
-      payment_status:  sp.payment_status || 'paid',
-      payment_method:  sp.payment_method || '',
-      payment_reference: sp.payment_reference || '',
-      subscription_start: sp.subscription_start || db.nowIso().slice(0, 10),
-      subscription_end:   sp.subscription_end || null,
-      notes:           sp.notes || 'Converted from lead #' + leadId
+async function api_customers_rules(token) {
+  await authUser(token);
+  if (!isEnabled()) return { ok: true, enabled: false, rows: [] };
+  await ensureSeed();
+  const r = await db.query(
+    `SELECT r.*, p.name AS product_name
+       FROM customer_assign_rules r
+       LEFT JOIN products p ON p.id = r.product_id
+      ORDER BY r.is_fallback ASC, r.priority ASC, r.id ASC`);
+  const users = await db.getAll('users');
+  const rows = r.rows.map(x => {
+    let ids = [];
+    try { ids = Array.isArray(x.user_ids) ? x.user_ids : JSON.parse(x.user_ids || '[]'); } catch (_) {}
+    ids = ids.map(Number).filter(Boolean);
+    const members = ids.map(uid => {
+      const u = users.find(y => Number(y.id) === uid);
+      return { id: uid, name: u ? u.name : ('#' + uid), is_active: u ? Number(u.is_active) : 0 };
     });
-  }
-
-  return { ok: true, id: customerId, already_existed: false };
-}
-
-async function api_customers_update(token, id, patch) {
-  const me = await authUser(token);
-  const cust = await db.findById('customers', id);
-  if (!cust) throw new Error('Customer not found');
-
-  // Only writable fields — protects aggregates and FKs from API callers.
-  const ALLOWED = new Set([
-    'name', 'phone', 'alt_phone', 'whatsapp', 'email', 'pan',
-    'date_of_birth', 'gender', 'occupation', 'income_range', 'risk_profile',
-    'address', 'city', 'state', 'pincode', 'country', 'company',
-    'status', 'tags', 'notes', 'assigned_to', 'customer_since'
-  ]);
-  const allowed = {};
-  for (const k of Object.keys(patch || {})) {
-    if (ALLOWED.has(k)) allowed[k] = patch[k];
-  }
-  allowed.updated_at = db.nowIso();
-  await db.update('customers', id, allowed);
-  return { ok: true };
-}
-
-async function api_customers_delete(token, id) {
-  const me = await authUser(token);
-  if (me.role !== 'admin') throw new Error('Only admins can delete customers');
-  // Hard delete cascades sales + remarks via FK.
-  await db.query('DELETE FROM customers WHERE id = $1', [Number(id)]);
-  return { ok: true };
-}
-
-// ---------- sales ------------------------------------------------------
-
-async function api_customers_addSale(token, customerId, payload) {
-  const me = await authUser(token);
-  const cust = await db.findById('customers', customerId);
-  if (!cust) throw new Error('Customer not found');
-  const p = payload || {};
-  if (!p.amount && p.amount !== 0) throw new Error('Sale amount required');
-
-  const products = await db.getAll('products');
-  const productName = p.product_name
-    || (p.product_id ? (products.find(x => Number(x.id) === Number(p.product_id))?.name || '') : '');
-
-  const id = await db.insert('customer_sales', {
-    customer_id:        Number(customerId),
-    product_id:         p.product_id || null,
-    product_name:       productName,
-    sale_type:          p.sale_type || 'new',
-    sold_at:            p.sold_at || db.nowIso(),
-    sold_by:            p.sold_by || me.id,
-    amount:             Number(p.amount) || 0,
-    currency:           p.currency || 'INR',
-    payment_status:     p.payment_status || 'paid',
-    payment_method:     p.payment_method || '',
-    payment_reference:  p.payment_reference || '',
-    subscription_start: p.subscription_start || null,
-    subscription_end:   p.subscription_end || null,
-    status:             p.status || 'active',
-    notes:              p.notes || '',
-    invoice_url:        p.invoice_url || '',
-    created_at:         db.nowIso()
+    const nextIdx = members.length ? (Number(x.rr_position) % members.length) : 0;
+    return Object.assign({}, x, { members, next_user_id: members[nextIdx] ? members[nextIdx].id : null });
   });
-  await _refreshAggregates(customerId);
+  return { ok: true, enabled: true, rows };
+}
+async function api_customers_ruleSave(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  if (me.role !== 'admin') throw new Error('Admins only');
+  const p = payload || {};
+  const ids = (Array.isArray(p.user_ids) ? p.user_ids : []).map(Number).filter(Boolean);
+  const row = {
+    name: p.name || null,
+    product_id: p.product_id ? Number(p.product_id) : null,
+    mode: ['round_robin', 'fixed', 'least_busy'].includes(p.mode) ? p.mode : 'round_robin',
+    user_ids: JSON.stringify(ids),
+    priority: Number(p.priority) || 100,
+    is_active: p.is_active === 0 ? 0 : 1,
+    updated_at: db.nowIso()
+  };
+  if (p.id) {
+    const ex = await db.findById('customer_assign_rules', Number(p.id));
+    // The fallback's product must stay NULL — that's what makes it catch everything.
+    if (ex && Number(ex.is_fallback) === 1) { row.product_id = null; row.is_active = 1; }
+    await db.update('customer_assign_rules', Number(p.id), row);
+    return { ok: true, id: Number(p.id) };
+  }
+  if (!row.product_id) throw new Error('Pick a product (only the built-in fallback may apply to every product)');
+  const id = await db.insert('customer_assign_rules',
+    Object.assign({ is_fallback: 0, rr_position: 0, created_by: me.id, created_at: db.nowIso() }, row));
   return { ok: true, id };
 }
-
-async function api_customers_updateSale(token, saleId, patch) {
+async function api_customers_ruleDelete(token, id) {
   const me = await authUser(token);
-  const sale = await db.findById('customer_sales', saleId);
-  if (!sale) throw new Error('Sale not found');
-  const ALLOWED = new Set([
-    'product_id', 'product_name', 'sale_type', 'sold_at', 'sold_by',
-    'amount', 'currency', 'payment_status', 'payment_method',
-    'payment_reference', 'subscription_start', 'subscription_end',
-    'status', 'notes', 'invoice_url'
-  ]);
-  const allowed = {};
-  for (const k of Object.keys(patch || {})) {
-    if (ALLOWED.has(k)) allowed[k] = patch[k];
-  }
-  await db.update('customer_sales', saleId, allowed);
-  await _refreshAggregates(sale.customer_id);
+  _assertEnabled();
+  if (me.role !== 'admin') throw new Error('Admins only');
+  const r = await db.findById('customer_assign_rules', Number(id));
+  if (!r) throw new Error('Not found');
+  /* Refuse to delete the catch-all. Without it a converted sale can land with
+   * owner = NULL and nobody delivers it. Edit its pool instead. */
+  if (Number(r.is_fallback) === 1) throw new Error('The fallback rule cannot be deleted — change who it points to instead');
+  await db.query('DELETE FROM customer_assign_rules WHERE id = $1', [Number(id)]);
   return { ok: true };
 }
 
-async function api_customers_deleteSale(token, saleId) {
-  const me = await authUser(token);
-  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or manager only');
-  const sale = await db.findById('customer_sales', saleId);
-  if (!sale) return { ok: true };
-  await db.query('DELETE FROM customer_sales WHERE id = $1', [Number(saleId)]);
-  await _refreshAggregates(sale.customer_id);
-  return { ok: true };
-}
-
-// ---------- remarks ----------------------------------------------------
-
-async function api_customers_addRemark(token, customerId, payload) {
-  const me = await authUser(token);
-  const p = payload || {};
-  if (!p.remark) throw new Error('Remark text required');
-  const id = await db.insert('customer_remarks', {
-    customer_id: Number(customerId),
-    user_id: me.id,
-    remark: String(p.remark).trim(),
-    remark_type: p.remark_type || 'note',
-    created_at: db.nowIso()
-  });
-  await db.update('customers', customerId, { updated_at: db.nowIso() });
-  return { ok: true, id };
-}
-
-// ---------- renewals report -------------------------------------------
-
-/**
- * Customers whose subscription is due to expire in the next N days.
- * Used by the dashboard tile + the Renewals tab.
- */
-async function api_customers_renewalsDue(token, withinDays) {
-  const me = await authUser(token);
-  const visible = await getVisibleUserIds(me);
-  const days = Number(withinDays) || 30;
-  const cutoff = new Date(Date.now() + days * 86400000).toISOString();
-  const customers = (await db.getAll('customers'))
-    .filter(c => _isVisibleSync(me, visible, c))
-    .filter(c => c.next_renewal_at && String(c.next_renewal_at) <= cutoff)
-    .sort((a, b) => String(a.next_renewal_at).localeCompare(String(b.next_renewal_at)));
-  const usersById = await _userMap();
-  return customers.map(c => _hydrate(c, usersById));
-}
-
-// ---------- bulk WhatsApp send to selected customers ------------------
-
-/**
- * Fire an approved WhatsApp template to every selected customer in one
- * shot. Bypasses the campaign queue (we have a bounded list, not a
- * filter), so:
- *   - sends sequentially with a 200ms gap to stay under Meta rate limits
- *   - logs each send into customer_remarks of type 'whatsapp' for the
- *     post-sale audit trail
- *   - reuses _sendTemplate so whatsapp_messages + tat logging come
- *     for free and the messages show up in the per-lead chat thread
- *     (when the customer's phone matches a lead phone).
+/* ---------------------------------------------------------------------------
+ * REPORTS — Gopal: "on Stage, saler Wise Volume, Count, Type Of product"
+ *   Volume = SUM(sale_amount)  ·  Count = COUNT(customers)
  *
- * Variables support per-customer merge tokens via @{name},
- * @{firstname}, @{phone}, @{email} — same renderer the lead campaigns
- * use, just sourcing the merge data from the customer record.
- */
-async function api_customers_bulkWhatsApp(token, customerIds, templateName, language, variables) {
+ * Every number below is computed IN SQL from customers.sale_amount — nothing is
+ * inferred from a status name. That matters: the existing reports.js decides
+ * "won" with `status.name === 'Won'`, and vserve's status is called "Sale Done",
+ * so every rep's won count reads 0 there today. This module can't inherit that
+ * bug because it never looks at a name.
+ * ------------------------------------------------------------------------- */
+async function api_customers_report(token, payload) {
   const me = await authUser(token);
-  if (!Array.isArray(customerIds) || !customerIds.length) {
-    throw new Error('customerIds required');
-  }
-  if (!templateName) throw new Error('templateName required');
-  const wb = require('./whatsbot');
-  const customers = await db.getAll('customers');
-  const targets = customerIds.map(id => customers.find(c => Number(c.id) === Number(id))).filter(Boolean);
-  let sent = 0, failed = 0;
-  const errors = [];
-  for (const c of targets) {
-    const phone = c.whatsapp || c.phone;
-    if (!phone) { failed++; errors.push({ customer_id: c.id, error: 'no phone' }); continue; }
-    // Render @{merge} tokens against the customer record
-    const renderedVars = (variables || []).map(v =>
-      wb._renderMerge(typeof v === 'string' ? v : (v.value || ''), c, { phone, name: c.name })
-    );
-    try {
-      const r = await wb._sendTemplate({
-        to: phone, templateName, language: language || 'en_US',
-        variables: renderedVars, imageUrl: null,
-        leadId: c.from_lead_id || null, userId: me.id
-      });
-      if (r.body?.error) {
-        failed++;
-        errors.push({ customer_id: c.id, error: r.body.error.message });
-      } else {
-        sent++;
-        // Audit trail on the customer
-        await db.insert('customer_remarks', {
-          customer_id: c.id, user_id: me.id,
-          remark: '📤 WhatsApp template sent: ' + templateName,
-          remark_type: 'whatsapp',
-          created_at: db.nowIso()
-        });
-      }
-    } catch (e) {
-      failed++;
-      errors.push({ customer_id: c.id, error: e.message });
-    }
-    // Stay polite to Meta: 5 msgs/sec is well within the free quota.
-    await new Promise(r => setTimeout(r, 200));
-  }
-  return { ok: true, sent, failed, total: targets.length, errors: errors.slice(0, 20) };
-}
+  if (!isEnabled()) return { ok: true, enabled: false };
+  await ensureSeed();
+  const p = payload || {};
+  const v = await _visibleWhere(me);
+  const args = [...v.args];
+  const where = [v.sql];
+  const add = (frag, val) => { args.push(val); where.push(frag.replace('$$', '$' + args.length)); };
+  if (p.from)       add('c.created_at >= $$', p.from);
+  if (p.to)         add('c.created_at <= $$', String(p.to).length <= 10 ? p.to + ' 23:59:59' : p.to);
+  if (p.product_id) add('c.product_id = $$', Number(p.product_id));
+  if (p.stage_id)   add('c.stage_id = $$', Number(p.stage_id));
+  const W = where.join(' AND ');
 
-// ---------- reports ----------------------------------------------------
+  const totals = await db.query(
+    `SELECT COUNT(*)::int AS count,
+            COALESCE(SUM(c.sale_amount),0)::float AS volume,
+            COALESCE(SUM(c.paid_amount),0)::float AS collected,
+            COUNT(DISTINCT right(regexp_replace(c.phone,'[^0-9]','','g'),10))::int AS unique_customers,
+            COUNT(*) FILTER (WHERE c.closed_at IS NOT NULL)::int AS completed
+       FROM customers c WHERE ${W}`, args);
 
-/**
- * Aggregate stats for the Customer Reports view.
- * Computed in JS over the in-memory rows so the function doesn't need
- * Postgres-specific window functions; on a 50k-customer database this
- * still runs in well under a second.
- */
-async function api_customers_reports(token, opts) {
-  const me = await authUser(token);
-  const visible = await getVisibleUserIds(me);
-  const o = opts || {};
-  const monthsBack = Number(o.months_back) || 12;
+  const byStage = await db.query(
+    `SELECT s.id AS stage_id, s.name AS stage, s.color, s.sort_order,
+            COUNT(c.id)::int AS count,
+            COALESCE(SUM(c.sale_amount),0)::float AS volume
+       FROM customer_stages s
+       LEFT JOIN customers c ON c.stage_id = s.id AND ${W}
+      WHERE s.is_active = 1
+      GROUP BY s.id, s.name, s.color, s.sort_order
+      ORDER BY s.sort_order ASC`, args);
 
-  const customers = (await db.getAll('customers'))
-    .filter(c => _isVisibleSync(me, visible, c));
-  const sales = await db.getAll('customer_sales');
-  const customersById = Object.fromEntries(customers.map(c => [Number(c.id), c]));
-  // Filter sales to only those belonging to visible customers
-  const visSales = sales.filter(s => customersById[Number(s.customer_id)]);
+  // "saler wise" — the SALES rep who won it (sales_user_id), not the back-office owner.
+  const bySales = await db.query(
+    `SELECT u.id AS user_id, u.name,
+            COUNT(c.id)::int AS count,
+            COALESCE(SUM(c.sale_amount),0)::float AS volume,
+            COALESCE(SUM(c.paid_amount),0)::float AS collected
+       FROM customers c
+       JOIN users u ON u.id = c.sales_user_id
+      WHERE ${W}
+      GROUP BY u.id, u.name
+      ORDER BY volume DESC`, args);
 
-  // ---- Top-line KPIs ---------------------------------------------------
-  const totalCustomers = customers.length;
-  const activeCustomers = customers.filter(c => c.status === 'active').length;
-  const lapsedCustomers = customers.filter(c => c.status === 'lapsed').length;
-  const churnedCustomers = customers.filter(c => c.status === 'churned').length;
-  const totalLifetime = customers.reduce((s, c) => s + Number(c.lifetime_value || 0), 0);
-  const avgLifetime = totalCustomers ? totalLifetime / totalCustomers : 0;
+  const byOwner = await db.query(
+    `SELECT u.id AS user_id, u.name,
+            COUNT(c.id)::int AS count,
+            COALESCE(SUM(c.sale_amount),0)::float AS volume,
+            COUNT(c.id) FILTER (WHERE c.closed_at IS NULL)::int AS open_count
+       FROM customers c
+       JOIN users u ON u.id = c.owner_user_id
+      WHERE ${W}
+      GROUP BY u.id, u.name
+      ORDER BY volume DESC`, args);
 
-  // ---- MRR (Monthly Recurring Revenue) --------------------------------
-  // For every ACTIVE sale row with a subscription_start/end, prorate
-  // amount over the subscription duration in months. Sum across all
-  // active sales = current MRR. Easy to grasp, accurate enough.
-  const today = new Date();
-  let mrr = 0;
-  for (const s of visSales) {
-    if (s.status !== 'active') continue;
-    if (!s.subscription_start || !s.subscription_end) continue;
-    const start = new Date(s.subscription_start);
-    const end = new Date(s.subscription_end);
-    // Skip subscriptions whose window has already ended
-    if (end < today) continue;
-    const months = Math.max(1, Math.round((end - start) / (30 * 86400000)));
-    mrr += (Number(s.amount) || 0) / months;
-  }
+  const byProduct = await db.query(
+    `SELECT COALESCE(c.product_name, '— none —') AS product,
+            c.product_id,
+            COUNT(c.id)::int AS count,
+            COALESCE(SUM(c.sale_amount),0)::float AS volume
+       FROM customers c WHERE ${W}
+      GROUP BY c.product_name, c.product_id
+      ORDER BY volume DESC`, args);
 
-  // ---- Renewal rate (last 90 days) ------------------------------------
-  // Of the subs whose subscription_end fell in the last 90 days, what %
-  // was followed by another sale (renewal type) for the same customer
-  // within ±30 days of that end date?
-  const window = 90 * 86400000;
-  const cutoff = new Date(today.getTime() - window);
-  const expiredRecently = visSales.filter(s =>
-    s.subscription_end &&
-    new Date(s.subscription_end) >= cutoff &&
-    new Date(s.subscription_end) <= today
-  );
-  let renewed = 0;
-  for (const s of expiredRecently) {
-    const endTs = new Date(s.subscription_end).getTime();
-    const hasRenewal = visSales.some(other =>
-      other.id !== s.id &&
-      Number(other.customer_id) === Number(s.customer_id) &&
-      other.sale_type === 'renewal' &&
-      Math.abs(new Date(other.sold_at).getTime() - endTs) <= 30 * 86400000
-    );
-    if (hasRenewal) renewed++;
-  }
-  const renewalRate = expiredRecently.length ? (renewed / expiredRecently.length) : null;
-
-  // ---- Top 10 customers by lifetime value -----------------------------
-  const usersById = await _userMap();
-  const topByLtv = [...customers]
-    .sort((a, b) => Number(b.lifetime_value || 0) - Number(a.lifetime_value || 0))
-    .slice(0, 10)
-    .map(c => Object.assign({}, c, {
-      assigned_name: usersById[Number(c.assigned_to)]?.name || ''
-    }));
-
-  // ---- Sales by month (last N months) ---------------------------------
-  const byMonth = {};
-  for (const s of visSales) {
-    const m = String(s.sold_at || '').slice(0, 7);
-    if (!m) continue;
-    byMonth[m] = byMonth[m] || { month: m, count: 0, amount: 0, new: 0, renewal: 0, upgrade: 0, cross_sell: 0 };
-    byMonth[m].count++;
-    byMonth[m].amount += Number(s.amount) || 0;
-    if (s.sale_type) byMonth[m][s.sale_type] = (byMonth[m][s.sale_type] || 0) + 1;
-  }
-  const salesByMonth = Object.values(byMonth)
-    .sort((a, b) => a.month.localeCompare(b.month))
-    .slice(-monthsBack);
-
-  // ---- Sales by product ----------------------------------------------
-  const byProduct = {};
-  for (const s of visSales) {
-    const key = s.product_name || 'Unknown';
-    byProduct[key] = byProduct[key] || { product: key, count: 0, amount: 0 };
-    byProduct[key].count++;
-    byProduct[key].amount += Number(s.amount) || 0;
-  }
-  const salesByProduct = Object.values(byProduct)
-    .sort((a, b) => b.amount - a.amount);
-
-  // ---- Sales by rep --------------------------------------------------
-  const byRep = {};
-  for (const s of visSales) {
-    const u = usersById[Number(s.sold_by)];
-    const key = u ? u.name : 'Unassigned';
-    byRep[key] = byRep[key] || { rep: key, count: 0, amount: 0 };
-    byRep[key].count++;
-    byRep[key].amount += Number(s.amount) || 0;
-  }
-  const salesByRep = Object.values(byRep)
-    .sort((a, b) => b.amount - a.amount);
-
-  // ---- New customers per month ---------------------------------------
-  const newByMonth = {};
-  for (const c of customers) {
-    const m = String(c.customer_since || c.created_at || '').slice(0, 7);
-    if (!m) continue;
-    newByMonth[m] = (newByMonth[m] || 0) + 1;
-  }
-  const customerGrowth = Object.entries(newByMonth)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-monthsBack)
-    .map(([month, count]) => ({ month, count }));
-
-  // ---- Renewals due summary ------------------------------------------
-  const due7  = customers.filter(c => c.next_renewal_at && _withinDays(c.next_renewal_at, 7)).length;
-  const due30 = customers.filter(c => c.next_renewal_at && _withinDays(c.next_renewal_at, 30)).length;
-  const due90 = customers.filter(c => c.next_renewal_at && _withinDays(c.next_renewal_at, 90)).length;
+  // Stage × product — which product jams where. The reason the module earns its keep.
+  const stageByProduct = await db.query(
+    `SELECT COALESCE(c.product_name,'— none —') AS product,
+            COALESCE(s.name,'—') AS stage,
+            COUNT(c.id)::int AS count,
+            COALESCE(SUM(c.sale_amount),0)::float AS volume
+       FROM customers c
+       LEFT JOIN customer_stages s ON s.id = c.stage_id
+      WHERE ${W}
+      GROUP BY c.product_name, s.name, s.sort_order
+      ORDER BY c.product_name ASC, s.sort_order ASC`, args);
 
   return {
-    kpis: {
-      total_customers: totalCustomers,
-      active: activeCustomers,
-      lapsed: lapsedCustomers,
-      churned: churnedCustomers,
-      total_lifetime: Math.round(totalLifetime),
-      avg_lifetime: Math.round(avgLifetime),
-      mrr: Math.round(mrr),
-      renewal_rate: renewalRate,
-      renewals_expired_window: expiredRecently.length,
-      renewals_renewed: renewed,
-      renewals_due_7d: due7,
-      renewals_due_30d: due30,
-      renewals_due_90d: due90
-    },
-    top_by_ltv: topByLtv,
-    sales_by_month: salesByMonth,
-    sales_by_product: salesByProduct,
-    sales_by_rep: salesByRep,
-    customer_growth: customerGrowth
+    ok: true, enabled: true,
+    totals: totals.rows[0],
+    by_stage: byStage.rows,
+    by_sales: bySales.rows,
+    by_owner: byOwner.rows,
+    by_product: byProduct.rows,
+    stage_by_product: stageByProduct.rows
   };
-}
-
-function _withinDays(iso, days) {
-  if (!iso) return false;
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return false;
-  const now = Date.now();
-  const cutoff = now + days * 86400000;
-  return t >= now && t <= cutoff;
 }
 
 module.exports = {
-  api_customers_list, api_customers_get,
-  api_customers_create, api_customers_convertFromLead,
-  api_customers_update, api_customers_delete,
-  api_customers_addSale, api_customers_updateSale, api_customers_deleteSale,
-  api_customers_addRemark,
-  api_customers_renewalsDue,
-  api_customers_bulkWhatsApp,
-  api_customers_reports
+  isEnabled, ensureSeed,
+  api_customers_convert, api_customers_previewAssignee,
+  api_customers_list, api_customers_get, api_customers_setStage, api_customers_update,
+  api_customers_addWatcher, api_customers_removeWatcher,
+  api_customers_stages, api_customers_stageSave,
+  api_customers_rules, api_customers_ruleSave, api_customers_ruleDelete,
+  api_customers_report
 };
