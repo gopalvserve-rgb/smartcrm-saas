@@ -202,3 +202,4 @@ try { require('./solar');        } catch (e) { console.warn('[packs] solar load:
 try { require('./manufacturer'); } catch (e) { console.warn('[packs] manufacturer load:', e.message); }
 try { require('./holiday');      } catch (e) { console.warn('[packs] holiday load:', e.message); }
 try { require('./ecommerce');    } catch (e) { console.warn('[packs] ecommerce load:', e.message); }
+try { require('./whatsapp');     } catch (e) { console.warn('[packs] whatsapp load:', e.message); }  // WHATSAPP_PACK_v1
