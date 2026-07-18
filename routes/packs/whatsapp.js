@@ -57,6 +57,59 @@ async function _installer({ db: D }) {
     )
   `, []);
   await D.query(`CREATE INDEX IF NOT EXISTS wapack_inbox_log_idx ON wapack_inbox_log(phone, created_at DESC)`, []);
+
+  // ── WhatsApp Forms (in-chat lead capture) ───────────────────────
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_forms (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT,
+      fields_json TEXT,          -- [{key,label,type,required,options[]}]
+      status      TEXT NOT NULL DEFAULT 'draft',  -- draft|published
+      submissions INT NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_form_responses (
+      id           SERIAL PRIMARY KEY,
+      form_id      INT NOT NULL,
+      lead_id      INT,
+      phone        TEXT,
+      contact_name TEXT,
+      answers_json TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS wapack_form_resp_idx ON wapack_form_responses(form_id)`, []);
+
+  // ── In-chat WebViews (web pages opened inside the chat) ─────────
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_webviews (
+      id          SERIAL PRIMARY KEY,
+      title       TEXT NOT NULL,
+      url         TEXT NOT NULL,
+      description TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
+
+  // ── E-commerce: store connections + product catalog ─────────────
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_shop_connections (
+      provider     TEXT PRIMARY KEY,   -- shopify | woocommerce | meta_catalog
+      status       TEXT NOT NULL DEFAULT 'disconnected',  -- connected|disconnected
+      store_url    TEXT,
+      connected_at TIMESTAMPTZ
+    )`, []);
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_products (
+      id         SERIAL PRIMARY KEY,
+      source     TEXT,                 -- shopify | woocommerce | meta_catalog | manual
+      name       TEXT NOT NULL,
+      sku        TEXT,
+      price_inr  NUMERIC(12,2),
+      image_url  TEXT,
+      in_stock   INT NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
 }
 
 async function _ensure() {
@@ -387,6 +440,151 @@ async function api_wapack_retarget_createCampaign(token, args) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  FEATURE 3 — WhatsApp Forms (in-chat lead capture)
+// ══════════════════════════════════════════════════════════════════
+async function api_wapack_forms_list(token) {
+  await _gate(token);
+  const r = await db.query(`SELECT * FROM wapack_forms ORDER BY id DESC`, []);
+  return { forms: (r.rows || []).map(f => ({ ...f, fields: _json(f.fields_json, []) })) };
+}
+function _json(s, d) { try { return s ? JSON.parse(s) : d; } catch (_) { return d; } }
+
+async function api_wapack_form_save(token, args) {
+  await _gate(token);
+  args = args || {};
+  const id = Number(args.id || 0);
+  const fields = Array.isArray(args.fields) ? args.fields : _json(args.fields_json, []);
+  const data = {
+    name: (args.name || '').trim() || 'Untitled form',
+    description: args.description || null,
+    fields_json: JSON.stringify(fields),
+    status: args.status === 'published' ? 'published' : 'draft'
+  };
+  if (id > 0) {
+    await db.query(`UPDATE wapack_forms SET name=$1, description=$2, fields_json=$3, status=$4 WHERE id=$5`,
+      [data.name, data.description, data.fields_json, data.status, id]);
+    return { ok: true, id };
+  }
+  const r = await db.query(
+    `INSERT INTO wapack_forms (name, description, fields_json, status) VALUES ($1,$2,$3,$4) RETURNING id`,
+    [data.name, data.description, data.fields_json, data.status]);
+  return { ok: true, id: r.rows[0].id };
+}
+async function api_wapack_form_delete(token, args) {
+  await _gate(token);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM wapack_form_responses WHERE form_id=$1`, [id]);
+  await db.query(`DELETE FROM wapack_forms WHERE id=$1`, [id]);
+  return { ok: true };
+}
+async function api_wapack_form_responses(token, args) {
+  await _gate(token);
+  const fid = Number((args && args.form_id) || 0);
+  if (!fid) return { responses: [] };
+  const r = await db.query(
+    `SELECT * FROM wapack_form_responses WHERE form_id=$1 ORDER BY id DESC LIMIT 200`, [fid]);
+  return { responses: (r.rows || []).map(x => ({ ...x, answers: _json(x.answers_json, {}) })) };
+}
+
+// ── In-chat WebViews ──────────────────────────────────────────────
+async function api_wapack_webviews_list(token) {
+  await _gate(token);
+  const r = await db.query(`SELECT * FROM wapack_webviews ORDER BY id DESC`, []);
+  return { webviews: r.rows || [] };
+}
+async function api_wapack_webview_save(token, args) {
+  await _gate(token);
+  args = args || {};
+  const id = Number(args.id || 0);
+  if (!args.title || !args.url) throw new Error('title and url required');
+  if (id > 0) {
+    await db.query(`UPDATE wapack_webviews SET title=$1, url=$2, description=$3 WHERE id=$4`,
+      [args.title, args.url, args.description || null, id]);
+    return { ok: true, id };
+  }
+  const r = await db.query(`INSERT INTO wapack_webviews (title, url, description) VALUES ($1,$2,$3) RETURNING id`,
+    [args.title, args.url, args.description || null]);
+  return { ok: true, id: r.rows[0].id };
+}
+async function api_wapack_webview_delete(token, args) {
+  await _gate(token);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM wapack_webviews WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  FEATURE 4 — Storefront (Shopify / WooCommerce / FB catalog)
+// ══════════════════════════════════════════════════════════════════
+const SHOP_PROVIDERS = [
+  ['shopify',      'Shopify',      '🛍️', 'Sync products & orders from your Shopify store'],
+  ['woocommerce',  'WooCommerce',  '🪵', 'Sync products from your WooCommerce site'],
+  ['meta_catalog', 'Facebook Catalog', '📘', 'Link your Meta catalog to show products in WhatsApp']
+];
+
+async function api_wapack_shop_connections(token) {
+  await _gate(token);
+  const rows = (await db.query(`SELECT * FROM wapack_shop_connections`, [])).rows || [];
+  const byProv = {}; rows.forEach(r => { byProv[r.provider] = r; });
+  const providers = SHOP_PROVIDERS.map(([id, name, icon, blurb]) => ({
+    provider: id, name, icon, blurb,
+    status: (byProv[id] && byProv[id].status) || 'disconnected',
+    store_url: byProv[id] && byProv[id].store_url || null
+  }));
+  const productCount = Number(((await db.query(`SELECT COUNT(*)::int AS n FROM wapack_products`, [])).rows[0] || {}).n || 0);
+  return { providers, product_count: productCount };
+}
+
+// NOTE: a real connection performs OAuth against the store and needs the
+// merchant's API keys. This endpoint records a connection so the CRM side
+// is demonstrable; wiring the live sync happens once keys are supplied.
+async function api_wapack_shop_connect(token, args) {
+  await _gate(token);
+  args = args || {};
+  const provider = String(args.provider || '');
+  if (!SHOP_PROVIDERS.some(p => p[0] === provider)) throw new Error('Unknown provider');
+  const status = args.disconnect ? 'disconnected' : 'connected';
+  await db.query(
+    `INSERT INTO wapack_shop_connections (provider, status, store_url, connected_at)
+     VALUES ($1,$2,$3, CASE WHEN $2='connected' THEN now() ELSE NULL END)
+     ON CONFLICT (provider) DO UPDATE SET status=$2, store_url=COALESCE($3, wapack_shop_connections.store_url),
+       connected_at = CASE WHEN $2='connected' THEN now() ELSE NULL END`,
+    [provider, status, args.store_url || null]);
+  return { ok: true, provider, status };
+}
+
+async function api_wapack_products_list(token, args) {
+  await _gate(token);
+  args = args || {};
+  const params = [];
+  let where = '1=1';
+  if (args.source) { params.push(String(args.source)); where += ` AND source=$${params.length}`; }
+  const r = await db.query(`SELECT * FROM wapack_products WHERE ${where} ORDER BY id DESC LIMIT 200`, params);
+  return { products: r.rows || [] };
+}
+
+// Send a product card into a WhatsApp chat (writes an outbound message row).
+async function api_wapack_product_send(token, args) {
+  const me = await _gate(token);
+  args = args || {};
+  const pid = Number(args.product_id || 0);
+  const phone = String(args.phone || '');
+  if (!pid || !phone) throw new Error('product_id and phone required');
+  const p = (await db.query(`SELECT * FROM wapack_products WHERE id=$1`, [pid])).rows[0];
+  if (!p) throw new Error('Product not found');
+  const body = '🛍️ *' + p.name + '*\n' + (p.price_inr ? '₹' + Number(p.price_inr).toLocaleString('en-IN') + '\n' : '') +
+    (p.in_stock ? 'In stock — reply to order.' : 'Currently out of stock.');
+  const lead = (await db.query(`SELECT id FROM leads WHERE phone=$1 OR whatsapp=$1 LIMIT 1`, [phone])).rows[0];
+  await db.query(
+    `INSERT INTO whatsapp_messages (lead_id, direction, to_number, body, status, created_at)
+     VALUES ($1,'out',$2,$3,'read', now())`,
+    [lead ? lead.id : null, phone, body]);
+  return { ok: true, sent_to: phone };
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  SHOWCASE SEED — populates a demo tenant (showcase-whatsapp) with
 //  realistic conversations, agents, campaigns and handoffs so every
 //  pack feature has data to show. Idempotent (skips if already seeded).
@@ -513,9 +711,72 @@ async function api_wapack_seedDemo(token) {
     // rest stay unassigned
   }
 
+  // 4. WhatsApp Forms + responses (wipe-and-reseed).
+  await db.query(`DELETE FROM wapack_form_responses`, []).catch(() => {});
+  await db.query(`DELETE FROM wapack_forms`, []).catch(() => {});
+  const demoForm = (await db.query(
+    `INSERT INTO wapack_forms (name, description, fields_json, status, submissions)
+     VALUES ('Demo Booking Request','Captured right inside the WhatsApp chat',$1,'published',3) RETURNING id`,
+    [JSON.stringify([
+      { key: 'name', label: 'Full name', type: 'text', required: true },
+      { key: 'company', label: 'Company', type: 'text', required: false },
+      { key: 'team_size', label: 'Team size', type: 'select', required: true, options: ['1-10', '11-50', '51-200', '200+'] },
+      { key: 'email', label: 'Work email', type: 'email', required: true }
+    ])])).rows[0].id;
+  await db.query(
+    `INSERT INTO wapack_forms (name, description, fields_json, status)
+     VALUES ('Support Ticket','Let customers raise an issue in-chat',$1,'draft')`,
+    [JSON.stringify([
+      { key: 'issue', label: 'What went wrong?', type: 'text', required: true },
+      { key: 'priority', label: 'Priority', type: 'select', required: true, options: ['Low', 'Medium', 'High'] }
+    ])]).catch(() => {});
+  const respSamples = [
+    ['Rahul Kapoor', { name: 'Rahul Kapoor', company: 'Kapoor Retail', team_size: '11-50', email: 'rahul@kapoor.co' }],
+    ['Sneha Patel',  { name: 'Sneha Patel', company: 'Patel Foods', team_size: '1-10', email: 'sneha@patelfoods.in' }],
+    ['Meera Reddy',  { name: 'Meera Reddy', company: 'Reddy Textiles', team_size: '51-200', email: 'meera@reddytex.com' }]
+  ];
+  for (const [nm, ans] of respSamples) {
+    const l = (await db.query(`SELECT id, phone FROM leads WHERE name=$1 AND source='WA Demo' LIMIT 1`, [nm])).rows[0];
+    await db.query(
+      `INSERT INTO wapack_form_responses (form_id, lead_id, phone, contact_name, answers_json, created_at)
+       VALUES ($1,$2,$3,$4,$5, now() - interval '2 days')`,
+      [demoForm, l && l.id, l && l.phone, nm, JSON.stringify(ans)]).catch(() => {});
+  }
+
+  // 5. In-chat WebViews.
+  await db.query(`DELETE FROM wapack_webviews`, []).catch(() => {});
+  for (const [t, u, d] of [
+    ['Pricing Plans', 'https://smartcrmsolution.com/pricing', 'Live pricing page — opens inside the chat'],
+    ['Book a Demo',   'https://smartcrmsolution.com/demo',    'Calendar booking without leaving WhatsApp'],
+    ['Product Tour',  'https://smartcrmsolution.com/tour',    'Interactive walkthrough']
+  ]) {
+    await db.query(`INSERT INTO wapack_webviews (title, url, description) VALUES ($1,$2,$3)`, [t, u, d]).catch(() => {});
+  }
+
+  // 6. Storefront — connections + demo product catalog.
+  await db.query(`INSERT INTO wapack_shop_connections (provider,status,store_url,connected_at)
+    VALUES ('shopify','connected','demo-store.myshopify.com',now())
+    ON CONFLICT (provider) DO UPDATE SET status='connected', store_url='demo-store.myshopify.com', connected_at=now()`, []).catch(() => {});
+  await db.query(`DELETE FROM wapack_products`, []).catch(() => {});
+  const PRODUCTS = [
+    ['shopify', 'Wireless Earbuds Pro', 'EAR-PRO', 2499, 1],
+    ['shopify', 'Smart Watch Series 6', 'WATCH-6', 5999, 1],
+    ['shopify', 'Bluetooth Speaker Mini', 'SPK-MINI', 1299, 1],
+    ['woocommerce', 'Organic Green Tea 250g', 'TEA-250', 349, 1],
+    ['woocommerce', 'Yoga Mat Premium', 'YOGA-PRM', 899, 0],
+    ['meta_catalog', 'Cotton Kurta (Blue)', 'KRT-BLU', 1199, 1]
+  ];
+  for (const [src, nm, sku, price, stock] of PRODUCTS) {
+    await db.query(
+      `INSERT INTO wapack_products (source, name, sku, price_inr, in_stock) VALUES ($1,$2,$3,$4,$5)`,
+      [src, nm, sku, price, stock]).catch(() => {});
+  }
+
   return {
     ok: true,
-    seeded: { customers: _DEMO_CUSTOMERS.length, agents: agentIds.length, campaign, inbox_rows: demoLeads.length }
+    seeded: { customers: _DEMO_CUSTOMERS.length, agents: agentIds.length, campaign,
+      inbox_rows: demoLeads.length, forms: 2, form_responses: respSamples.length,
+      webviews: 3, products: PRODUCTS.length }
   };
 }
 
@@ -532,6 +793,8 @@ framework.register({
   installer:   _installer,
   navItems: [
     { id: 'wapackinbox',    label: 'Team Inbox',        icon: '📥', view: 'wapackinbox' },
+    { id: 'wapackforms',    label: 'Forms & WebViews',  icon: '📝', view: 'wapackforms' },
+    { id: 'wapackshop',     label: 'Storefront',        icon: '🛒', view: 'wapackshop' },
     { id: 'wapackretarget', label: 'Smart Retargeting', icon: '🎯', view: 'wapackretarget' }
   ]
 });
@@ -549,6 +812,17 @@ module.exports = {
   api_wapack_retarget_segments,
   api_wapack_retarget_audience,
   api_wapack_retarget_createCampaign,
+  api_wapack_forms_list,
+  api_wapack_form_save,
+  api_wapack_form_delete,
+  api_wapack_form_responses,
+  api_wapack_webviews_list,
+  api_wapack_webview_save,
+  api_wapack_webview_delete,
+  api_wapack_shop_connections,
+  api_wapack_shop_connect,
+  api_wapack_products_list,
+  api_wapack_product_send,
   api_wapack_seedDemo,
   _installer,
   RETARGET_SEGMENTS
