@@ -1099,6 +1099,24 @@ app.get('/p/:pageSlug', (req, res, next) => {
   });
 });
 
+// ---- Public Storefront (tenant-scoped, WhatsApp Suite pack) ----
+// GET  /t/<slug>/store         — customer store page (browse + order)
+// POST /t/<slug>/store/order   — place an order → creates lead + remark + notify
+app.get('/store', (req, res, next) => {
+  if (!req.tenant) return res.status(404).send('Store not found');
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
+    require('./routes/packs/whatsapp').expressRenderStore(req, res).catch(next);
+  });
+});
+app.post('/store/order', (req, res, next) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Store not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
+    require('./routes/packs/whatsapp').expressPlaceOrder(req, res).catch(next);
+  });
+});
+
 // ---- Public WhatsApp Chat Widget (tenant-scoped, embeddable on external sites) ----
 // GET  /t/<slug>/widget/wa.js?w=<widget-slug>   — self-contained injector JS
 // POST /t/<slug>/widget/click                   — beacon: bumps counter + optional lead

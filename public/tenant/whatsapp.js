@@ -647,82 +647,202 @@
     //  STOREFRONT — Shopify / WooCommerce / FB catalog
     // ════════════════════════════════════════════════════════════════
     VIEWS.wapackshop = async function (view) {
-      let tab = 'connections';
+      var SLUG = (location.pathname.match(/\/t\/([^\/]+)/) || [])[1] || '';
+      var STORE_URL = location.origin + '/t/' + SLUG + '/store';
+      var inpS = function () { return { width: '100%', padding: '9px 11px', border: '1px solid #d1fae5', borderRadius: '8px', boxSizing: 'border-box', fontSize: '14px' }; };
+      var money = function (n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); };
+      let tab = 'store';
       function render() {
         view.innerHTML = '';
         view.appendChild(topbar('WhatsApp / Storefront', '🛒 Storefront', [btn('🔄 Refresh', function () { render(); })]));
-        const tabs = h('div', { style: { display: 'flex', gap: '6px', background: '#fff', padding: '6px', borderRadius: '10px', border: '1px solid #d1fae5', marginBottom: '14px', width: 'fit-content' } });
-        [['connections', '🔌 Connections'], ['catalog', '🛍️ Catalog']].forEach(function (t) {
+        const tabs = h('div', { style: { display: 'flex', gap: '6px', background: '#fff', padding: '6px', borderRadius: '10px', border: '1px solid #d1fae5', marginBottom: '14px', flexWrap: 'wrap' } });
+        [['store', '🏪 My Store'], ['products', '📦 Products'], ['orders', '🧾 Orders']].forEach(function (t) {
           tabs.appendChild(h('button', { style: tabStyle(tab === t[0]), onclick: function () { tab = t[0]; render(); } }, t[1]));
         });
         view.appendChild(tabs);
         const body = h('div'); view.appendChild(body);
-        (tab === 'connections' ? renderConnections : renderCatalog)(body);
+        (tab === 'store' ? renderStore : tab === 'products' ? renderProducts : renderOrders)(body);
       }
 
-      async function renderConnections(body) {
+      /* ---------------- My Store ---------------- */
+      async function renderStore(body) {
         body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
-        let data;
-        try { data = await api('api_wapack_shop_connections'); }
-        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        let store = {}, count = 0;
+        try { var d = await api('api_wapack_store_get'); store = d.store || {}; count = d.product_count || 0; } catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
         body.innerHTML = '';
-        body.appendChild(h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '12px' } },
-          data.product_count + ' products in catalog · connect a store to auto-sync products and show them inside WhatsApp.'));
-        const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '12px' } });
-        (data.providers || []).forEach(function (p) {
-          const connected = p.status === 'connected';
-          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', padding: '16px' } },
-            h('div', { style: { fontSize: '26px' } }, p.icon),
-            h('div', { style: { fontWeight: 700, marginTop: '4px' } }, p.name, ' ', connected ? pill('Connected', '#dcfce7', '#166534') : pill('Not connected', '#f1f5f9', '#475569')),
-            h('div', { style: { fontSize: '12px', color: '#64748b', margin: '4px 0 10px' } }, p.blurb),
-            connected
-              ? h('div', {}, p.store_url ? h('div', { style: { fontSize: '11.5px', color: WA_D, marginBottom: '8px' } }, p.store_url) : null,
-                  btn('Disconnect', function () { doConnect(p.provider, true); }))
-              : btn('🔌 Connect', function () { connectModal(p); }, 'primary')));
-        });
-        body.appendChild(g);
-        body.appendChild(h('div', { style: { fontSize: '11px', color: '#94a3b8', marginTop: '12px' } },
-          '⚠ Live product sync needs your store API keys (Shopify/WooCommerce) or Meta catalog access. Connecting here is enabled for the demo.'));
-      }
-      function connectModal(p) {
-        const url = h('input', { placeholder: p.provider === 'meta_catalog' ? 'Catalog ID' : 'yourstore.example.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #d1fae5', borderRadius: '7px', boxSizing: 'border-box' } });
-        modal('Connect ' + p.name, h('div', {},
-          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } },
-            'Enter your ' + p.name + ' store URL / ID. A live connection also needs your API key — this demo records the connection so you can see the flow.'),
-          url), [['Connect', function (close) { doConnect(p.provider, false, url.value); close(); }, 'primary']]);
-      }
-      async function doConnect(provider, disconnect, store_url) {
-        try { await api('api_wapack_shop_connect', { provider: provider, disconnect: !!disconnect, store_url: store_url || null }); toast(disconnect ? 'Disconnected' : 'Connected'); render(); }
-        catch (e) { toast(e.message); }
+        var nameI = h('input', { value: store.store_name || '', placeholder: 'Store name', style: inpS() });
+        var logoI = h('input', { value: store.logo_emoji || '🛍️', placeholder: '🛍️', style: Object.assign(inpS(), { width: '70px', textAlign: 'center', fontSize: '20px' }) });
+        var tagI = h('input', { value: store.tagline || '', placeholder: 'Tagline (e.g. Fast delivery · COD available)', style: inpS() });
+        var aboutI = h('textarea', { placeholder: 'About your store (optional)', style: Object.assign(inpS(), { height: '54px' }) }); aboutI.value = store.about || '';
+        var codC = h('input', { type: 'checkbox' }); codC.checked = store.id ? Number(store.pay_cod) === 1 : true;
+        var upiC = h('input', { type: 'checkbox' }); upiC.checked = Number(store.pay_upi) === 1;
+        var upiI = h('input', { value: store.upi_id || '', placeholder: 'yourupi@bank', style: inpS() });
+        var notifyI = h('input', { value: store.notify_phone || '', placeholder: 'WhatsApp number for order alerts', style: inpS() });
+        var activeC = h('input', { type: 'checkbox' }); activeC.checked = store.id ? Number(store.active) === 1 : true;
+        var ck = function (c, label) { return h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px', cursor: 'pointer' } }, c, label); };
+
+        body.appendChild(card([
+          h('div', { style: { fontWeight: 700, marginBottom: '10px' } }, '🏪 Store details'),
+          h('div', { style: { display: 'flex', gap: '10px' } }, logoI, nameI),
+          h('div', { style: { marginTop: '8px' } }, tagI),
+          h('div', { style: { marginTop: '8px' } }, aboutI),
+          h('div', { style: { fontWeight: 700, margin: '14px 0 6px', fontSize: '13px' } }, '💳 Payment'),
+          h('div', { style: { display: 'flex', gap: '16px', flexWrap: 'wrap' } }, ck(codC, 'Cash on Delivery'), ck(upiC, 'UPI')),
+          h('div', { style: { marginTop: '8px' } }, upiI),
+          h('div', { style: { fontWeight: 700, margin: '14px 0 6px', fontSize: '13px' } }, '🔔 Order alerts'),
+          notifyI,
+          h('div', { style: { marginTop: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' } },
+            ck(activeC, 'Store is open'),
+            btn('💾 Save store', async function () {
+              try { await api('api_wapack_store_save', { store_name: nameI.value, tagline: tagI.value, logo_emoji: logoI.value, about: aboutI.value, pay_cod: codC.checked, pay_upi: upiC.checked, upi_id: upiI.value, notify_phone: notifyI.value, active: activeC.checked }); toast('Store saved'); render(); }
+              catch (e) { toast(e.message); }
+            }, 'primary'))
+        ]));
+
+        body.appendChild(card([
+          h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, '🔗 Your store link'),
+          h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '8px' } }, count + ' product(s) live. Share this link on WhatsApp / Instagram — customers browse and place orders, no app needed.'),
+          h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '9px', padding: '10px' } },
+            h('span', { style: { flex: 1, minWidth: '180px', fontSize: '12.5px', color: WA_D, fontWeight: 700, wordBreak: 'break-all' } }, STORE_URL),
+            btn('📋 Copy', function () { navigator.clipboard && navigator.clipboard.writeText(STORE_URL); toast('Link copied'); }, 'primary'),
+            btn('↗ Open', function () { window.open(STORE_URL, '_blank'); }))
+        ]));
       }
 
-      async function renderCatalog(body) {
+      /* ---------------- Products ---------------- */
+      async function renderProducts(body) {
         body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
         let prods;
         try { prods = (await api('api_wapack_products_list')).products || []; }
         catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
         body.innerHTML = '';
-        if (!prods.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No products. Connect a store to sync your catalog.')])); return; }
-        const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: '12px' } });
+        body.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' } },
+          btn('➕ Add product', function () { productModal(null); }, 'primary'),
+          btn('🔗 Add from URL', function () { fromUrlModal(); }),
+          btn('📷 Scan image / menu', function () { scanModal(); })));
+        if (!prods.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No products yet. Add one manually, paste a product URL, or scan a menu photo.')])); return; }
+        const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '10px' } });
         prods.forEach(function (p) {
-          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', overflow: 'hidden' } },
-            h('div', { style: { height: '90px', background: 'linear-gradient(135deg,#a7f3d0,#6ee7b7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px' } }, '📦'),
-            h('div', { style: { padding: '10px' } },
-              h('div', { style: { fontWeight: 700, fontSize: '13px' } }, p.name),
-              h('div', { style: { fontSize: '11px', color: '#64748b' } }, (p.source || 'manual') + ' · ' + (p.sku || '')),
-              h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' } },
-                h('b', { style: { color: WA_D } }, p.price_inr ? '₹' + Number(p.price_inr).toLocaleString('en-IN') : '—'),
+          var imgBox = p.image_url
+            ? h('div', { style: { height: '96px', background: '#f1f5f9', overflow: 'hidden' } }, h('img', { src: p.image_url, style: { width: '100%', height: '100%', objectFit: 'cover' }, onerror: function () { this.style.display = 'none'; } }))
+            : h('div', { style: { height: '96px', background: 'linear-gradient(135deg,#a7f3d0,#6ee7b7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px' } }, '📦');
+          g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', overflow: 'hidden', opacity: Number(p.active) === 0 ? '.55' : '1' } },
+            imgBox,
+            h('div', { style: { padding: '9px' } },
+              h('div', { style: { fontWeight: 700, fontSize: '12.5px' } }, p.name),
+              h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' } },
+                h('b', { style: { color: WA_D, fontSize: '13px' } }, p.price_inr ? money(p.price_inr) : '—'),
                 Number(p.in_stock) ? pill('In stock', '#dcfce7', '#166534') : pill('Out', '#fef2f2', '#dc2626')),
-              h('div', { style: { marginTop: '8px' } }, btn('📤 Send to WhatsApp', function () { sendModal(p); }, 'primary')))));
+              h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+                btn('✏️ Edit', function () { productModal(p); }),
+                btn('🗑', async function () { if (!confirm('Delete ' + p.name + '?')) return; try { await api('api_wapack_product_delete', { id: p.id }); render(); } catch (e) { toast(e.message); } })))));
         });
         body.appendChild(g);
       }
-      function sendModal(p) {
-        const ph = h('input', { placeholder: 'WhatsApp number e.g. 9198…', style: { width: '100%', padding: '8px 10px', border: '1px solid #d1fae5', borderRadius: '7px', boxSizing: 'border-box' } });
-        modal('📤 Send "' + p.name + '"', h('div', {},
-          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Send this product as a WhatsApp message. Enter the customer\'s number:'),
-          ph), [['Send', async function (close) { try { const r = await api('api_wapack_product_send', { product_id: p.id, phone: ph.value }); toast('Sent to ' + r.sent_to); close(); } catch (e) { toast(e.message); } }, 'primary']]);
+
+      function productModal(p) {
+        p = p || {};
+        var imgI = h('input', { value: p.image_url || '', placeholder: 'Image URL (optional)', style: inpS() });
+        var nameI = h('input', { value: p.name || '', placeholder: 'Product name', style: inpS() });
+        var priceI = h('input', { value: p.price_inr != null ? p.price_inr : '', placeholder: 'Price ₹', inputmode: 'numeric', style: inpS() });
+        var stockI = h('input', { value: p.stock_qty != null ? p.stock_qty : '', placeholder: 'Stock qty (optional)', inputmode: 'numeric', style: inpS() });
+        var descI = h('textarea', { placeholder: 'Description (optional)', style: Object.assign(inpS(), { height: '50px' }) }); descI.value = p.description || '';
+        var inStockC = h('input', { type: 'checkbox' }); inStockC.checked = p.id ? Number(p.in_stock) === 1 : true;
+        var prev = h('div');
+        function drawPrev() {
+          prev.innerHTML = '';
+          prev.appendChild(h('div', { style: { border: '1px solid #d1fae5', borderRadius: '10px', overflow: 'hidden', width: '150px' } },
+            imgI.value ? h('img', { src: imgI.value, style: { width: '100%', height: '96px', objectFit: 'cover' }, onerror: function () { this.style.display = 'none'; } }) : h('div', { style: { height: '96px', background: 'linear-gradient(135deg,#a7f3d0,#6ee7b7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px' } }, '📦'),
+            h('div', { style: { padding: '9px' } }, h('div', { style: { fontWeight: 700, fontSize: '12.5px' } }, nameI.value || 'Product name'), h('b', { style: { color: WA_D } }, priceI.value ? money(priceI.value) : '—'))));
+        }
+        imgI.oninput = drawPrev; nameI.oninput = drawPrev; priceI.oninput = drawPrev; drawPrev();
+        modal(p.id ? 'Edit product' : 'Add product', h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 160px', gap: '14px' } },
+          h('div', {}, h('div', { style: { marginBottom: '8px' } }, nameI), h('div', { style: { display: 'flex', gap: '8px', marginBottom: '8px' } }, priceI, stockI),
+            h('div', { style: { marginBottom: '8px' } }, imgI), h('div', { style: { marginBottom: '8px' } }, descI),
+            h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px' } }, inStockC, 'In stock')),
+          h('div', {}, h('div', { style: { fontSize: '11px', color: '#94a3b8', marginBottom: '6px' } }, 'Preview'), prev)),
+          [['💾 Save', async function (close) {
+            if (!nameI.value.trim()) { toast('Enter a product name'); return; }
+            try { await api('api_wapack_product_save', { id: p.id || 0, name: nameI.value, price_inr: priceI.value, image_url: imgI.value, stock_qty: stockI.value, description: descI.value, in_stock: inStockC.checked }); toast('Saved'); close(); render(); }
+            catch (e) { toast(e.message); }
+          }, 'primary']]);
       }
+
+      function fromUrlModal() {
+        var urlI = h('input', { placeholder: 'Paste product URL (https://…)', style: inpS() });
+        modal('🔗 Add from URL', h('div', {},
+          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Paste a product page link — we pull in the image, name and price. You can edit before saving.'),
+          urlI), [['Fetch', async function (close) {
+            if (!urlI.value.trim()) { toast('Enter a URL'); return; }
+            toast('Fetching…');
+            try { var r = await api('api_wapack_product_from_url', { url: urlI.value.trim() }); close(); productModal(r.draft || {}); }
+            catch (e) { toast(e.message); }
+          }, 'primary']]);
+      }
+
+      function scanModal() {
+        var fileI = h('input', { type: 'file', accept: 'image/*', style: { fontSize: '13px' } });
+        var status = h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '10px' } }, '');
+        var listWrap = h('div', { style: { marginTop: '10px' } });
+        var drafts = [];
+        function drawList() {
+          listWrap.innerHTML = '';
+          if (!drafts.length) return;
+          listWrap.appendChild(h('div', { style: { fontWeight: 700, fontSize: '13px', margin: '4px 0 6px' } }, 'Found ' + drafts.length + ' item(s) — edit, then add:'));
+          drafts.forEach(function (d, i) {
+            var nm = h('input', { value: d.name, style: Object.assign(inpS(), { flex: '1' }) });
+            var pr = h('input', { value: d.price_inr != null ? d.price_inr : '', placeholder: '₹', inputmode: 'numeric', style: Object.assign(inpS(), { width: '80px' }) });
+            nm.oninput = function () { drafts[i].name = nm.value; }; pr.oninput = function () { drafts[i].price_inr = pr.value; };
+            listWrap.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginBottom: '6px' } }, nm, pr,
+              btn('✕', function () { drafts.splice(i, 1); drawList(); })));
+          });
+          listWrap.appendChild(btn('✅ Add ' + drafts.length + ' product(s)', async function () {
+            try { var r = await api('api_wapack_products_bulk_add', { products: drafts.filter(function (d) { return d.name; }) }); toast('Added ' + r.added + ' products'); closeScan(); render(); }
+            catch (e) { toast(e.message); }
+          }, 'primary'));
+        }
+        var closeScan = function () {};
+        fileI.onchange = function () {
+          var f = fileI.files && fileI.files[0]; if (!f) return;
+          status.textContent = 'Reading image…';
+          var rd = new FileReader();
+          rd.onload = async function () {
+            status.textContent = '🔍 Scanning for products…';
+            try { var r = await api('api_wapack_product_scan', { image_base64: rd.result, mime_type: f.type || 'image/jpeg' }); drafts = r.drafts || []; status.textContent = drafts.length ? '' : 'No items detected — try a clearer photo.'; drawList(); }
+            catch (e) { status.textContent = ''; toast(e.message); }
+          };
+          rd.readAsDataURL(f);
+        };
+        var m = modal('📷 Scan image / menu', h('div', {},
+          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Upload a photo of your menu or product list. On mobile you can take a photo directly. We read the items and prices for you to review.'),
+          fileI, status, listWrap), []);
+        closeScan = (m && m.close) ? m.close : function () {};
+      }
+
+      /* ---------------- Orders ---------------- */
+      async function renderOrders(body) {
+        body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
+        let orders;
+        try { orders = (await api('api_wapack_orders_list')).orders || []; }
+        catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        body.innerHTML = '';
+        if (!orders.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No orders yet. Share your store link to start receiving orders.')])); return; }
+        orders.forEach(function (o) {
+          var statusColors = { placed: ['#fef3c7', '#92400e'], packed: ['#dbeafe', '#1e40af'], shipped: ['#e0e7ff', '#4338ca'], delivered: ['#dcfce7', '#166534'], cancelled: ['#fef2f2', '#dc2626'] };
+          var sc = statusColors[o.status] || ['#f1f5f9', '#475569'];
+          var statusSel = sel([['placed', 'Placed'], ['packed', 'Packed'], ['shipped', 'Shipped'], ['delivered', 'Delivered'], ['cancelled', 'Cancelled']], o.status);
+          statusSel.onchange = async function () { try { await api('api_wapack_order_setStatus', { id: o.id, status: statusSel.value }); toast('Updated'); } catch (e) { toast(e.message); } };
+          body.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px' } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' } },
+              h('b', {}, o.order_ref || ('#' + o.id)), pill(o.status, sc[0], sc[1])),
+            h('div', { style: { fontSize: '12.5px', color: '#64748b', margin: '2px 0 8px' } }, (o.customer_name || '') + ' · 📞 ' + (o.phone || '') + ' · ' + (o.payment_mode || '')),
+            h('div', { style: { fontSize: '12.5px' } }, (o.items || []).map(function (it) { return it.name + ' × ' + it.qty; }).join(', ')),
+            o.address ? h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '4px' } }, '📍 ' + o.address) : null,
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' } },
+              h('b', { style: { color: WA_D } }, money(o.total_inr)), statusSel)));
+        });
+      }
+
       render();
     };
   });

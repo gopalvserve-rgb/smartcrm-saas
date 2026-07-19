@@ -131,13 +131,52 @@ async function _installer({ db: D }) {
   await D.query(`
     CREATE TABLE IF NOT EXISTS wapack_products (
       id         SERIAL PRIMARY KEY,
-      source     TEXT,                 -- shopify | woocommerce | meta_catalog | manual
+      source     TEXT,                 -- shopify | woocommerce | meta_catalog | manual | url | scan
       name       TEXT NOT NULL,
       sku        TEXT,
       price_inr  NUMERIC(12,2),
       image_url  TEXT,
       in_stock   INT NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
+  // STOREFRONT_v1 — extra product columns for the self-serve store.
+  for (const ddl of [
+    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS description TEXT`,
+    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS stock_qty INT`,
+    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`,
+    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS active INT NOT NULL DEFAULT 1`
+  ]) { try { await D.query(ddl, []); } catch (_) {} }
+
+  // STOREFRONT_v1 — single store profile per tenant (id=1 singleton).
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_store (
+      id           INT PRIMARY KEY DEFAULT 1,
+      store_name   TEXT,
+      tagline      TEXT,
+      logo_emoji   TEXT DEFAULT '🛍️',
+      about        TEXT,
+      pay_cod      INT NOT NULL DEFAULT 1,
+      pay_upi      INT NOT NULL DEFAULT 0,
+      upi_id       TEXT,
+      notify_phone TEXT,
+      active       INT NOT NULL DEFAULT 1,
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
+
+  // STOREFRONT_v1 — customer orders placed from the public store page.
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_orders (
+      id            SERIAL PRIMARY KEY,
+      order_ref     TEXT,
+      customer_name TEXT,
+      phone         TEXT,
+      address       TEXT,
+      items_json    TEXT,
+      total_inr     NUMERIC(12,2),
+      payment_mode  TEXT,
+      status        TEXT NOT NULL DEFAULT 'placed',  -- placed|packed|shipped|delivered|cancelled
+      lead_id       INT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`, []);
 }
 
@@ -842,6 +881,296 @@ async function api_wapack_product_send(token, args) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  STOREFRONT_v1 — self-serve store: build store, add products (manual /
+//  from URL / scan a menu photo), share one link, take customer orders.
+// ══════════════════════════════════════════════════════════════════
+
+async function _getStore() {
+  const r = await db.query(`SELECT * FROM wapack_store WHERE id=1`, []);
+  return r.rows[0] || null;
+}
+async function api_wapack_store_get(token) {
+  await _gate(token);
+  const store = await _getStore();
+  const pc = Number(((await db.query(`SELECT COUNT(*)::int AS n FROM wapack_products WHERE COALESCE(active,1)=1`, [])).rows[0] || {}).n || 0);
+  return { store: store || null, product_count: pc };
+}
+async function api_wapack_store_save(token, args) {
+  await _gate(token);
+  args = args || {};
+  await db.query(
+    `INSERT INTO wapack_store (id, store_name, tagline, logo_emoji, about, pay_cod, pay_upi, upi_id, notify_phone, active, updated_at)
+     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+     ON CONFLICT (id) DO UPDATE SET store_name=$1, tagline=$2, logo_emoji=$3, about=$4,
+        pay_cod=$5, pay_upi=$6, upi_id=$7, notify_phone=$8, active=$9, updated_at=now()`,
+    [(args.store_name || '').trim() || 'My Store', args.tagline || null, (args.logo_emoji || '🛍️').slice(0, 4),
+     args.about || null, args.pay_cod === false || args.pay_cod === 0 ? 0 : 1, args.pay_upi ? 1 : 0,
+     args.upi_id || null, _digits(args.notify_phone) || null, args.active === false ? 0 : 1]);
+  return { ok: true };
+}
+
+// Manual add / edit a product (all fields).
+async function api_wapack_product_save(token, args) {
+  await _gate(token);
+  args = args || {};
+  const id = Number(args.id || 0);
+  const name = (args.name || '').trim();
+  if (!name) throw new Error('name required');
+  const price = args.price_inr != null && args.price_inr !== '' ? Number(args.price_inr) : null;
+  const active = args.active === false || args.active === 0 ? 0 : 1;
+  const inStock = args.in_stock === false || args.in_stock === 0 ? 0 : 1;
+  if (id > 0) {
+    await db.query(
+      `UPDATE wapack_products SET name=$1, price_inr=$2, image_url=$3, description=$4, stock_qty=$5, in_stock=$6, active=$7 WHERE id=$8`,
+      [name, price, args.image_url || null, args.description || null, args.stock_qty != null && args.stock_qty !== '' ? Number(args.stock_qty) : null, inStock, active, id]);
+    return { ok: true, id };
+  }
+  const r = await db.query(
+    `INSERT INTO wapack_products (source, name, price_inr, image_url, description, stock_qty, in_stock, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [args.source || 'manual', name, price, args.image_url || null, args.description || null,
+     args.stock_qty != null && args.stock_qty !== '' ? Number(args.stock_qty) : null, inStock, active]);
+  return { ok: true, id: r.rows[0].id };
+}
+async function api_wapack_product_delete(token, args) {
+  await _gate(token);
+  const id = Number((args && args.id) || 0);
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM wapack_products WHERE id=$1`, [id]);
+  return { ok: true };
+}
+async function api_wapack_products_bulk_add(token, args) {
+  await _gate(token);
+  const list = (args && Array.isArray(args.products)) ? args.products : [];
+  let n = 0;
+  for (const p of list) {
+    const name = String((p && p.name) || '').trim();
+    if (!name) continue;
+    const price = (p.price_inr != null && p.price_inr !== '') ? Number(p.price_inr) : null;
+    try {
+      await db.query(
+        `INSERT INTO wapack_products (source, name, price_inr, image_url, description, in_stock, active)
+         VALUES ($1,$2,$3,$4,$5,1,1)`,
+        [args.source || 'scan', name, price, p.image_url || null, p.description || null]);
+      n++;
+    } catch (_) {}
+  }
+  return { ok: true, added: n };
+}
+
+// Extract a draft product from a product-page URL (og tags / JSON-LD / ₹ pattern).
+async function api_wapack_product_from_url(token, args) {
+  await _gate(token);
+  const url = String((args && args.url) || '').trim();
+  if (!/^https?:\/\//i.test(url)) throw new Error('Enter a valid product URL (starting http/https)');
+  let html = '';
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SmartCRM-Storefront' } });
+    html = await r.text();
+  } catch (e) { throw new Error('Could not fetch that URL'); }
+  const meta = (prop) => {
+    const re = new RegExp('<meta[^>]+(?:property|name)=["\']' + prop + '["\'][^>]+content=["\']([^"\']+)["\']', 'i');
+    const m = html.match(re) || html.match(new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']' + prop + '["\']', 'i'));
+    return m ? m[1] : '';
+  };
+  let name = meta('og:title') || (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+  let image = meta('og:image') || '';
+  let price = meta('og:price:amount') || meta('product:price:amount') || '';
+  if (!price) {
+    const jl = html.match(/"price"\s*:\s*"?([\d,]+(?:\.\d+)?)"?/i);
+    if (jl) price = jl[1].replace(/,/g, '');
+  }
+  if (!price) {
+    const rs = html.match(/(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/i);
+    if (rs) price = rs[1].replace(/,/g, '');
+  }
+  const desc = meta('og:description') || '';
+  name = String(name).replace(/\s+/g, ' ').trim().slice(0, 140);
+  return { draft: { name, price_inr: price ? Number(price) : null, image_url: image || null, description: desc ? desc.slice(0, 300) : null, source: 'url' } };
+}
+
+// Scan a menu / product photo → draft product list via Gemini vision.
+async function api_wapack_product_scan(token, args) {
+  await _gate(token);
+  args = args || {};
+  let data = String(args.image_base64 || '');
+  const mime = args.mime_type || 'image/jpeg';
+  const m = data.match(/^data:([^;]+);base64,(.*)$/);
+  if (m) { data = m[2]; }
+  if (!data) throw new Error('image required');
+  let gem;
+  try {
+    gem = require('../../utils/geminiClient');
+  } catch (_) { throw new Error('AI not available'); }
+  const prompt = 'You are reading a photo of a menu or product list. Extract every distinct item you can see with its price. ' +
+    'Return ONLY a compact JSON array, no prose, like: [{"name":"Paneer Tikka","price_inr":220},{"name":"Cold Coffee","price_inr":120}]. ' +
+    'If a price is missing use null. Keep names short and clean.';
+  const res = await gem.generate({ prompt, images: [{ mime_type: mime, data: data }], maxOutputTokens: 1200, temperature: 0.1, call_kind: 'store_scan' });
+  if (!res || !res.ok) throw new Error((res && res.error) || 'Scan failed');
+  let txt = String(res.text || '').trim();
+  const jm = txt.match(/\[[\s\S]*\]/);
+  if (jm) txt = jm[0];
+  let items = [];
+  try { items = JSON.parse(txt); } catch (_) { throw new Error('Could not read items from the image — try a clearer photo'); }
+  const drafts = (Array.isArray(items) ? items : []).map(function (it) {
+    return { name: String(it.name || '').trim().slice(0, 120), price_inr: (it.price_inr != null && it.price_inr !== '') ? Number(it.price_inr) : null };
+  }).filter(function (d) { return d.name; });
+  return { drafts: drafts };
+}
+
+async function api_wapack_orders_list(token, args) {
+  await _gate(token);
+  const st = args && args.status ? String(args.status) : null;
+  const params = []; let where = '1=1';
+  if (st) { params.push(st); where += ` AND status=$${params.length}`; }
+  const r = await db.query(`SELECT * FROM wapack_orders WHERE ${where} ORDER BY id DESC LIMIT 200`, params);
+  return { orders: (r.rows || []).map(o => ({ ...o, items: _json(o.items_json, []) })) };
+}
+async function api_wapack_order_setStatus(token, args) {
+  await _gate(token);
+  const id = Number((args && args.id) || 0);
+  const status = String((args && args.status) || '');
+  if (!id || !['placed', 'packed', 'shipped', 'delivered', 'cancelled'].includes(status)) throw new Error('id + valid status required');
+  await db.query(`UPDATE wapack_orders SET status=$1 WHERE id=$2`, [status, id]);
+  return { ok: true };
+}
+
+/* ---- Public store page + order placement (no auth; tenant-scoped) ---- */
+function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function _inr(n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); }
+
+async function expressRenderStore(req, res) {
+  try {
+    if (!(await framework.isPackActive(PACK_ID))) return res.status(404).send('Store not found');
+    await _ensure();
+    const store = await _getStore();
+    if (!store || Number(store.active) !== 1) return res.status(404).send('This store is not open right now.');
+    const prods = (await db.query(`SELECT * FROM wapack_products WHERE COALESCE(active,1)=1 ORDER BY COALESCE(sort_order,0), id DESC LIMIT 300`, [])).rows || [];
+    const slug = (req.tenantSlug || (req.tenant && req.tenant.slug) || '');
+    const html = _storeHtml(store, prods, slug);
+    res.set('Content-Type', 'text/html; charset=utf-8').send(html);
+  } catch (e) { res.status(500).send('Store error'); }
+}
+
+async function expressPlaceOrder(req, res) {
+  try {
+    if (!(await framework.isPackActive(PACK_ID))) return res.status(404).json({ error: 'not found' });
+    await _ensure();
+    const b = req.body || {};
+    const name = String(b.name || '').trim();
+    const phone = _digits(b.phone);
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!name || !phone || !items.length) return res.status(400).json({ error: 'Name, phone and at least one item are required' });
+    // Recompute total from our own product prices (never trust the client).
+    let total = 0; const clean = [];
+    for (const it of items) {
+      const p = (await db.query(`SELECT id, name, price_inr FROM wapack_products WHERE id=$1`, [Number(it.id) || 0])).rows[0];
+      if (!p) continue;
+      const qty = Math.max(1, Math.min(999, Number(it.qty) || 1));
+      total += Number(p.price_inr || 0) * qty;
+      clean.push({ id: p.id, name: p.name, qty: qty, price: Number(p.price_inr || 0) });
+    }
+    if (!clean.length) return res.status(400).json({ error: 'No valid items' });
+    const ref = 'ORD-' + Date.now().toString().slice(-6);
+    const payMode = b.payment === 'upi' ? 'UPI' : 'COD';
+    const address = String(b.address || '').slice(0, 500);
+
+    // Find or create a lead for this customer.
+    let leadId = null;
+    try {
+      const last10 = phone.slice(-10);
+      const ld = await db.query(
+        `SELECT id FROM leads WHERE regexp_replace(COALESCE(phone,''),'\\D','','g') = $1
+           OR regexp_replace(COALESCE(whatsapp,''),'\\D','','g') = $1
+           OR regexp_replace(COALESCE(phone,''),'\\D','','g') = $2 LIMIT 1`, [phone, last10]);
+      if (ld.rows.length) leadId = ld.rows[0].id;
+      else {
+        leadId = await db.insert('leads', { name: name, phone: phone, whatsapp: phone, source: 'Storefront', created_at: db.nowIso(), updated_at: db.nowIso() });
+        try { require('../tat').logAction(leadId, 'created', null, { source: 'storefront' }); } catch (_) {}
+      }
+    } catch (_) {}
+
+    await db.query(
+      `INSERT INTO wapack_orders (order_ref, customer_name, phone, address, items_json, total_inr, payment_mode, status, lead_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'placed',$8)`,
+      [ref, name, phone, address, JSON.stringify(clean), total, payMode, leadId || null]);
+
+    // Drop the order into the lead remark timeline.
+    if (leadId) {
+      const lines = clean.map(c => '• ' + c.name + ' × ' + c.qty + ' — ' + _inr(c.price * c.qty)).join('\n');
+      const remark = '🛒 Placed order ' + ref + ' — ' + _inr(total) + ' (' + payMode + ')\n' + lines + (address ? ('\n📍 ' + address) : '');
+      try { await db.insert('remarks', { lead_id: leadId, user_id: null, remark: remark, created_at: db.nowIso() }); } catch (_) {}
+      try { await db.query(`UPDATE leads SET notes = LEFT($2 || CASE WHEN COALESCE(notes,'')='' THEN '' ELSE E'\n\n' || notes END, 4096) WHERE id=$1`, [leadId, remark]); } catch (_) {}
+      try { require('../tat').logAction(leadId, 'order_placed', null, { ref: ref, total: total, items: clean.length }); } catch (_) {}
+    }
+
+    // Notify the shopkeeper on WhatsApp (best-effort; needs WABA configured).
+    try {
+      const store = await _getStore();
+      const notify = store && store.notify_phone;
+      if (notify) {
+        const wb = require('../whatsbot');
+        const msg = '🛒 New order ' + ref + '\n' + name + ' · ' + phone + '\n' + _inr(total) + ' · ' + payMode + '\n' +
+          clean.map(c => '• ' + c.name + ' ×' + c.qty).join('\n') + (address ? ('\n📍 ' + address) : '');
+        await wb._sendText({ to: notify, text: msg, leadId: null, userId: null }, await wb._cfg());
+      }
+    } catch (_) {}
+
+    res.json({ ok: true, order_ref: ref, total: total });
+  } catch (e) { res.status(500).json({ error: 'Could not place order' }); }
+}
+
+function _storeHtml(store, prods, slug) {
+  const items = prods.map(function (p) {
+    return { id: p.id, name: p.name, price: Number(p.price_inr || 0), img: p.image_url || '', desc: p.description || '', stock: Number(p.in_stock) };
+  });
+  const pay = { cod: Number(store.pay_cod) === 1, upi: Number(store.pay_upi) === 1, upi_id: store.upi_id || '' };
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">' +
+    '<title>' + _esc(store.store_name || 'Store') + '</title>' +
+    '<style>:root{--wa:#25d366;--wd:#075e54}*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f7f9fb;color:#0f172a;padding-bottom:78px}' +
+    '.hero{background:linear-gradient(135deg,#128c7e,#075e54);color:#fff;padding:22px 16px;text-align:center}.logo{font-size:40px}.hero h1{font-size:20px;margin:6px 0 2px}.hero p{font-size:12.5px;opacity:.9}' +
+    '.wrap{max-width:640px;margin:0 auto;padding:12px}.lbl{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin:8px 4px}' +
+    '.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:#fff;border:1px solid #e6ebf1;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}' +
+    '.pi{height:120px;background:linear-gradient(135deg,#e0f2fe,#dcfce7);display:flex;align-items:center;justify-content:center;font-size:40px;overflow:hidden}.pi img{width:100%;height:100%;object-fit:cover}' +
+    '.pb{padding:9px;flex:1;display:flex;flex-direction:column;gap:2px}.pn{font-size:13px;font-weight:700;line-height:1.25}.pp{color:var(--wd);font-weight:800;font-size:13.5px}.pd{font-size:11px;color:#64748b}' +
+    '.add{margin-top:6px;background:var(--wa);color:#fff;border:none;border-radius:9px;padding:8px;font-weight:800;font-size:12.5px;cursor:pointer}.qtyrow{margin-top:6px;display:flex;align-items:center;justify-content:space-between}.qbtn{width:28px;height:28px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;font-size:16px;font-weight:800;cursor:pointer}' +
+    '.bar{position:fixed;left:0;right:0;bottom:0;background:var(--wa);color:#fff;padding:13px 16px;display:flex;justify-content:space-between;align-items:center;font-weight:800;cursor:pointer;box-shadow:0 -4px 16px rgba(0,0,0,.12)}.bar.hide{display:none}' +
+    '.sheet{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:flex-end;z-index:20}.sheet.on{display:flex}.panel{background:#fff;width:100%;max-width:640px;margin:0 auto;border-radius:18px 18px 0 0;max-height:92vh;overflow:auto;padding:16px}' +
+    '.panel h2{font-size:16px;margin-bottom:10px}.oi{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px dashed #eef2f7}.inp{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:9px;font-size:14px;margin-top:8px}' +
+    '.payopt{display:flex;gap:8px;margin:8px 0}.payopt label{flex:1;border:1px solid #cbd5e1;border-radius:9px;padding:9px;text-align:center;font-size:12.5px;cursor:pointer}.payopt input{display:none}.payopt label.on{border-color:var(--wa);background:#f0fdf4;color:var(--wd);font-weight:700}' +
+    '.place{width:100%;background:var(--wa);color:#fff;border:none;border-radius:11px;padding:13px;font-weight:800;font-size:15px;cursor:pointer;margin-top:10px}.muted{color:#94a3b8;font-size:11px;text-align:center;margin-top:12px}.empty{text-align:center;color:#94a3b8;padding:30px}</style></head><body>' +
+    '<div class="hero"><div class="logo">' + _esc(store.logo_emoji || '🛍️') + '</div><h1>' + _esc(store.store_name || 'Store') + '</h1>' +
+    (store.tagline ? '<p>' + _esc(store.tagline) + '</p>' : '') + '</div>' +
+    '<div class="wrap"><div class="lbl">Products</div><div id="grid" class="grid"></div>' +
+    (items.length ? '' : '<div class="empty">No products yet. Please check back soon.</div>') + '</div>' +
+    '<div class="bar hide" id="bar" onclick="openCart()"><span id="barc">🛒 0 items</span><span id="bart">' + _inr(0) + ' · Checkout →</span></div>' +
+    '<div class="sheet" id="sheet"><div class="panel" id="panel"></div></div>' +
+    '<script>' +
+    'var P=' + JSON.stringify(items) + ';var PAY=' + JSON.stringify(pay) + ';var SLUG=' + JSON.stringify(slug) + ';var cart={};' +
+    'function inr(n){return "\\u20B9"+Number(n||0).toLocaleString("en-IN");}' +
+    'function count(){return Object.values(cart).reduce(function(a,b){return a+b;},0);}' +
+    'function total(){return P.reduce(function(s,p){return s+(cart[p.id]||0)*p.price;},0);}' +
+    'function grid(){var g=document.getElementById("grid");g.innerHTML=P.map(function(p){var q=cart[p.id]||0;return "<div class=card><div class=pi>"+(p.img?("<img src=\\""+p.img+"\\" onerror=\\"this.style.display=\\x27none\\x27\\">"):"\\uD83D\\uDCE6")+"</div><div class=pb><div class=pn>"+esc(p.name)+"</div><div class=pp>"+inr(p.price)+"</div>"+(p.desc?("<div class=pd>"+esc(p.desc)+"</div>"):"")+(q?("<div class=qtyrow><button class=qbtn onclick=\\"chg("+p.id+",-1)\\">\\u2212</button><b>"+q+"</b><button class=qbtn onclick=\\"chg("+p.id+",1)\\">+</button></div>"):("<button class=add onclick=\\"chg("+p.id+",1)\\">Add</button>"))+"</div></div>";}).join("");bar();}' +
+    'function esc(s){return String(s).replace(/[&<>\\"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}' +
+    'function chg(id,d){cart[id]=Math.max(0,(cart[id]||0)+d);if(!cart[id])delete cart[id];grid();}' +
+    'function bar(){var b=document.getElementById("bar");if(count()){b.classList.remove("hide");document.getElementById("barc").textContent="\\uD83D\\uDED2 "+count()+" item(s)";document.getElementById("bart").textContent=inr(total())+" \\u00B7 Checkout \\u2192";}else{b.classList.add("hide");}}' +
+    'function openCart(){var items=P.filter(function(p){return cart[p.id];});var pm=(PAY.cod?"cod":"upi");' +
+    'var h="<h2>Your order</h2>"+items.map(function(p){return "<div class=oi><span>"+esc(p.name)+" \\u00D7 "+cart[p.id]+"</span><span>"+inr(p.price*cart[p.id])+"</span></div>";}).join("")+"<div class=oi style=\\"font-weight:800;border:none\\"><span>Total</span><span>"+inr(total())+"</span></div>";' +
+    'h+="<input class=inp id=cn placeholder=\\"Your name\\"><input class=inp id=cp placeholder=\\"Phone number\\" inputmode=numeric><textarea class=inp id=ca placeholder=\\"Delivery address\\" style=height:60px></textarea>";' +
+    'h+="<div class=payopt>"+(PAY.cod?"<label class=on id=lcod><input type=radio name=pay value=cod checked>Cash on Delivery</label>":"")+(PAY.upi?"<label id=lupi"+(PAY.cod?"":" class=on")+"><input type=radio name=pay value=upi"+(PAY.cod?"":" checked")+">UPI"+(PAY.upi_id?(" "+esc(PAY.upi_id)):"")+"</label>":"")+"</div>";' +
+    'h+="<button class=place onclick=place()>Place order \\u00B7 "+inr(total())+"</button><div class=muted>You\\u2019ll get a WhatsApp confirmation.</div>";' +
+    'document.getElementById("panel").innerHTML=h;document.getElementById("sheet").classList.add("on");' +
+    'var opts=document.querySelectorAll(".payopt label");opts.forEach(function(l){l.onclick=function(){opts.forEach(function(x){x.classList.remove("on");});l.classList.add("on");l.querySelector("input").checked=true;};});}' +
+    'function place(){var n=document.getElementById("cn").value.trim();var p=document.getElementById("cp").value.trim();var a=document.getElementById("ca").value.trim();' +
+    'if(!n||!p){alert("Please enter your name and phone");return;}var pay=(document.querySelector("input[name=pay]:checked")||{}).value||"cod";' +
+    'var items=P.filter(function(x){return cart[x.id];}).map(function(x){return{id:x.id,qty:cart[x.id]};});' +
+    'fetch("/t/"+SLUG+"/store/order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n,phone:p,address:a,payment:pay,items:items})}).then(function(r){return r.json();}).then(function(j){' +
+    'if(j&&j.ok){document.getElementById("panel").innerHTML="<div style=text-align:center;padding:40px><div style=font-size:54px>\\u2705</div><h2>Order placed!</h2><p style=color:#64748b;margin-top:6px>Order "+j.order_ref+" \\u00B7 "+inr(j.total)+"</p><button class=place onclick=\\"location.reload()\\">Done</button></div>";cart={};}' +
+    'else{alert((j&&j.error)||"Could not place order");}}).catch(function(){alert("Network error, please try again");});}' +
+    'grid();</script></body></html>';
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  SHOWCASE SEED — populates a demo tenant (showcase-whatsapp) with
 //  realistic conversations, agents, campaigns and handoffs so every
 //  pack feature has data to show. Idempotent (skips if already seeded).
@@ -1085,6 +1414,18 @@ module.exports = {
   api_wapack_shop_connect,
   api_wapack_products_list,
   api_wapack_product_send,
+  // STOREFRONT_v1
+  api_wapack_store_get,
+  api_wapack_store_save,
+  api_wapack_product_save,
+  api_wapack_product_delete,
+  api_wapack_products_bulk_add,
+  api_wapack_product_from_url,
+  api_wapack_product_scan,
+  api_wapack_orders_list,
+  api_wapack_order_setStatus,
+  expressRenderStore,
+  expressPlaceOrder,
   api_wapack_seedDemo,
   _installer,
   RETARGET_SEGMENTS

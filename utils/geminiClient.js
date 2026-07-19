@@ -224,7 +224,15 @@ async function generate(args) {
     if (!h || !h.text) return;
     contents.push({ role: h.role === 'model' ? 'model' : 'user', parts: [{ text: String(h.text) }] });
   });
-  contents.push({ role: 'user', parts: [{ text: String(args.prompt || '') }] });
+  // STORE_SCAN_v1 — optional image parts for vision (menu / product photo OCR).
+  // Backward-compatible: text-only callers are unaffected.
+  const _userParts = [{ text: String(args.prompt || '') }];
+  if (Array.isArray(args.images)) {
+    args.images.forEach(function (im) {
+      if (im && im.data) _userParts.push({ inline_data: { mime_type: im.mime_type || 'image/jpeg', data: String(im.data) } });
+    });
+  }
+  contents.push({ role: 'user', parts: _userParts });
 
   const body = {
     contents,
