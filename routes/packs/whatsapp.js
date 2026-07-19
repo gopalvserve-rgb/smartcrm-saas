@@ -740,6 +740,40 @@ async function api_wapack_flow_testsend(token, args) {
   return { results };
 }
 
+// One-time backfill — replays WhatsApp Flow submissions that arrived while the
+// capture had a bug (they're still logged in wa_activity_log) into
+// wapack_form_responses + the lead remark. Idempotent-ish: skips a phone that
+// already has a stored response.
+async function api_wapack_forms_backfill(token, args) {
+  await _gate(token);
+  await _ensure();
+  const limit = Math.min(1000, Number((args && args.limit) || 300));
+  let rows = [];
+  try {
+    rows = (await db.query(
+      `SELECT id, response_json FROM wa_activity_log
+        WHERE category='webhook_message' AND response_json LIKE '%nfm_reply%'
+        ORDER BY id DESC LIMIT $1`, [limit])).rows || [];
+  } catch (e) { return { ok: false, error: e.message }; }
+  let captured = 0, skipped = 0;
+  for (const r of rows) {
+    try {
+      const m = typeof r.response_json === 'string' ? JSON.parse(r.response_json) : (r.response_json || {});
+      const nfm = m && m.interactive && m.interactive.nfm_reply;
+      const from = m && m.from;
+      if (!nfm || !from) { skipped++; continue; }
+      const tail = String(from).replace(/\D/g, '').slice(-10);
+      const dup = await db.query(`SELECT 1 FROM wapack_form_responses WHERE RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$1 LIMIT 1`, [tail]);
+      if (dup.rows.length) { skipped++; continue; }
+      let leadId = null;
+      try { const ld = await db.query(`SELECT id FROM leads WHERE RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$1 OR RIGHT(regexp_replace(COALESCE(whatsapp,''),'\\D','','g'),10)=$1 LIMIT 1`, [tail]); if (ld.rows.length) leadId = ld.rows[0].id; } catch (_) {}
+      const res = await _captureFormResponse({ phone: from, leadId, nfmReply: nfm, contactName: null });
+      if (res && res.captured) captured++; else skipped++;
+    } catch (_) { skipped++; }
+  }
+  return { ok: true, scanned: rows.length, captured, skipped };
+}
+
 async function api_wapack_form_send(token, args) {
   await _gate(token);
   args = args || {};
@@ -913,23 +947,39 @@ async function _captureFormResponse({ phone, leadId, nfmReply, contactName }) {
       if (v == null || v === '') return;
       clean[k] = (typeof v === 'object') ? JSON.stringify(v) : v;
     });
-    const pairs = Object.keys(clean).map(function (k) { return _prettyKey(k) + ': ' + clean[k]; });
 
-    // Best-effort: correlate to the form via the most recent native-flow send
-    // to this phone (we tag those rows '[WA Form #<id>: ...]').
+    // Resolve the form. The flow_token we generate on send is `wapack_<id>_...`
+    // — the reliable source. Fall back to correlating the most-recent native
+    // flow message to this phone ('[WA Form #<id>: ...]').
     let formId = null;
-    try {
-      const tail = String(phone || '').replace(/\D/g, '').slice(-10);
-      const r = await db.query(
-        `SELECT body FROM whatsapp_messages
-          WHERE direction='out' AND message_type='interactive_flow'
-            AND RIGHT(regexp_replace(to_number, '[^0-9]', '', 'g'), 10) = $1
-          ORDER BY id DESC LIMIT 1`, [tail]);
-      const mm = r.rows[0] && String(r.rows[0].body || '').match(/\[WA Form #(\d+):/);
-      if (mm) formId = Number(mm[1]);
-    } catch (_) {}
+    try { const tm = String((answers && answers.flow_token) || '').match(/wapack_(\d+)_/); if (tm) formId = Number(tm[1]); } catch (_) {}
+    if (!formId) {
+      try {
+        const tail = String(phone || '').replace(/\D/g, '').slice(-10);
+        const r = await db.query(
+          `SELECT body FROM whatsapp_messages
+            WHERE direction='out' AND message_type='interactive_flow'
+              AND RIGHT(regexp_replace(to_number, '[^0-9]', '', 'g'), 10) = $1
+            ORDER BY id DESC LIMIT 1`, [tail]);
+        const mm = r.rows[0] && String(r.rows[0].body || '').match(/\[WA Form #(\d+):/);
+        if (mm) formId = Number(mm[1]);
+      } catch (_) {}
+    }
 
-    // Store the structured response.
+    // Build a key→label map from the form definition so answers read as
+    // "Requirement: Steel marketing" not "F1784435221793: Steel marketing".
+    const labelMap = {};
+    let formRow = null;
+    if (formId) {
+      try {
+        formRow = (await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [formId])).rows[0] || null;
+        _json(formRow && formRow.fields_json, []).forEach(function (fl, i) { labelMap[_flowFieldName(fl, i)] = String(fl.label || fl.key || ('Field ' + (i + 1))); });
+      } catch (_) {}
+    }
+    const pairs = Object.keys(clean).map(function (k) { return (labelMap[k] || _prettyKey(k)) + ': ' + clean[k]; });
+
+    // Store the structured response — never blocked by a null form_id.
+    try { await db.query(`ALTER TABLE wapack_form_responses ALTER COLUMN form_id DROP NOT NULL`, []); } catch (_) {}
     try {
       await db.query(
         `INSERT INTO wapack_form_responses (form_id, lead_id, phone, contact_name, answers_json)
@@ -938,17 +988,17 @@ async function _captureFormResponse({ phone, leadId, nfmReply, contactName }) {
       if (formId) { try { await db.query(`UPDATE wapack_forms SET submissions = COALESCE(submissions,0)+1 WHERE id=$1`, [formId]); } catch (_) {} }
     } catch (_) {}
 
-    // Write into the lead remark timeline (remarks row + notes) — same shape
-    // as the FB lead-form ingest, so it renders in the standard timeline UI.
+    // Write into the lead remark timeline (remarks row + notes) when we have a
+    // lead — same shape as the FB lead-form ingest, so it renders in the UI.
     if (leadId && pairs.length) {
-      const remark = '📋 WhatsApp form answers:\n' + pairs.join('\n');
+      const remark = '📋 WhatsApp form answers' + (formRow && formRow.name ? ' (' + formRow.name + ')' : '') + ':\n' + pairs.join('\n');
       try { await db.insert('remarks', { lead_id: leadId, user_id: null, remark: remark, created_at: db.nowIso() }); } catch (_) {}
       try { await db.query(
         `UPDATE leads SET notes = LEFT($2 || CASE WHEN COALESCE(notes,'')='' THEN '' ELSE E'\n\n' || notes END, 4096) WHERE id=$1`,
         [leadId, remark]); } catch (_) {}
       try { require('../tat').logAction(leadId, 'form_response', null, { answers: pairs.length, preview: pairs.slice(0, 3).join(' · ').slice(0, 200) }); } catch (_) {}
     }
-    return { captured: true, answers: pairs.length, form_id: formId };
+    return { captured: true, answers: pairs.length, form_id: formId, lead_id: leadId || null };
   } catch (_) {
     return null;   // never break the inbound flow
   }
@@ -1859,6 +1909,7 @@ module.exports = {
   api_wapack_form_save,
   api_wapack_form_delete,
   api_wapack_form_responses,
+  api_wapack_forms_backfill,
   api_wapack_form_send,
   api_wapack_form_publishFlow,
   api_wapack_flow_diagnose,

@@ -3679,12 +3679,12 @@ async function _handleInbound(m, value) {
   // WA_PACK_BOT_FORM_v1 — a WhatsApp Flow (in-chat form) was submitted → write
   // the answers into the lead's remark timeline. Pack-gated inside the helper,
   // so it's a strict no-op for tenants without the WhatsApp Suite pack.
-  if (_formNfm && leadId) {
+  if (_formNfm) {   // capture even when there is no lead row yet (leadId may be null)
     try {
       const _wapack = require('./packs/whatsapp');
       if (_wapack && typeof _wapack._captureFormResponse === 'function') {
         const _cn = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || null;
-        await _wapack._captureFormResponse({ phone: from, leadId, nfmReply: _formNfm, contactName: _cn });
+        await _wapack._captureFormResponse({ phone: from, leadId: leadId || null, nfmReply: _formNfm, contactName: _cn });
       }
     } catch (_) {}
   }
