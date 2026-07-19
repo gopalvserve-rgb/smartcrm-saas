@@ -2371,10 +2371,10 @@ async function api_leads_recoverFromWebhookLog(token, payload) {
   let rows = [];
   try {
     const r = await db.query(
-      `SELECT id, body_preview, response_preview, created_at FROM webhook_log
-        WHERE response_preview LIKE '%"id"%' ORDER BY id DESC LIMIT 8000`, []);
+      `SELECT id, body_text, response_text, created_at FROM webhook_logs
+        WHERE response_text LIKE '%"id"%' ORDER BY id DESC LIMIT 8000`, []);
     rows = r.rows || [];
-  } catch (e) { throw new Error('webhook_log read failed: ' + e.message); }
+  } catch (e) { throw new Error('webhook_logs read failed: ' + e.message); }
   let newStatusId = null;
   try { const s = await db.query(`SELECT id FROM statuses WHERE lower(name)='new' ORDER BY id ASC LIMIT 1`); newStatusId = s.rows[0] ? s.rows[0].id : null; } catch (_) {}
   let matched = 0, recovered = 0, skippedExists = 0, noBody = 0;
