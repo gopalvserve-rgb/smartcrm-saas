@@ -1322,19 +1322,6 @@ async function api_leads_create(token, payload) {
   // Best-effort: a campaign-routing failure shouldn't roll back the
   // already-committed lead row; we just log + continue.
   let _campaignAssign = null;
-  /* LEAD_UPLOAD_WORKSPACE_COL — accept `workspace` (or legacy `campaign`)
-   * column name from CSV/XLSX upload. Resolves the workspace name
-   * (case-insensitive) to campaign_id BEFORE the auto-match runs. */
-  if (!p.campaign_id) {
-    const wsName = String(p.workspace || p.campaign || '').trim();
-    if (wsName) {
-      try {
-        const camps = (await db.query('SELECT id, name FROM campaigns')).rows || [];
-        const hit = camps.find(c => String(c.name || '').toLowerCase() === wsName.toLowerCase());
-        if (hit && hit.id) p.campaign_id = hit.id;
-      } catch (e) { console.warn('[leads] workspace name lookup failed:', e.message); }
-    }
-  }
   // If caller didn't pin a campaign explicitly, see if any active
   // campaign's match_filter matches this lead — auto-attach if so.
   if (!p.campaign_id) {
@@ -2291,6 +2278,66 @@ async function api_leads_bulkDelete(token, leadIds) {
   let count = 0;
   for (const id of (leadIds || [])) { if (await db.removeRow('leads', id)) count++; }
   return { ok: true, count };
+}
+
+/* LEAD_RECOVER_v1 — re-create hard-deleted leads at their ORIGINAL ids from
+ * surviving related rows (whatsapp_messages / calls / wapack_orders / remarks).
+ * Re-using the same id re-links all of that history automatically. Recovers
+ * phone + name (where derivable) + created_at; status/owner can't be recovered
+ * (they lived only on the deleted row). Only inserts ids that (a) don't exist
+ * now and (b) have surviving references — so it never fabricates leads. */
+async function api_leads_recoverDeleted(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  const from = Number(p.from_id), to = Number(p.to_id);
+  if (!from || !to || to < from) throw new Error('from_id and to_id required');
+  if (to - from > 1000) throw new Error('range too large (max 1000)');
+  const dry = p.dry_run === true;
+  let recovered = 0, skippedExists = 0, noData = 0;
+  const sample = [];
+  for (let id = from; id <= to; id++) {
+    try {
+      const ex = await db.query(`SELECT 1 FROM leads WHERE id=$1`, [id]);
+      if (ex.rows.length) { skippedExists++; continue; }
+    } catch (_) {}
+    let phone = null, name = null, createdAt = null, source = null, refs = 0;
+    // WhatsApp: first inbound from_number is definitively the customer.
+    try {
+      let w = await db.query(`SELECT from_number, created_at FROM whatsapp_messages WHERE lead_id=$1 AND direction='in' AND COALESCE(from_number,'')<>'' ORDER BY id ASC LIMIT 1`, [id]);
+      if (!w.rows.length) w = await db.query(`SELECT to_number AS from_number, created_at FROM whatsapp_messages WHERE lead_id=$1 AND direction='out' AND COALESCE(to_number,'')<>'' ORDER BY id ASC LIMIT 1`, [id]);
+      if (w.rows.length) { phone = w.rows[0].from_number; createdAt = w.rows[0].created_at; source = 'WhatsApp'; refs++; }
+    } catch (_) {}
+    try { const cnt = await db.query(`SELECT COUNT(*)::int n FROM whatsapp_messages WHERE lead_id=$1`, [id]); refs += Number(cnt.rows[0] && cnt.rows[0].n || 0); } catch (_) {}
+    // Calls
+    try {
+      const c = await db.query(`SELECT phone, started_at FROM calls WHERE lead_id=$1 AND COALESCE(phone,'')<>'' ORDER BY started_at ASC LIMIT 1`, [id]);
+      if (c.rows.length) { if (!phone) phone = c.rows[0].phone; if (!createdAt) createdAt = c.rows[0].started_at; source = source || 'Call'; refs++; }
+    } catch (_) {}
+    // Storefront orders (carry name + phone)
+    try {
+      const o = await db.query(`SELECT customer_name, phone, created_at FROM wapack_orders WHERE lead_id=$1 ORDER BY id ASC LIMIT 1`, [id]);
+      if (o.rows.length) { if (!name) name = o.rows[0].customer_name; if (!phone) phone = o.rows[0].phone; if (!createdAt) createdAt = o.rows[0].created_at; source = source || 'Storefront'; refs++; }
+    } catch (_) {}
+    // Remarks (proves the lead existed even if no phone found)
+    try { const rm = await db.query(`SELECT 1 FROM remarks WHERE lead_id=$1 LIMIT 1`, [id]); if (rm.rows.length) refs++; } catch (_) {}
+    if (refs === 0) { noData++; continue; }   // nothing references this id — don't fabricate
+    if (sample.length < 12) sample.push({ id: id, phone: phone || null, name: name || null, refs: refs });
+    if (dry) { recovered++; continue; }
+    const cleanPhone = phone ? String(phone).replace(/[^\d+]/g, '') : null;
+    try {
+      await db.query(
+        `INSERT INTO leads (id, name, phone, whatsapp, source, notes, created_at, updated_at)
+         VALUES ($1,$2,$3,$3,$4,$5,COALESCE($6, now()), now())`,
+        [id, name || ('Recovered #' + id), cleanPhone, source || 'Recovered',
+         '⚠ Auto-recovered after accidental deletion — phone + history restored; original status/owner/name were not recoverable.',
+         createdAt || null]);
+      recovered++;
+    } catch (e) { noData++; }
+  }
+  // Keep the id sequence ahead of the max so new leads never collide.
+  if (!dry) { try { await db.query(`SELECT setval(pg_get_serial_sequence('leads','id'), GREATEST((SELECT COALESCE(MAX(id),1) FROM leads), 1))`); } catch (_) {} }
+  return { ok: true, dry_run: dry, recovered, skipped_exists: skippedExists, no_surviving_data: noData, sample };
 }
 
 /**
@@ -3423,7 +3470,7 @@ async function api_leads_bulkShare(token, leadIds, userId) {
 
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
-  api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
+  api_leads_addRemark, api_leads_recoverDeleted, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,
