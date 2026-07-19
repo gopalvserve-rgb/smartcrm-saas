@@ -174,10 +174,36 @@ async function _installer({ db: D }) {
       items_json    TEXT,
       total_inr     NUMERIC(12,2),
       payment_mode  TEXT,
-      status        TEXT NOT NULL DEFAULT 'placed',  -- placed|packed|shipped|delivered|cancelled
+      status        TEXT NOT NULL DEFAULT 'placed',  -- placed|packed|shipped|delivered|returned|cancelled
       lead_id       INT,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`, []);
+  // INVENTORY_v1 — courier/tracking + stock-restore guard.
+  for (const ddl of [
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS courier_name TEXT`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS tracking_number TEXT`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS tracking_url TEXT`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS stock_restored INT NOT NULL DEFAULT 0`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS stock_deducted INT NOT NULL DEFAULT 0`
+  ]) { try { await D.query(ddl, []); } catch (_) {} }
+}
+
+// INVENTORY_v1 — apply a stock delta for an order's items. dir=-1 deducts on a
+// new order, dir=+1 restores on cancel/return. Only touches TRACKED products
+// (stock_qty not null); flips in_stock at zero. Never throws to the caller.
+async function _applyStock(items, dir) {
+  for (const it of (items || [])) {
+    const pid = Number(it.id || 0); const qty = Number(it.qty || 0);
+    if (!pid || !qty) continue;
+    try {
+      await db.query(
+        `UPDATE wapack_products
+            SET stock_qty = GREATEST(0, COALESCE(stock_qty,0) + ($2 * $3)),
+                in_stock  = CASE WHEN COALESCE(stock_qty,0) + ($2 * $3) <= 0 THEN 0 ELSE 1 END
+          WHERE id = $1 AND stock_qty IS NOT NULL`,
+        [pid, dir, qty]);
+    } catch (_) {}
+  }
 }
 
 async function _ensure() {
@@ -1007,9 +1033,9 @@ async function api_wapack_products_bulk_add(token, args) {
     const price = _num(p.price_inr);
     try {
       await db.query(
-        `INSERT INTO wapack_products (source, name, price_inr, image_url, description, in_stock, active)
-         VALUES ($1,$2,$3,$4,$5,1,1)`,
-        [args.source || 'scan', name, price, p.image_url || null, p.description || null]);
+        `INSERT INTO wapack_products (source, name, price_inr, image_url, description, stock_qty, in_stock, active)
+         VALUES ($1,$2,$3,$4,$5,$6,1,1)`,
+        [args.source || 'scan', name, price, p.image_url || null, p.description || null, _num(p.stock_qty)]);
       n++;
     } catch (_) {}
   }
@@ -1179,9 +1205,43 @@ async function api_wapack_order_setStatus(token, args) {
   await _gate(token);
   const id = Number((args && args.id) || 0);
   const status = String((args && args.status) || '');
-  if (!id || !['placed', 'packed', 'shipped', 'delivered', 'cancelled'].includes(status)) throw new Error('id + valid status required');
+  if (!id || !['placed', 'packed', 'shipped', 'delivered', 'returned', 'cancelled'].includes(status)) throw new Error('id + valid status required');
+  const o = (await db.query(`SELECT items_json, stock_restored FROM wapack_orders WHERE id=$1`, [id])).rows[0];
+  if (!o) throw new Error('Order not found');
+  // INVENTORY_v1 — on return/cancel, add the stock back ONCE.
+  if ((status === 'returned' || status === 'cancelled') && Number(o.stock_restored) !== 1) {
+    await _applyStock(_json(o.items_json, []), +1);
+    await db.query(`UPDATE wapack_orders SET status=$1, stock_restored=1 WHERE id=$2`, [status, id]);
+    return { ok: true, stock_restored: true };
+  }
   await db.query(`UPDATE wapack_orders SET status=$1 WHERE id=$2`, [status, id]);
   return { ok: true };
+}
+// INVENTORY_v1 — courier / tracking details on an order.
+async function api_wapack_order_setCourier(token, args) {
+  await _gate(token);
+  args = args || {};
+  const id = Number(args.id || 0);
+  if (!id) throw new Error('order id required');
+  await db.query(
+    `UPDATE wapack_orders SET courier_name=$1, tracking_number=$2, tracking_url=$3 WHERE id=$4`,
+    [args.courier_name || null, args.tracking_number || null, args.tracking_url || null, id]);
+  return { ok: true };
+}
+// INVENTORY_v1 — quick restock: add units to a product's stock.
+async function api_wapack_product_restock(token, args) {
+  await _gate(token);
+  args = args || {};
+  const id = Number(args.id || 0);
+  const add = Number(args.add || 0);
+  if (!id) throw new Error('product id required');
+  await db.query(
+    `UPDATE wapack_products
+        SET stock_qty = GREATEST(0, COALESCE(stock_qty,0) + $2),
+            in_stock  = CASE WHEN COALESCE(stock_qty,0) + $2 > 0 THEN 1 ELSE in_stock END
+      WHERE id=$1`, [id, add]);
+  const p = (await db.query(`SELECT stock_qty FROM wapack_products WHERE id=$1`, [id])).rows[0];
+  return { ok: true, stock_qty: p ? p.stock_qty : null };
 }
 
 /* ---- Public store page + order placement (no auth; tenant-scoped) ---- */
@@ -1240,9 +1300,12 @@ async function expressPlaceOrder(req, res) {
     } catch (_) {}
 
     await db.query(
-      `INSERT INTO wapack_orders (order_ref, customer_name, phone, address, items_json, total_inr, payment_mode, status, lead_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'placed',$8)`,
+      `INSERT INTO wapack_orders (order_ref, customer_name, phone, address, items_json, total_inr, payment_mode, status, lead_id, stock_deducted)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'placed',$8,1)`,
       [ref, name, phone, address, JSON.stringify(clean), total, payMode, leadId || null]);
+
+    // INVENTORY_v1 — deduct stock for tracked products.
+    await _applyStock(clean, -1);
 
     // Drop the order into the lead remark timeline.
     if (leadId) {
@@ -1580,6 +1643,8 @@ module.exports = {
   api_wapack_product_scan,
   api_wapack_orders_list,
   api_wapack_order_setStatus,
+  api_wapack_order_setCourier,
+  api_wapack_product_restock,
   expressRenderStore,
   expressPlaceOrder,
   api_wapack_seedDemo,

@@ -738,9 +738,16 @@
               h('div', { style: { fontWeight: 700, fontSize: '12.5px' } }, p.name),
               h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' } },
                 h('b', { style: { color: WA_D, fontSize: '13px' } }, p.price_inr ? money(p.price_inr) : '—'),
-                Number(p.in_stock) ? pill('In stock', '#dcfce7', '#166534') : pill('Out', '#fef2f2', '#dc2626')),
-              h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+                (p.stock_qty != null
+                  ? (Number(p.stock_qty) > 0 ? pill(p.stock_qty + ' in stock', '#dcfce7', '#166534') : pill('Out of stock', '#fef2f2', '#dc2626'))
+                  : (Number(p.in_stock) ? pill('In stock', '#dcfce7', '#166534') : pill('Out', '#fef2f2', '#dc2626')))),
+              h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' } },
                 btn('✏️ Edit', function () { productModal(p); }),
+                btn('➕ Stock', function () {
+                  var q = prompt('Add how many units to “' + p.name + '” stock? (current: ' + (p.stock_qty != null ? p.stock_qty : 'untracked') + ')');
+                  if (q == null) return; var n = Number(q); if (!n) { toast('Enter a number'); return; }
+                  api('api_wapack_product_restock', { id: p.id, add: n }).then(function (r) { toast('Stock now ' + r.stock_qty); render(); }).catch(function (e) { toast(e.message); });
+                }),
                 btn('🗑', async function () { if (!confirm('Delete ' + p.name + '?')) return; try { await api('api_wapack_product_delete', { id: p.id }); render(); } catch (e) { toast(e.message); } })))));
         });
         body.appendChild(g);
@@ -808,8 +815,9 @@
               ? h('img', { src: d.image_url, style: { width: '34px', height: '34px', objectFit: 'cover', borderRadius: '6px', flex: '0 0 34px' }, onerror: function () { this.style.visibility = 'hidden'; } })
               : h('div', { style: { width: '34px', height: '34px', borderRadius: '6px', background: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 34px' } }, '📦');
             var nm = h('input', { value: d.name, style: Object.assign(inpS(), { flex: '1', fontSize: '13px', padding: '7px 9px' }) }); nm.oninput = function () { drafts[i].name = nm.value; };
-            var pr = h('input', { value: d.price_inr != null ? d.price_inr : '', placeholder: '₹', inputmode: 'numeric', style: Object.assign(inpS(), { width: '76px', fontSize: '13px', padding: '7px 9px' }) }); pr.oninput = function () { drafts[i].price_inr = pr.value; };
-            wrap.appendChild(h('div', { style: { display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '6px' } }, chk, thumb, nm, pr));
+            var pr = h('input', { value: d.price_inr != null ? d.price_inr : '', placeholder: '₹', inputmode: 'numeric', style: Object.assign(inpS(), { width: '72px', fontSize: '13px', padding: '7px 9px' }) }); pr.oninput = function () { drafts[i].price_inr = pr.value; };
+            var st = h('input', { value: d.stock_qty != null ? d.stock_qty : '', placeholder: 'Qty', inputmode: 'numeric', title: 'Stock quantity', style: Object.assign(inpS(), { width: '58px', fontSize: '13px', padding: '7px 9px' }) }); st.oninput = function () { drafts[i].stock_qty = st.value; };
+            wrap.appendChild(h('div', { style: { display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '6px' } }, chk, thumb, nm, pr, st));
           });
         }
         draw();
@@ -869,19 +877,37 @@
         body.innerHTML = '';
         if (!orders.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No orders yet. Share your store link to start receiving orders.')])); return; }
         orders.forEach(function (o) {
-          var statusColors = { placed: ['#fef3c7', '#92400e'], packed: ['#dbeafe', '#1e40af'], shipped: ['#e0e7ff', '#4338ca'], delivered: ['#dcfce7', '#166534'], cancelled: ['#fef2f2', '#dc2626'] };
+          var statusColors = { placed: ['#fef3c7', '#92400e'], packed: ['#dbeafe', '#1e40af'], shipped: ['#e0e7ff', '#4338ca'], delivered: ['#dcfce7', '#166534'], returned: ['#fef9c3', '#854d0e'], cancelled: ['#fef2f2', '#dc2626'] };
           var sc = statusColors[o.status] || ['#f1f5f9', '#475569'];
-          var statusSel = sel([['placed', 'Placed'], ['packed', 'Packed'], ['shipped', 'Shipped'], ['delivered', 'Delivered'], ['cancelled', 'Cancelled']], o.status);
-          statusSel.onchange = async function () { try { await api('api_wapack_order_setStatus', { id: o.id, status: statusSel.value }); toast('Updated'); } catch (e) { toast(e.message); } };
+          var statusSel = sel([['placed', 'Placed'], ['packed', 'Packed'], ['shipped', 'Shipped'], ['delivered', 'Delivered'], ['returned', 'Returned (restock)'], ['cancelled', 'Cancelled (restock)']], o.status);
+          statusSel.onchange = async function () {
+            try { var r = await api('api_wapack_order_setStatus', { id: o.id, status: statusSel.value }); toast(r && r.stock_restored ? 'Updated · stock added back' : 'Updated'); render(); }
+            catch (e) { toast(e.message); }
+          };
+          var courierLine = (o.courier_name || o.tracking_number)
+            ? h('div', { style: { fontSize: '12px', color: '#475569', marginTop: '4px' } }, '🚚 ' + (o.courier_name || '') + (o.tracking_number ? (' · ' + o.tracking_number) : '') + (o.tracking_url ? '' : ''))
+            : null;
           body.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px' } },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' } },
               h('b', {}, o.order_ref || ('#' + o.id)), pill(o.status, sc[0], sc[1])),
             h('div', { style: { fontSize: '12.5px', color: '#64748b', margin: '2px 0 8px' } }, (o.customer_name || '') + ' · 📞 ' + (o.phone || '') + ' · ' + (o.payment_mode || '')),
             h('div', { style: { fontSize: '12.5px' } }, (o.items || []).map(function (it) { return it.name + ' × ' + it.qty; }).join(', ')),
             o.address ? h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '4px' } }, '📍 ' + o.address) : null,
-            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' } },
-              h('b', { style: { color: WA_D } }, money(o.total_inr)), statusSel)));
+            courierLine,
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', gap: '6px', flexWrap: 'wrap' } },
+              h('b', { style: { color: WA_D } }, money(o.total_inr)),
+              h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+                btn('🚚 Courier', function () { courierModal(o); }),
+                statusSel))));
         });
+      }
+      function courierModal(o) {
+        var cn = h('input', { value: o.courier_name || '', placeholder: 'Courier (e.g. Delhivery, DTDC)', style: inpS() });
+        var tn = h('input', { value: o.tracking_number || '', placeholder: 'Tracking number', style: inpS() });
+        var tu = h('input', { value: o.tracking_url || '', placeholder: 'Tracking link (optional)', style: inpS() });
+        modal('🚚 Courier · ' + (o.order_ref || ('#' + o.id)), h('div', {},
+          h('div', { style: { marginBottom: '8px' } }, cn), h('div', { style: { marginBottom: '8px' } }, tn), h('div', {}, tu)),
+          [['💾 Save', async function (close) { try { await api('api_wapack_order_setCourier', { id: o.id, courier_name: cn.value, tracking_number: tn.value, tracking_url: tu.value }); toast('Courier saved'); close(); render(); } catch (e) { toast(e.message); } }, 'primary']]);
       }
 
       render();
