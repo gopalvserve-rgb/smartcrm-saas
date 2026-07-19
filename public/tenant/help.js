@@ -24,11 +24,11 @@
       title: 'Leads', icon: '🧲',
       intro: 'Add, update and follow up on your leads.',
       topics: [
-        { q: 'How do I add a new lead?', steps: ['Tap the ＋ Add Lead button.', 'Enter name and phone (required).', 'Pick a status, then Save.'], find: ['add lead', '＋ add', 'new lead'] },
-        { q: 'How do I update a lead?', steps: ['Tap any lead to open it.', 'Change the fields you need — status, follow-up date, details.', 'Tap Save. Changes appear in the timeline.'], find: ['save'] },
-        { q: 'How do I add a remark / note?', steps: ['Open the lead.', 'Type in the Remark box.', 'Save — it is stamped with your name and time in the timeline.'], find: ['remark', 'add remark'] },
-        { q: 'How do I set a follow-up?', steps: ['Open the lead and set the Follow-up date.', 'It shows in your follow-up list on the Dashboard.'], find: ['follow', 'follow-up'] },
-        { q: 'How do I call or WhatsApp a lead?', steps: ['Open the lead — tap the 📞 Call or 💬 WhatsApp icon.', 'On mobile the call opens your dialer directly.'], find: ['whatsapp', 'call'] }
+        { q: 'How do I add a new lead?', steps: ['Tap the “＋ New Lead” button.', 'Enter name and phone (required).', 'Pick a status, then Save.'], find: ['new lead'] },
+        { q: 'How do I update a lead?', steps: ['Tap any lead row in the list to open it.', 'Change the fields you need — status, follow-up date, details.', 'Tap Save. Changes appear in the timeline.'] },
+        { q: 'How do I add a remark / note?', steps: ['Open the lead by tapping its row.', 'Type in the Remark box at the top.', 'Save — it is stamped with your name and time in the timeline.'] },
+        { q: 'How do I set a follow-up?', steps: ['Open the lead and set the Follow-up date.', 'It shows in your follow-up list on the Dashboard.'] },
+        { q: 'How do I call or WhatsApp a lead?', steps: ['Open the lead, then tap the 📞 Call or 💬 WhatsApp icon on the row.', 'On mobile the call opens your dialer directly.'] }
       ]
     },
     leadpool: {
@@ -160,12 +160,12 @@
   /* ---------- styles ---------- */
   var css = document.createElement('style');
   css.textContent = [
-    '#ph-fab{position:fixed;right:18px;bottom:96px;z-index:2147483001;background:#6d28d9;color:#fff;border:2px solid #fff;border-radius:30px;padding:12px 17px;font-size:14.5px;font-weight:800;box-shadow:0 8px 22px rgba(109,40,217,.5);cursor:pointer;display:flex;gap:7px;align-items:center;font-family:inherit;animation:phpulse 2.4s infinite}',
+    '#ph-fab{position:fixed;right:14px;top:60px;z-index:2147483001;background:#6d28d9;color:#fff;border:2px solid #fff;border-radius:30px;padding:9px 15px;font-size:14px;font-weight:800;box-shadow:0 6px 18px rgba(109,40,217,.5);cursor:pointer;display:flex;gap:6px;align-items:center;font-family:inherit;animation:phpulse 2.4s infinite}',
     '#ph-fab:hover{background:#5b21b6}',
-    '@keyframes phpulse{0%{box-shadow:0 8px 22px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,.45)}70%{box-shadow:0 8px 22px rgba(109,40,217,.5),0 0 0 14px rgba(109,40,217,0)}100%{box-shadow:0 8px 22px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,0)}}',
-    '#ph-hint{position:fixed;right:18px;bottom:150px;z-index:2147483001;background:#1f2937;color:#fff;font-size:12.5px;padding:10px 13px;border-radius:11px;max-width:220px;box-shadow:0 10px 30px rgba(0,0,0,.3);cursor:pointer;font-family:inherit;line-height:1.4}',
+    '@keyframes phpulse{0%{box-shadow:0 6px 18px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,.45)}70%{box-shadow:0 6px 18px rgba(109,40,217,.5),0 0 0 12px rgba(109,40,217,0)}100%{box-shadow:0 6px 18px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,0)}}',
+    '#ph-hint{position:fixed;right:14px;top:108px;z-index:2147483001;background:#1f2937;color:#fff;font-size:12.5px;padding:10px 13px;border-radius:11px;max-width:230px;box-shadow:0 10px 30px rgba(0,0,0,.3);cursor:pointer;font-family:inherit;line-height:1.4}',
     '#ph-hint b{color:#c4b5fd}',
-    '#ph-hint:after{content:"";position:absolute;right:26px;bottom:-7px;border-left:7px solid transparent;border-right:7px solid transparent;border-top:8px solid #1f2937}',
+    '#ph-hint:before{content:"";position:absolute;right:26px;top:-7px;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:8px solid #1f2937}',
     '#ph-back{position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:2147483000;opacity:0;pointer-events:none;transition:.2s}',
     '#ph-back.on{opacity:1;pointer-events:auto}',
     '#ph-drawer{position:fixed;top:0;right:0;height:100%;width:370px;max-width:90vw;background:#fff;z-index:2147483002;transform:translateX(100%);transition:.28s;display:flex;flex-direction:column;box-shadow:-14px 0 40px rgba(0,0,0,.18);font-family:inherit}',
@@ -190,7 +190,7 @@
     '.ph-foot{border-top:1px solid #eee;padding:10px 12px;font-size:11.5px;color:#94a3b8;text-align:center}',
     '.ph-hl{outline:3px solid #f59e0b !important;outline-offset:3px;border-radius:8px;transition:.15s}',
     '.ph-tip{position:fixed;z-index:2147483003;background:#1f2937;color:#fff;font-size:12px;padding:7px 11px;border-radius:8px;max-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3)}',
-    '@media(max-width:640px){#ph-fab{bottom:74px;right:12px;padding:10px 13px}#ph-drawer{width:100vw;max-width:100vw}}'
+    '@media(max-width:640px){#ph-fab{top:56px;right:10px;padding:8px 13px;font-size:13.5px}#ph-drawer{width:100vw;max-width:100vw}}'
   ].join('');
   document.head.appendChild(css);
 
@@ -273,21 +273,40 @@
   function clearHL() { if (hlEl) { hlEl.classList.remove('ph-hl'); hlEl = null; } if (tipEl) { tipEl.remove(); tipEl = null; } }
   function showMe(hints) {
     clearHL();
-    var cands = Array.prototype.slice.call(document.querySelectorAll('button,a,[role=button],.btn,label,input,select,.tab,[data-view]'));
-    var found = null;
-    for (var hi = 0; hi < hints.length && !found; hi++) {
-      var hint = hints[hi].toLowerCase().trim();
+    // Only real actionable controls — buttons/links/tabs/nav — NOT labels,
+    // inputs or table headers (that's what made it hit "Save default" or the
+    // "RECENT REMARK" column header). Score matches so exact/prefix on a short
+    // label wins over a loose substring in some long text.
+    var cands = Array.prototype.slice.call(document.querySelectorAll('button, a[href], [role="button"], .btn, [data-view], nav a, .nav-item, .tab'));
+    var best = null, bestScore = -1;
+    for (var hi = 0; hi < hints.length; hi++) {
+      var hint = String(hints[hi] || '').toLowerCase().trim();
+      if (!hint) continue;
+      var esc = hint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      var wordRe = new RegExp('(^|[\\s+·:])' + esc + '([\\s+·:!?]|$)');
       for (var ci = 0; ci < cands.length; ci++) {
         var el = cands[ci];
-        if (drawer.contains(el) || el === fab) continue;
-        if (el.offsetParent === null) continue; // not visible
-        var txt = (el.textContent || el.getAttribute('placeholder') || el.value || '').toLowerCase();
-        if (txt && txt.indexOf(hint) >= 0) { found = el; break; }
+        if (el === fab || drawer.contains(el)) continue;
+        if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') continue;
+        var t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!t || t.length > 46) continue;
+        var score = -1;
+        if (t === hint) score = 100;
+        else if (t.indexOf(hint) === 0) score = 82;
+        else if (wordRe.test(t)) score = 64;
+        else if (t.indexOf(hint) >= 0) score = 24;
+        if (score >= 0) {
+          score += Math.max(0, 18 - t.length);
+          score += (hints.length - hi) * 2;
+          if (score > bestScore) { bestScore = score; best = el; }
+        }
       }
+      if (best && bestScore >= 82) break;
     }
     // On small screens, close the drawer so the control is visible.
     if (window.innerWidth <= 640) close();
-    if (!found) { toast('Look for it on this page — couldn’t auto-spot it here.'); return; }
+    if (!best) { toast('That control isn’t on this screen right now — follow the steps above.'); return; }
+    var found = best;
     found.classList.add('ph-hl'); hlEl = found;
     try { found.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
     var r = found.getBoundingClientRect();
