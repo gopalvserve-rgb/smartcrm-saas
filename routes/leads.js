@@ -2294,6 +2294,47 @@ async function api_leads_bulkDelete(token, leadIds) {
   return { ok: true, count };
 }
 
+/* LEAD_REASSIGN_BY_ACTIVITY_v1 — map each lead to the rep who actually worked
+ * it: the user who DIALED it (most calls, else most recent), else who last sent
+ * a WhatsApp message on it. Only changes leads where an activity-user is found
+ * and differs from the current owner. dry_run supported. */
+async function api_leads_reassignByActivity(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const p = payload || {};
+  const from = Number(p.from_id), to = Number(p.to_id);
+  if (!from || !to || to < from) throw new Error('from_id and to_id required');
+  const dry = p.dry_run === true;
+  const leads = (await db.query(`SELECT id, assigned_to FROM leads WHERE id BETWEEN $1 AND $2`, [from, to])).rows || [];
+  let changed = 0, noActivity = 0, alreadyRight = 0; const sample = [];
+  for (const l of leads) {
+    let uid = null, via = null;
+    try {
+      const c = await db.query(
+        `SELECT user_id FROM calls WHERE lead_id=$1 AND user_id IS NOT NULL
+          GROUP BY user_id ORDER BY COUNT(*) DESC, MAX(started_at) DESC LIMIT 1`, [l.id]);
+      if (c.rows.length) { uid = Number(c.rows[0].user_id); via = 'call'; }
+    } catch (_) {}
+    if (!uid) {
+      try {
+        const w = await db.query(
+          `SELECT user_id FROM whatsapp_messages WHERE lead_id=$1 AND user_id IS NOT NULL ORDER BY id DESC LIMIT 1`, [l.id]);
+        if (w.rows.length) { uid = Number(w.rows[0].user_id); via = 'whatsapp'; }
+      } catch (_) {}
+    }
+    if (!uid) { noActivity++; continue; }
+    if (Number(l.assigned_to) === uid) { alreadyRight++; continue; }
+    if (sample.length < 15) sample.push({ id: l.id, from: l.assigned_to, to: uid, via: via });
+    if (dry) { changed++; continue; }
+    try {
+      await db.query(`UPDATE leads SET assigned_to=$1, updated_at=now() WHERE id=$2`, [uid, l.id]);
+      try { require('./tat').logAction(l.id, 'reassigned', me.id, { to: uid, reason: 'dialed/messaged by ' + via }); } catch (_) {}
+      changed++;
+    } catch (_) {}
+  }
+  return { ok: true, dry_run: dry, scanned: leads.length, changed, no_activity: noActivity, already_correct: alreadyRight, sample };
+}
+
 /* LEAD_RECOVER_ARCHIVE_v1 — restore leads from the pre-delete archive (the
  * safeguard above). Complete, exact recovery of any accidentally-deleted lead. */
 async function api_leads_recoverFromArchive(token, payload) {
@@ -3587,7 +3628,7 @@ async function api_leads_bulkShare(token, leadIds, userId) {
 
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
-  api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_recoverFromArchive, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
+  api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_recoverFromArchive, api_leads_reassignByActivity, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,
