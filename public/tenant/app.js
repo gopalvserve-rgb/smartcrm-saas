@@ -1808,6 +1808,7 @@ const NAV_GROUPS = [
     { id: 'duetoday',   label: 'Due Today',            icon: '📅', countKey: 'due_today', search: 'today due today today follow-up' },
     { id: 'upcoming',   label: 'Upcoming',             icon: '⏰', countKey: 'upcoming',  search: 'upcoming tomorrow next follow-up' },
     { id: 'projects',   label: 'Sales Closure',        icon: '🚚', search: 'closure sale closure closed won conversion sale final closure' },
+    { id: 'trash',      label: 'Trash',                icon: '♻️', roles: ['admin','manager'], search: 'trash deleted recover restore reinstate bin recycle deleted leads recover deleted lead recovery' },
     /* CUSTOMER_MODULE_v1 — visible only when customers.js loaded (vserve). The view
      * itself re-checks enabled server-side, so this is just discoverability. */
     { id: 'customers',  label: 'Customers',            icon: '👥', search: 'customer convert customer delivery order fulfilment buyer', requiresSlug: ['vserve'] },
@@ -6000,9 +6001,6 @@ VIEWS.leads = async (view) => {
       ? h('button', { class: 'btn ghost danger', onclick: deleteAllDuplicates, title: 'Delete every lead marked DUP' }, '🗑️ Dedupe')
       : null,
     (CRM.user && (CRM.user.role === 'admin' || CRM.user.role === 'manager'))
-      ? h('button', { class: 'btn ghost', onclick: openTrashModal, title: 'Recover recently deleted leads (kept for 72 hours)' }, '♻️ Trash')
-      : null,
-    (CRM.user && (CRM.user.role === 'admin' || CRM.user.role === 'manager'))
       ? h('button', { class: 'btn ghost', title: 'Move every lead with <10-digit phone to Junk', onclick: async () => {
           if (!await confirmDialog('Scan all leads and move ones with phone < 10 digits to Junk? This is a one-shot cleanup; you can re-run later.')) return;
           try { const r = await api('api_leads_cleanupJunk'); toast(`Moved ${r.moved} leads to Junk · ${r.skipped} skipped`); loadLeads(); }
@@ -9311,51 +9309,52 @@ function parseCSV(text) {
 }
 
 /* --- Column chooser --- */
-/* TRASH_v1 — recover leads deleted in the last 72h (all tenants). */
-async function openTrashModal() {
-  const body = h('div', { class: 'trash-body', style: 'max-height:56vh;overflow:auto' });
-  const modal = h('div', { class: 'modal-backdrop' },
-    h('div', { class: 'modal', style: 'max-width:640px;width:96%' },
-      h('div', { class: 'modal-head' }, h('h3', {}, '♻️ Trash — recently deleted leads'),
-        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
-      h('p', { class: 'muted' }, 'Leads deleted in the last 72 hours. Recover one to restore it exactly, with its call/message history. After 72 hours they are permanently removed.'),
-      body,
-      h('div', { class: 'actions' },
-        h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close'))
-    )
-  );
-  document.body.appendChild(modal);
-  async function refresh() {
-    body.innerHTML = '';
-    body.appendChild(h('p', { class: 'muted' }, 'Loading…'));
-    let items = [];
-    try { const r = await api('api_leads_trash_list'); items = (r && r.items) || []; }
-    catch (e) { body.innerHTML = ''; body.appendChild(h('p', { class: 'muted' }, 'Could not load Trash: ' + e.message)); return; }
-    body.innerHTML = '';
-    if (!items.length) { body.appendChild(h('div', { class: 'muted', style: 'text-align:center;padding:26px' }, '🗑️ Trash is empty — nothing deleted in the last 72 hours.')); return; }
-    items.forEach(function (it) {
-      const row = h('div', { style: 'display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--border,#eee)' },
-        h('div', { style: 'flex:1;min-width:0' },
-          h('div', { style: 'font-weight:600' }, (it.name || '(no name)') + (it.phone ? '  ·  ' + it.phone : '')),
-          h('div', { class: 'muted', style: 'font-size:12px' },
-            '#' + it.id + (it.source ? ' · ' + it.source : '') + (it.deleted_by ? ' · by ' + it.deleted_by : '') + (it.hours_left != null ? ' · ' + it.hours_left + 'h left' : ''))
-        ),
-        h('button', { class: 'btn sm primary', onclick: async (e) => {
-          const b = e.target; b.disabled = true; b.textContent = '…';
-          try {
-            const r = await api('api_leads_trash_recover', { id: it.id });
-            if (r && r.recovered) toast('✅ Recovered lead #' + it.id);
-            else if (r && r.already) toast('That lead already exists');
-            else toast('Could not recover (may have expired)', 'err');
-            row.remove(); try { loadLeads(); } catch (_) {}
-          } catch (err) { toast(err.message, 'err'); b.disabled = false; b.textContent = 'Recover'; }
-        } }, 'Recover')
-      );
-      body.appendChild(row);
-    });
+/* TRASH_v1 — left-menu page to view + reinstate leads deleted in the last 72h
+ * (all tenants; admin/manager only). Deleted leads are archived on every delete
+ * path; recover re-creates the lead at its original id with all history. */
+VIEWS.trash = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { class: 'view-head' },
+    h('h2', { style: { margin: 0 } }, '♻️ Trash — deleted leads'),
+    h('p', { class: 'muted', style: { margin: '.25rem 0 0', fontSize: '.9rem' } },
+      'Leads deleted in the last 72 hours. Tap Reinstate to restore one exactly — with its call and WhatsApp history. After 72 hours they are permanently removed.')
+  ));
+  const bar = h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', marginBottom: '.75rem' } },
+    h('button', { class: 'btn ghost', onclick: () => VIEWS.trash(view) }, '🔄 Refresh'));
+  view.appendChild(bar);
+  const listCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading…'));
+  view.appendChild(listCard);
+
+  let items = [];
+  try { const r = await api('api_leads_trash_list'); items = (r && r.items) || []; }
+  catch (e) { listCard.innerHTML = ''; listCard.appendChild(h('div', { class: 'error-box' }, 'Could not load Trash: ' + e.message)); return; }
+  listCard.innerHTML = '';
+  if (!items.length) {
+    listCard.appendChild(h('div', { class: 'muted', style: { textAlign: 'center', padding: '38px' } }, '🗑️ Trash is empty — nothing deleted in the last 72 hours.'));
+    return;
   }
-  refresh();
-}
+  items.forEach(function (it) {
+    const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderBottom: '1px solid var(--border,#eee)' } },
+      h('div', { style: { flex: '1', minWidth: '0' } },
+        h('div', { style: { fontWeight: '600' } }, (it.name || '(no name)') + (it.phone ? '  ·  ' + it.phone : '')),
+        h('div', { class: 'muted', style: { fontSize: '12px' } },
+          '#' + it.id + (it.source ? ' · ' + it.source : '') + (it.deleted_by ? ' · deleted by ' + it.deleted_by : '') + (it.hours_left != null ? ' · ' + it.hours_left + 'h left' : ''))
+      ),
+      h('button', { class: 'btn sm primary', onclick: async (e) => {
+        const b = e.target; b.disabled = true; b.textContent = '…';
+        try {
+          const r = await api('api_leads_trash_recover', { id: it.id });
+          if (r && r.recovered) toast('✅ Reinstated lead #' + it.id);
+          else if (r && r.already) toast('That lead already exists');
+          else toast('Could not reinstate (may have expired)', 'err');
+          row.remove();
+          if (!listCard.querySelector('div[style]')) VIEWS.trash(view);
+        } catch (err) { toast(err.message, 'err'); b.disabled = false; b.textContent = 'Reinstate'; }
+      } }, 'Reinstate')
+    );
+    listCard.appendChild(row);
+  });
+};
 
 function openColumnChooser() {
   const active = new Set(getActiveColumns());
