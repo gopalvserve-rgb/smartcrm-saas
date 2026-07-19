@@ -160,7 +160,8 @@
   /* ---------- styles ---------- */
   var css = document.createElement('style');
   css.textContent = [
-    '#ph-fab{position:fixed;right:16px;bottom:22px;z-index:2147483001;background:#6d28d9;color:#fff;border:2px solid #fff;border-radius:30px;padding:11px 17px;font-size:14px;font-weight:800;box-shadow:0 8px 22px rgba(109,40,217,.55);cursor:pointer;display:flex;gap:6px;align-items:center;font-family:inherit;animation:phpulse 2.4s infinite}',
+    '#ph-fab{position:fixed;left:14px;bottom:96px;z-index:2147483001;background:#6d28d9;color:#fff;border:2px solid #fff;border-radius:30px;padding:11px 17px;font-size:14px;font-weight:800;box-shadow:0 8px 22px rgba(109,40,217,.55);cursor:grab;touch-action:none;display:flex;gap:6px;align-items:center;font-family:inherit;animation:phpulse 2.4s infinite;user-select:none;-webkit-user-select:none}',
+    '#ph-fab.ph-dragging{cursor:grabbing;animation:none;opacity:.92}',
     '#ph-fab:hover{background:#5b21b6}',
     '@keyframes phpulse{0%{box-shadow:0 6px 18px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,.45)}70%{box-shadow:0 6px 18px rgba(109,40,217,.5),0 0 0 12px rgba(109,40,217,0)}100%{box-shadow:0 6px 18px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,0)}}',
     '#ph-hint{position:fixed;right:16px;bottom:78px;z-index:2147483001;background:#1f2937;color:#fff;font-size:12.5px;padding:10px 13px;border-radius:11px;max-width:230px;box-shadow:0 10px 30px rgba(0,0,0,.3);cursor:pointer;font-family:inherit;line-height:1.4}',
@@ -190,7 +191,7 @@
     '.ph-foot{border-top:1px solid #eee;padding:10px 12px;font-size:11.5px;color:#94a3b8;text-align:center}',
     '.ph-hl{outline:3px solid #f59e0b !important;outline-offset:3px;border-radius:8px;transition:.15s}',
     '.ph-tip{position:fixed;z-index:2147483003;background:#1f2937;color:#fff;font-size:12px;padding:7px 11px;border-radius:8px;max-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3)}',
-    '@media(max-width:640px){#ph-fab{bottom:18px;right:14px;padding:11px 16px;font-size:14px}#ph-drawer{width:100vw;max-width:100vw}}'
+    '@media(max-width:640px){#ph-fab{bottom:92px;left:12px;padding:11px 16px;font-size:14px}#ph-drawer{width:100vw;max-width:100vw}}'
   ].join('');
   document.head.appendChild(css);
 
@@ -225,9 +226,16 @@
       if (document.getElementById('ph-hint')) return;
       var hint = document.createElement('div');
       hint.id = 'ph-hint';
-      hint.innerHTML = '👋 New: tap <b>❓ Help</b> for a quick guide on this page.';
+      hint.innerHTML = '👋 New: tap <b>❓ Help</b> for a guide on this page. Drag it anywhere.';
       hint.onclick = function () { hint.remove(); open(); };
       document.body.appendChild(hint);
+      // Anchor the bubble just above the (draggable) fab wherever it is.
+      try {
+        var r = fab.getBoundingClientRect();
+        hint.style.right = 'auto'; hint.style.bottom = 'auto';
+        hint.style.left = Math.max(8, Math.min(r.left - 6, window.innerWidth - 250)) + 'px';
+        hint.style.top = Math.max(8, r.top - 70) + 'px';
+      } catch (_) {}
       localStorage.setItem('ph_hint_seen', String(n + 1));
       setTimeout(function () { var h = document.getElementById('ph-hint'); if (h) h.remove(); }, 8000);
     } catch (_) {}
@@ -323,8 +331,46 @@
     t.textContent = msg; document.body.appendChild(t); setTimeout(function () { t.remove(); }, 2600);
   }
 
+  /* ---------- draggable FAB (position persists) ---------- */
+  var POS_KEY = 'ph_fab_pos';
+  function _clampX(x) { return Math.max(6, Math.min(x, window.innerWidth - fab.offsetWidth - 6)); }
+  function _clampY(y) { return Math.max(6, Math.min(y, window.innerHeight - fab.offsetHeight - 6)); }
+  function _applyPos(x, y) { fab.style.left = _clampX(x) + 'px'; fab.style.top = _clampY(y) + 'px'; fab.style.right = 'auto'; fab.style.bottom = 'auto'; }
+  function _restorePos() { try { var s = JSON.parse(localStorage.getItem(POS_KEY) || 'null'); if (s && typeof s.left === 'number') _applyPos(s.left, s.top); } catch (_) {} }
+  (function makeDraggable() {
+    var dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    function down(e) {
+      var p = e.touches ? e.touches[0] : e;
+      dragging = true; moved = false;
+      var r = fab.getBoundingClientRect();
+      ox = p.clientX - r.left; oy = p.clientY - r.top; sx = p.clientX; sy = p.clientY;
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+      document.addEventListener('touchmove', move, { passive: false }); document.addEventListener('touchend', up);
+    }
+    function move(e) {
+      if (!dragging) return;
+      var p = e.touches ? e.touches[0] : e;
+      if (!moved && (Math.abs(p.clientX - sx) > 5 || Math.abs(p.clientY - sy) > 5)) { moved = true; fab.classList.add('ph-dragging'); }
+      if (moved) { if (e.cancelable) e.preventDefault(); _applyPos(p.clientX - ox, p.clientY - oy); }
+    }
+    function up() {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+      document.removeEventListener('touchmove', move); document.removeEventListener('touchend', up);
+      if (moved) {
+        var r = fab.getBoundingClientRect();
+        try { localStorage.setItem(POS_KEY, JSON.stringify({ left: r.left, top: r.top })); } catch (_) {}
+        fab.__suppressClick = true; setTimeout(function () { fab.__suppressClick = false; }, 60);
+      }
+      fab.classList.remove('ph-dragging'); dragging = false;
+    }
+    fab.addEventListener('mousedown', down);
+    fab.addEventListener('touchstart', down, { passive: true });
+    window.addEventListener('resize', function () { if (fab.style.left && fab.style.left !== 'auto') _applyPos(parseFloat(fab.style.left), parseFloat(fab.style.top)); });
+    _restorePos();
+  })();
+
   /* ---------- wire events ---------- */
-  fab.onclick = open;
+  fab.onclick = function () { if (fab.__suppressClick) return; open(); };
   drawer.addEventListener('click', function (e) { if (e.target && e.target.id === 'ph-x') close(); });
   back.onclick = close;
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
