@@ -125,7 +125,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-07-19-botform-settings-v1" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-07-19-trash-v1" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -166,7 +166,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-07-19-botform-settings-v1';
+          s.src = 'app.js?v=2026-07-19-trash-v1';
           document.body.appendChild(s);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
@@ -267,7 +267,7 @@
           csJs.src = 'callSettings.js?v=2026-07-13-sim-default-all-v2'; csJs.defer = true;
           document.body.appendChild(csJs);
           var helpJs = document.createElement('script');      // PAGE_HELP_v1 — per-page contextual help
-          helpJs.src = 'help.js?v=2026-07-19-pagehelp-v3'; helpJs.defer = true;
+          helpJs.src = 'help.js?v=2026-07-19-pagehelp-v4'; helpJs.defer = true;
           document.body.appendChild(helpJs);
         }
         if (document.body) injectSpaScripts();

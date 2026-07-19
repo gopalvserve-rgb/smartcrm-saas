@@ -2265,6 +2265,7 @@ async function api_leads_deleteAllDuplicates(token) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
   const dups = (await db.getAll('leads')).filter(l => Number(l.is_duplicate) === 1);
+  await _archiveLeads(dups.map(l => l.id), me.id);   // TRASH_v1 — recoverable for 72h
   let count = 0;
   for (const lead of dups) {
     if (await db.removeRow('leads', lead.id)) count++;
@@ -2272,23 +2273,97 @@ async function api_leads_deleteAllDuplicates(token) {
   return { ok: true, count };
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * TRASH_v1 (2026-07-19) — soft-delete safety net for EVERY tenant. Before any
+ * lead is hard-deleted, its full row is snapshotted into leads_deleted_archive.
+ * The Trash view lists anything deleted in the last 72h and lets an
+ * admin/manager restore it at its original id (which re-links all history).
+ * Snapshots older than 72h are purged. Shared code → applies to all tenants.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const TRASH_WINDOW_HRS = 72;
+async function _ensureTrashTable() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS leads_deleted_archive (
+      arch_id SERIAL PRIMARY KEY, id INT, data JSONB, deleted_by INT, deleted_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  } catch (_) {}
+}
+async function _archiveLeads(ids, deletedBy) {
+  const list = (ids || []).map(Number).filter(Boolean);
+  if (!list.length) return;
+  await _ensureTrashTable();
+  for (const id of list) {
+    try {
+      const r = await db.query(`SELECT to_jsonb(l.*) AS data FROM leads l WHERE id=$1`, [id]);
+      if (r.rows.length) await db.query(`INSERT INTO leads_deleted_archive (id, data, deleted_by) VALUES ($1,$2,$3)`, [id, r.rows[0].data, deletedBy || null]);
+    } catch (_) {}
+  }
+}
+async function _purgeTrash() {
+  try { await db.query(`DELETE FROM leads_deleted_archive WHERE deleted_at < now() - interval '${TRASH_WINDOW_HRS} hours'`); } catch (_) {}
+}
+// List leads deleted in the last 72h that are NOT currently present.
+async function api_leads_trash_list(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  await _ensureTrashTable();
+  await _purgeTrash();
+  let rows = [];
+  try {
+    rows = (await db.query(
+      `SELECT DISTINCT ON (a.id) a.arch_id, a.id, a.data, a.deleted_by, a.deleted_at
+         FROM leads_deleted_archive a
+        WHERE a.deleted_at > now() - interval '${TRASH_WINDOW_HRS} hours'
+          AND NOT EXISTS (SELECT 1 FROM leads l WHERE l.id = a.id)
+        ORDER BY a.id, a.arch_id DESC`)).rows || [];
+  } catch (_) { return { items: [], window_hours: TRASH_WINDOW_HRS }; }
+  const uids = [...new Set(rows.map(r => r.deleted_by).filter(Boolean))];
+  const names = {};
+  if (uids.length) { try { (await db.query(`SELECT id, name FROM users WHERE id = ANY($1::int[])`, [uids])).rows.forEach(u => names[u.id] = u.name); } catch (_) {} }
+  const items = rows.map(function (r) {
+    const d = r.data || {};
+    const hoursLeft = Math.max(0, +(TRASH_WINDOW_HRS - (Date.now() - new Date(r.deleted_at).getTime()) / 3600000).toFixed(1));
+    return { arch_id: r.arch_id, id: r.id, name: d.name || null, phone: d.phone || null, source: d.source || null, product: d.product || null, deleted_by: names[r.deleted_by] || null, deleted_at: r.deleted_at, hours_left: hoursLeft };
+  });
+  items.sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
+  return { items, window_hours: TRASH_WINDOW_HRS };
+}
+// Restore one (or many) leads from Trash at their original id.
+async function api_leads_trash_recover(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const p = payload || {};
+  const ids = (Array.isArray(p.ids) ? p.ids : [p.id != null ? p.id : p.lead_id]).map(Number).filter(Boolean);
+  if (!ids.length) throw new Error('id required');
+  await _ensureTrashTable();
+  let recovered = 0, already = 0, missing = 0;
+  for (const id of ids) {
+    try {
+      const ex = await db.query(`SELECT 1 FROM leads WHERE id=$1`, [id]);
+      if (ex.rows.length) { already++; continue; }
+      const r = await db.query(`SELECT data FROM leads_deleted_archive WHERE id=$1 AND deleted_at > now() - interval '${TRASH_WINDOW_HRS} hours' ORDER BY arch_id DESC LIMIT 1`, [id]);
+      if (!r.rows.length) { missing++; continue; }
+      const d = r.rows[0].data || {};
+      const cols = Object.keys(d).filter(k => d[k] !== null && d[k] !== undefined);
+      if (!cols.length) { missing++; continue; }
+      const ph = cols.map((_, i) => '$' + (i + 1));
+      await db.query(`INSERT INTO leads (${cols.join(',')}) VALUES (${ph.join(',')})`, cols.map(k => d[k]));
+      recovered++;
+      try { await db.query(`DELETE FROM leads_deleted_archive WHERE id=$1`, [id]); } catch (_) {}
+      try { require('./tat').logAction(id, 'recovered', me.id, { from: 'trash' }); } catch (_) {}
+    } catch (_) {}
+  }
+  try { await db.query(`SELECT setval(pg_get_serial_sequence('leads','id'), GREATEST((SELECT COALESCE(MAX(id),1) FROM leads),1))`); } catch (_) {}
+  return { ok: true, recovered, already, missing };
+}
+
 async function api_leads_bulkDelete(token, leadIds) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
   const ids = (leadIds || []).map(Number).filter(Boolean);
-  // LEAD_DELETE_ARCHIVE_v1 — snapshot the FULL lead row before deleting, so an
-  // accidental / mistaken bulk delete is always fully recoverable from
-  // leads_deleted_archive (id + complete JSONB + who/when).
-  try {
-    await db.query(`CREATE TABLE IF NOT EXISTS leads_deleted_archive (
-      arch_id SERIAL PRIMARY KEY, id INT, data JSONB, deleted_by INT, deleted_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
-    for (const id of ids) {
-      try {
-        const r = await db.query(`SELECT to_jsonb(l.*) AS data FROM leads l WHERE id=$1`, [id]);
-        if (r.rows.length) await db.query(`INSERT INTO leads_deleted_archive (id, data, deleted_by) VALUES ($1,$2,$3)`, [id, r.rows[0].data, me.id || null]);
-      } catch (_) {}
-    }
-  } catch (_) {}
+  // TRASH_v1 — snapshot the FULL lead row before deleting so a mistaken delete
+  // is recoverable from Trash for 72h; also purge anything already past 72h.
+  await _archiveLeads(ids, me.id);
+  await _purgeTrash();
   let count = 0;
   for (const id of ids) { if (await db.removeRow('leads', id)) count++; }
   return { ok: true, count };
@@ -3424,7 +3499,8 @@ async function api_leads_merge(token, payload) {
     });
   } catch (_) {}
 
-  // Delete source rows.
+  // Delete source rows (archived to Trash first → a wrong merge is reversible).
+  await _archiveLeads(source_ids, me.id);
   let deleted = 0;
   for (const sid of source_ids) {
     if (await db.removeRow('leads', sid)) deleted++;
@@ -3629,6 +3705,7 @@ async function api_leads_bulkShare(token, leadIds, userId) {
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_recoverFromArchive, api_leads_reassignByActivity, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
+  api_leads_trash_list, api_leads_trash_recover,  /* TRASH_v1 */
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,
