@@ -2275,9 +2275,47 @@ async function api_leads_deleteAllDuplicates(token) {
 async function api_leads_bulkDelete(token, leadIds) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const ids = (leadIds || []).map(Number).filter(Boolean);
+  // LEAD_DELETE_ARCHIVE_v1 — snapshot the FULL lead row before deleting, so an
+  // accidental / mistaken bulk delete is always fully recoverable from
+  // leads_deleted_archive (id + complete JSONB + who/when).
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS leads_deleted_archive (
+      arch_id SERIAL PRIMARY KEY, id INT, data JSONB, deleted_by INT, deleted_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    for (const id of ids) {
+      try {
+        const r = await db.query(`SELECT to_jsonb(l.*) AS data FROM leads l WHERE id=$1`, [id]);
+        if (r.rows.length) await db.query(`INSERT INTO leads_deleted_archive (id, data, deleted_by) VALUES ($1,$2,$3)`, [id, r.rows[0].data, me.id || null]);
+      } catch (_) {}
+    }
+  } catch (_) {}
   let count = 0;
-  for (const id of (leadIds || [])) { if (await db.removeRow('leads', id)) count++; }
+  for (const id of ids) { if (await db.removeRow('leads', id)) count++; }
   return { ok: true, count };
+}
+
+/* LEAD_RECOVER_ARCHIVE_v1 — restore leads from the pre-delete archive (the
+ * safeguard above). Complete, exact recovery of any accidentally-deleted lead. */
+async function api_leads_recoverFromArchive(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  let where = '1=1'; const vals = [];
+  if (p.from_id && p.to_id) { vals.push(Number(p.from_id), Number(p.to_id)); where = `id BETWEEN $1 AND $2`; }
+  let rows = [];
+  try { rows = (await db.query(`SELECT DISTINCT ON (id) id, data FROM leads_deleted_archive WHERE ${where} ORDER BY id, arch_id DESC`, vals)).rows || []; }
+  catch (e) { return { ok: false, error: 'No archive yet: ' + e.message }; }
+  let recovered = 0, skipped = 0;
+  for (const row of rows) {
+    try { const ex = await db.query(`SELECT 1 FROM leads WHERE id=$1`, [row.id]); if (ex.rows.length) { skipped++; continue; } } catch (_) {}
+    const d = row.data || {};
+    const cols = Object.keys(d).filter(k => d[k] !== null && d[k] !== undefined);
+    if (!cols.length) continue;
+    const ph = cols.map((_, i) => '$' + (i + 1));
+    try { await db.query(`INSERT INTO leads (${cols.join(',')}) VALUES (${ph.join(',')})`, cols.map(k => d[k])); recovered++; } catch (_) {}
+  }
+  try { await db.query(`SELECT setval(pg_get_serial_sequence('leads','id'), GREATEST((SELECT COALESCE(MAX(id),1) FROM leads),1))`); } catch (_) {}
+  return { ok: true, recovered, skipped };
 }
 
 /* LEAD_RECOVER_v1 — re-create hard-deleted leads at their ORIGINAL ids from
@@ -3549,7 +3587,7 @@ async function api_leads_bulkShare(token, leadIds, userId) {
 
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
-  api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
+  api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_recoverFromArchive, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,
