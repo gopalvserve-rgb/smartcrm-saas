@@ -844,12 +844,21 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
     if (_isAfterHours(settings.business_hours)) return 'outside business hours';
   }
 
-  // ALWAYS-ON GUARD: if any human agent replied in the last 30 minutes,
-  // assume they're still actively handling this thread and silence the
-  // bot. This runs regardless of pause_after_human_handoff /
-  // resume_after_idle_seconds settings so the bot never steps on a live
-  // human conversation. Window is intentionally short — within 30 min of
-  // the last agent reply is a strong signal someone's at the keyboard.
+  // ALWAYS-ON GUARD: if a human agent replied within the resume window,
+  // assume they're still handling this thread and silence the bot so it
+  // never talks over a live agent.
+  // AIBOT_RESUME_PER_SETTING_v1 (2026-07-19) — the window now FOLLOWS the
+  // tenant's configured resume_after_idle_seconds (capped at 30 min) instead
+  // of a hardcoded 30 min. A tenant that deliberately sets a fast resume
+  // (e.g. vserve = 10s) gets the bot back in exactly that many seconds — their
+  // explicit choice — while tenants on the long default (24h) keep the full
+  // 30-min safety guard, INCLUDING after-hours. The window can only ever
+  // SHRINK below 30 min for tenants who configured a shorter resume; no tenant
+  // becomes less safe than before. IMPORTANT: this fixes the reported "bot
+  // stops as soon as a human touches the thread and won't come back" — it was
+  // the hardcoded 30-min blackout overriding the user's 10s resume setting.
+  // Note: reads never trigger this — only a genuine outbound with a user_id
+  // (a typed agent reply) does; read receipts are UPDATE-only in the webhook.
   // AI_BOT_GATES_v1 (2026-06-21) — phone normalization. The user's
   // inbound 'phone' is digits-only (callers strip non-digits). But
   // saved to_number/from_number columns vary in format (some rows
@@ -878,6 +887,15 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
       return 'paused by agent (' + _m + 'm left)';
     }
   } catch (_) { /* table may not exist yet — treat as not paused */ }
+  // AIBOT_RESUME_PER_SETTING_v1 — resolve the guard window from the tenant's
+  // configured resume window (seconds preferred, else minutes×60), capped at
+  // 30 min. If no resume window is set (0), fall back to the 30-min safety
+  // default. Computed once here and reused; the idle-resume gate below keeps
+  // the tenant's full (possibly longer) window for the during-hours case.
+  const _cfgIdleSec = settings.resume_after_idle_seconds != null && Number(settings.resume_after_idle_seconds) >= 0
+    ? Math.max(0, Number(settings.resume_after_idle_seconds))
+    : Math.max(0, Number(settings.resume_after_idle_minutes || 1440)) * 60;
+  const _guardSec = (_cfgIdleSec > 0) ? Math.min(_cfgIdleSec, 1800) : 1800;
   try {
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages
@@ -886,11 +904,13 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
             RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
             OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1
           )
-          AND created_at > NOW() - INTERVAL '30 minutes'
+          AND created_at > NOW() - ($2 || ' seconds')::interval
         LIMIT 1`,
-      [_phoneTail]
+      [_phoneTail, String(_guardSec)]
     );
-    if (r.rows.length) return 'human actively chatting (last 30 min)';
+    if (r.rows.length) return _guardSec >= 1800
+      ? 'human actively chatting (last 30 min)'
+      : ('human replied — resuming ' + _guardSec + 's after last agent msg (per resume setting)');
   } catch (_) { /* if the table query errors, fall through to other checks */ }
 
   // Has a real (non-bot) agent replied to this thread recently?
