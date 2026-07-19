@@ -1295,7 +1295,7 @@ function _storeHtml(store, prods, slug) {
     '<div class="bar hide" id="bar" onclick="openCart()"><span id="barc">🛒 0 items</span><span id="bart">' + _inr(0) + ' · Checkout →</span></div>' +
     '<div class="sheet" id="sheet"><div class="panel" id="panel"></div></div>' +
     '<script>' +
-    'var P=' + JSON.stringify(items) + ';var PAY=' + JSON.stringify(pay) + ';var SLUG=' + JSON.stringify(slug) + ';var cart={};' +
+    'var P=' + JSON.stringify(items) + ';var PAY=' + JSON.stringify(pay) + ';var SLUG=' + JSON.stringify(slug) + ';var WA=' + JSON.stringify(_digits(store.notify_phone)) + ';var cart={};' +
     'function inr(n){return "\\u20B9"+Number(n||0).toLocaleString("en-IN");}' +
     'function count(){return Object.values(cart).reduce(function(a,b){return a+b;},0);}' +
     'function total(){return P.reduce(function(s,p){return s+(cart[p.id]||0)*p.price;},0);}' +
@@ -1307,14 +1307,20 @@ function _storeHtml(store, prods, slug) {
     'var h="<h2>Your order</h2>"+items.map(function(p){return "<div class=oi><span>"+esc(p.name)+" \\u00D7 "+cart[p.id]+"</span><span>"+inr(p.price*cart[p.id])+"</span></div>";}).join("")+"<div class=oi style=\\"font-weight:800;border:none\\"><span>Total</span><span>"+inr(total())+"</span></div>";' +
     'h+="<input class=inp id=cn placeholder=\\"Your name\\"><input class=inp id=cp placeholder=\\"Phone number\\" inputmode=numeric><textarea class=inp id=ca placeholder=\\"Delivery address\\" style=height:60px></textarea>";' +
     'h+="<div class=payopt>"+(PAY.cod?"<label class=on id=lcod><input type=radio name=pay value=cod checked>Cash on Delivery</label>":"")+(PAY.upi?"<label id=lupi"+(PAY.cod?"":" class=on")+"><input type=radio name=pay value=upi"+(PAY.cod?"":" checked")+">UPI"+(PAY.upi_id?(" "+esc(PAY.upi_id)):"")+"</label>":"")+"</div>";' +
-    'h+="<button class=place onclick=place()>Place order \\u00B7 "+inr(total())+"</button><div class=muted>You\\u2019ll get a WhatsApp confirmation.</div>";' +
+    'h+="<button class=place onclick=place()>"+(WA?"\\uD83D\\uDCF2 Order on WhatsApp":("Place order \\u00B7 "+inr(total())))+"</button><div class=muted>"+(WA?"Opens WhatsApp with your order ready to send.":"You\\u2019ll get a confirmation.")+"</div>";' +
     'document.getElementById("panel").innerHTML=h;document.getElementById("sheet").classList.add("on");' +
     'var opts=document.querySelectorAll(".payopt label");opts.forEach(function(l){l.onclick=function(){opts.forEach(function(x){x.classList.remove("on");});l.classList.add("on");l.querySelector("input").checked=true;};});}' +
     'function place(){var n=document.getElementById("cn").value.trim();var p=document.getElementById("cp").value.trim();var a=document.getElementById("ca").value.trim();' +
     'if(!n||!p){alert("Please enter your name and phone");return;}var pay=(document.querySelector("input[name=pay]:checked")||{}).value||"cod";' +
     'var items=P.filter(function(x){return cart[x.id];}).map(function(x){return{id:x.id,qty:cart[x.id]};});' +
     'fetch("/t/"+SLUG+"/store/order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n,phone:p,address:a,payment:pay,items:items})}).then(function(r){return r.json();}).then(function(j){' +
-    'if(j&&j.ok){document.getElementById("panel").innerHTML="<div style=text-align:center;padding:40px><div style=font-size:54px>\\u2705</div><h2>Order placed!</h2><p style=color:#64748b;margin-top:6px>Order "+j.order_ref+" \\u00B7 "+inr(j.total)+"</p><button class=place onclick=\\"location.reload()\\">Done</button></div>";cart={};}' +
+    'if(j&&j.ok){if(WA){' +
+    'var lines=P.filter(function(x){return cart[x.id];}).map(function(x){return "\\u2022 "+x.name+" x"+cart[x.id]+" - "+inr(x.price*cart[x.id]);}).join("\\n");' +
+    'var msg="Hi! I would like to order (Ref "+j.order_ref+"):\\n"+lines+"\\nTotal: "+inr(j.total)+"\\nPay: "+(pay=="upi"?"UPI":"COD")+"\\nName: "+n+"\\nPhone: "+p+(a?("\\nAddress: "+a):"");' +
+    'var wa="https://wa.me/"+WA+"?text="+encodeURIComponent(msg);cart={};' +
+    'document.getElementById("panel").innerHTML="<div style=\\"text-align:center;padding:32px 16px\\"><div style=font-size:54px>\\uD83D\\uDCF2</div><h2>Almost done!</h2><p style=\\"color:#64748b;margin:6px 0 14px\\">Tap to send your order on WhatsApp \\u2014 it\\u2019s saved too.</p><a href=\\""+wa+"\\" class=place style=\\"display:block;text-decoration:none;box-sizing:border-box\\">\\uD83D\\uDCF2 Send on WhatsApp</a></div>";' +
+    'setTimeout(function(){location.href=wa;},500);' +
+    '}else{document.getElementById("panel").innerHTML="<div style=text-align:center;padding:40px><div style=font-size:54px>\\u2705</div><h2>Order placed!</h2><p style=color:#64748b;margin-top:6px>Order "+j.order_ref+" \\u00B7 "+inr(j.total)+"</p><button class=place onclick=\\"location.reload()\\">Done</button></div>";cart={};}}' +
     'else{alert((j&&j.error)||"Could not place order");}}).catch(function(){alert("Network error, please try again");});}' +
     'grid();</script></body></html>';
 }
