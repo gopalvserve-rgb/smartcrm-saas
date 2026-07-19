@@ -752,12 +752,13 @@
         const g = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '10px' } });
         prods.forEach(function (p) {
           var imgBox = p.image_url
-            ? h('div', { style: { height: '96px', background: '#f1f5f9', overflow: 'hidden' } }, h('img', { src: p.image_url, style: { width: '100%', height: '100%', objectFit: 'cover' }, onerror: function () { this.style.display = 'none'; } }))
-            : h('div', { style: { height: '96px', background: 'linear-gradient(135deg,#a7f3d0,#6ee7b7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px' } }, '📦');
+            ? h('div', { style: { height: '120px', background: '#f1f5f9', overflow: 'hidden' } }, h('img', { src: p.image_url, style: { width: '100%', height: '100%', objectFit: 'cover' }, onerror: function () { this.style.display = 'none'; this.parentNode.innerHTML = '<div style="height:120px;display:flex;align-items:center;justify-content:center;font-size:34px;background:linear-gradient(135deg,#a7f3d0,#6ee7b7)">📦</div>'; } }))
+            : h('div', { style: { height: '120px', background: 'linear-gradient(135deg,#a7f3d0,#6ee7b7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' } }, '📦');
           g.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '12px', overflow: 'hidden', opacity: Number(p.active) === 0 ? '.55' : '1' } },
             imgBox,
-            h('div', { style: { padding: '9px' } },
-              h('div', { style: { fontWeight: 700, fontSize: '12.5px' } }, p.name),
+            h('div', { style: { padding: '10px' } },
+              h('div', { style: { fontWeight: 700, fontSize: '13px', lineHeight: '1.3' } }, p.name),
+              p.description ? h('div', { style: { fontSize: '11px', color: '#64748b', marginTop: '3px', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' } }, p.description) : null,
               h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' } },
                 h('b', { style: { color: WA_D, fontSize: '13px' } }, p.price_inr ? money(p.price_inr) : '—'),
                 (invOn && p.stock_qty != null
