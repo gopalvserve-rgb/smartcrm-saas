@@ -1190,6 +1190,10 @@ async function api_wapack_product_from_url(token, args) {
   // WooCommerce Store API (whole catalog).
   const woo = await _tryWoo(url);
   if (woo && woo.list && woo.list.length) return { drafts: woo.list };
+  // A bare homepage on a non-Shopify/Woo site has no product list to extract.
+  if (new URL(url).pathname.replace(/\/+$/, '') === '') {
+    throw new Error('That’s a homepage, not a product page. This store isn’t on Shopify or WooCommerce, so there’s no product list to import. Paste a single product page link, or add products manually / by scanning a photo of your list.');
+  }
   let html = '';
   try {
     const r = await fetch(url, { headers: {
