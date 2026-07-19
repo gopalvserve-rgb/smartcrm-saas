@@ -765,7 +765,7 @@ function _buildFlowJson(form, fields, version) {
   });
   children.push({ type: 'Footer', label: String(form.cta_text || 'Submit').slice(0, 30), 'on-click-action': { name: 'complete', payload: payload } });
   return {
-    version: version || '3.1',
+    version: version || '7.0',
     screens: [{
       id: 'FORM', title: String(form.name || 'Form').slice(0, 30), terminal: true, data: {},
       layout: { type: 'SingleColumnLayout', children: [{ type: 'Form', name: 'form', children: children }] }

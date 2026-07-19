@@ -494,8 +494,14 @@
             h('div', { style: { flex: 1 } },
               h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, h('b', {}, f.name),
                 f.status === 'published' ? pill('✓ Published', '#dcfce7', '#166534') : pill('Draft', '#f1f5f9', '#475569')),
-              h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px' } },
-                (f.fields || []).length + ' fields · ' + (f.submissions || 0) + ' submissions')),
+              h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
+                h('span', {}, (f.fields || []).length + ' fields · ' + (f.submissions || 0) + ' submissions'),
+                f.flow_id ? pill('✓ Opens in chat', '#dcfce7', '#166534') : pill('Text prompt', '#f1f5f9', '#475569'))),
+            btn(f.flow_id ? '🔄 Re-publish' : '🚀 Publish in-chat', async function (e) {
+              var b = e && e.target; if (b) { b.disabled = true; b.textContent = '⏳ Publishing…'; }
+              try { var r = await api('api_wapack_form_publishFlow', { form_id: f.id }); if (r && r.ok) { toast('Published — this form now opens inside the chat ✓'); render(); } else { toast('Publish failed: ' + ((r && r.error) || 'unknown')); if (b) { b.disabled = false; } } }
+              catch (er) { toast(er.message); if (b) { b.disabled = false; } }
+            }, 'primary'),
             btn('📤 Send test', async function () {
               const to = prompt('Send "' + f.name + '" to which WhatsApp number? (with country code)');
               if (!to) return;
