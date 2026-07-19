@@ -611,6 +611,7 @@ async function _sendForm(form, phone, cfg, opts) {
   const to = String(phone || '').replace(/[^\d]/g, '');
   if (!to) return { sent: false, error: 'no phone' };
   const fields = _json(form.fields_json, []);
+  let _lastFlowErr = null;
 
   // NATIVE FLOW — only when the form is linked to a published Meta Flow.
   if (form.flow_id) {
@@ -647,9 +648,14 @@ async function _sendForm(form, phone, cfg, opts) {
            VALUES ($1,$2,'out',$3,$4,$5,$6,$7,'interactive_flow',$8)`,
           [opts.leadId || null, null, cfg.phoneId, to, dbBody, waId, err ? 'failed' : 'sent', cfg.phoneId || null]);
       } catch (_) {}
-      return { sent: !err, mode: 'flow', wa_message_id: waId, error: err };
+      if (!err) return { sent: true, mode: 'flow', wa_message_id: waId, error: null };
+      // Meta REJECTED the flow (e.g. #131009) but didn't throw — do NOT return
+      // here or the bot dead-ends into a normal reply. Fall through to the text
+      // form so the customer still gets it and we still capture the answers.
+      _lastFlowErr = err;
     } catch (e) {
-      // Flow send failed (unpublished / bad screen) → fall through to text.
+      _lastFlowErr = e.message;
+      // network/throw → fall through to text
     }
   }
 
@@ -661,13 +667,42 @@ async function _sendForm(form, phone, cfg, opts) {
     (form.flow_id ? '' : '\n\n(Reply here with your details.)');
   try {
     const r = await wb._sendText({ to, text, leadId: opts.leadId || null, userId: null }, cfg);
-    return { sent: !r.error, mode: 'text', wa_message_id: r.wa_message_id, error: r.error || null };
+    return { sent: !r.error, mode: form.flow_id ? 'text_fallback' : 'text', wa_message_id: r.wa_message_id, error: r.error || null, flow_error: _lastFlowErr };
   } catch (e) {
-    return { sent: false, mode: 'text', error: e.message };
+    return { sent: false, mode: 'text', error: e.message, flow_error: _lastFlowErr };
   }
 }
 
 // Manual/testing send from the UI. { form_id, phone, phone_number_id?, lead_id? }
+// Diagnose a form's published Flow: fetch status + validation_errors + screens
+// from Meta so we can see WHY a flow message is rejected (#131009 etc).
+async function api_wapack_flow_diagnose(token, args) {
+  await _gate(token);
+  const fid = Number((args && args.form_id) || 0);
+  if (!fid) throw new Error('form_id required');
+  const f = (await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [fid])).rows[0];
+  if (!f) throw new Error('form not found');
+  const out = { form_id: fid, flow_id: f.flow_id || null, flow_screen: f.flow_screen || null, status: f.status || null };
+  if (!f.flow_id) { out.note = 'This form has no published Flow (flow_id is null).'; return out; }
+  const wb = require('../whatsbot');
+  const cfg = await wb._cfg();
+  try {
+    const meta = await wb._graphGet(`${f.flow_id}?fields=id,name,status,categories,validation_errors,preview`, cfg);
+    out.meta = meta.body;
+  } catch (e) { out.meta_err = e.message; }
+  try {
+    const assets = await wb._graphGet(`${f.flow_id}/assets`, cfg);
+    const a = (assets.body && assets.body.data) || [];
+    out.assets = a.map(function (x) { return { name: x.name, type: x.asset_type }; });
+    // Pull the actual flow JSON to read the real first-screen id.
+    const flowFile = a.find(function (x) { return x.asset_type === 'FLOW_JSON'; });
+    if (flowFile && flowFile.download_url) {
+      try { const jr = await fetch(flowFile.download_url); const jt = await jr.json(); out.screens = (jt.screens || []).map(function (s) { return s.id; }); out.flow_version = jt.version; } catch (_) {}
+    }
+  } catch (e) { out.assets_err = e.message; }
+  return out;
+}
+
 async function api_wapack_form_send(token, args) {
   await _gate(token);
   args = args || {};
@@ -1770,6 +1805,7 @@ module.exports = {
   api_wapack_form_responses,
   api_wapack_form_send,
   api_wapack_form_publishFlow,
+  api_wapack_flow_diagnose,
   api_wapack_bot_trigger_get,
   api_wapack_bot_trigger_save,
   _botMaybeSendForm,
