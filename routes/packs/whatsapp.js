@@ -1241,6 +1241,9 @@ async function api_wapack_product_from_url(token, args) {
   // price right on the page. If the page has several price tags, let Gemini
   // pull the whole list (name + price) in one shot.
   const catalog = await _extractCatalog(html);
+  if (args && args.debug) {
+    return { _debug: { html_len: html.length, price_hits: (html.match(/(?:₹|Rs\.?|INR)\s*[\d,]+/gi) || []).length, catalog_count: catalog ? catalog.length : null, catalog_sample: catalog ? catalog.slice(0, 4) : null, title: (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '', snippet: html.replace(/\s+/g, ' ').slice(0, 300) } };
+  }
   if (catalog && catalog.length >= 2) return { drafts: catalog };
 
   const meta = (props) => {
