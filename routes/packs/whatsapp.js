@@ -746,7 +746,7 @@ async function _botMaybeSendForm({ phone, leadId, inboundText, inboundPhoneId })
 
 // WA_FLOW_PUBLISH_v1 — turn a wapack_forms form into a WhatsApp Flow JSON.
 function _flowFieldName(fl, i) { return String(fl.key || fl.label || ('field_' + i)).toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || ('field_' + i); }
-function _buildFlowJson(form, fields) {
+function _buildFlowJson(form, fields, version) {
   const children = []; const payload = {}; const used = {};
   fields.forEach(function (fl, i) {
     let name = _flowFieldName(fl, i);
@@ -765,7 +765,7 @@ function _buildFlowJson(form, fields) {
   });
   children.push({ type: 'Footer', label: String(form.cta_text || 'Submit').slice(0, 30), 'on-click-action': { name: 'complete', payload: payload } });
   return {
-    version: '3.1',
+    version: version || '3.1',
     screens: [{
       id: 'FORM', title: String(form.name || 'Form').slice(0, 30), terminal: true, data: {},
       layout: { type: 'SingleColumnLayout', children: [{ type: 'Form', name: 'form', children: children }] }
@@ -782,7 +782,7 @@ async function api_wapack_form_publishFlow(token, args) {
   if (!f) throw new Error('Form not found');
   const fields = _json(f.fields_json, []);
   if (!fields.length) throw new Error('Add at least one field to the form first');
-  const flowJson = _buildFlowJson(f, fields);
+  const flowJson = _buildFlowJson(f, fields, args && args.version);
   const wb = require('../whatsbot');
   const cfg = await wb._cfg();
   if (!cfg.wabaId) throw new Error('WhatsApp Business Account ID not configured (connect WhatsApp first)');
@@ -793,14 +793,13 @@ async function api_wapack_form_publishFlow(token, args) {
       name: (f.name || 'Form') + ' #' + fid + ' ' + Date.now().toString().slice(-4),
       categories: ['LEAD_GENERATION'],
       flow_json: JSON.stringify(flowJson),
-      publish: true
+      publish: (args && args.publish === false) ? false : true
     }, cfg);
   } catch (e) { throw new Error('Meta API call failed: ' + e.message); }
   const err = r.body && r.body.error;
   if (err) {
     const msg = err.error_user_msg || err.message || JSON.stringify(err);
-    // Common: Flows not enabled on this WABA → give a clear message.
-    return { ok: false, error: msg, validation: (r.body.validation_errors || err.error_data || null) };
+    return { ok: false, error: msg, version_used: (flowJson.version), raw: JSON.stringify(r.body).slice(0, 500) };
   }
   const flowId = r.body && (r.body.id || (r.body.flow_id));
   if (!flowId) return { ok: false, error: 'No flow id returned by Meta', raw: JSON.stringify(r.body).slice(0, 400) };
