@@ -195,13 +195,14 @@ async function _applyStock(items, dir) {
   for (const it of (items || [])) {
     const pid = Number(it.id || 0); const qty = Number(it.qty || 0);
     if (!pid || !qty) continue;
+    const delta = dir * qty;   // compute in JS — a single typed param avoids PG's "unknown * unknown" operator error
     try {
       await db.query(
         `UPDATE wapack_products
-            SET stock_qty = GREATEST(0, COALESCE(stock_qty,0) + ($2 * $3)),
-                in_stock  = CASE WHEN COALESCE(stock_qty,0) + ($2 * $3) <= 0 THEN 0 ELSE 1 END
+            SET stock_qty = GREATEST(0, COALESCE(stock_qty,0) + $2),
+                in_stock  = CASE WHEN COALESCE(stock_qty,0) + $2 <= 0 THEN 0 ELSE 1 END
           WHERE id = $1 AND stock_qty IS NOT NULL`,
-        [pid, dir, qty]);
+        [pid, delta]);
     } catch (_) {}
   }
 }
