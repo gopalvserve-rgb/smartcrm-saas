@@ -685,6 +685,7 @@
         var upiI = h('input', { value: store.upi_id || '', placeholder: 'yourupi@bank', style: inpS() });
         var notifyI = h('input', { value: store.notify_phone || '', placeholder: 'WhatsApp number for order alerts', style: inpS() });
         var activeC = h('input', { type: 'checkbox' }); activeC.checked = store.id ? Number(store.active) === 1 : true;
+        var invC = h('input', { type: 'checkbox' }); invC.checked = Number(store.inventory_on) === 1;
         var ck = function (c, label) { return h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px', cursor: 'pointer' } }, c, label); };
 
         body.appendChild(card([
@@ -697,10 +698,11 @@
           h('div', { style: { marginTop: '8px' } }, upiI),
           h('div', { style: { fontWeight: 700, margin: '14px 0 6px', fontSize: '13px' } }, '🔔 Order alerts'),
           notifyI,
-          h('div', { style: { marginTop: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' } },
+          h('div', { style: { marginTop: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } },
             ck(activeC, 'Store is open'),
+            ck(invC, '📦 Track inventory / stock (off = paused)'),
             btn('💾 Save store', async function () {
-              try { await api('api_wapack_store_save', { store_name: nameI.value, tagline: tagI.value, logo_emoji: logoI.value, about: aboutI.value, pay_cod: codC.checked, pay_upi: upiC.checked, upi_id: upiI.value, notify_phone: notifyI.value, active: activeC.checked }); toast('Store saved'); render(); }
+              try { await api('api_wapack_store_save', { store_name: nameI.value, tagline: tagI.value, logo_emoji: logoI.value, about: aboutI.value, pay_cod: codC.checked, pay_upi: upiC.checked, upi_id: upiI.value, notify_phone: notifyI.value, active: activeC.checked, inventory_on: invC.checked }); toast('Store saved'); render(); }
               catch (e) { toast(e.message); }
             }, 'primary'))
         ]));
@@ -716,11 +718,13 @@
       }
 
       /* ---------------- Products ---------------- */
+      var invOn = false;   // INVENTORY_PAUSE_v1 — stock features hidden unless turned on in My Store
       async function renderProducts(body) {
         body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
         let prods;
         try { prods = (await api('api_wapack_products_list')).products || []; }
         catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
+        try { invOn = Number(((await api('api_wapack_store_get')).store || {}).inventory_on) === 1; } catch (_) { invOn = false; }
         body.innerHTML = '';
         body.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' } },
           btn('➕ Add product', function () { productModal(null); }, 'primary'),
@@ -738,16 +742,16 @@
               h('div', { style: { fontWeight: 700, fontSize: '12.5px' } }, p.name),
               h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' } },
                 h('b', { style: { color: WA_D, fontSize: '13px' } }, p.price_inr ? money(p.price_inr) : '—'),
-                (p.stock_qty != null
+                (invOn && p.stock_qty != null
                   ? (Number(p.stock_qty) > 0 ? pill(p.stock_qty + ' in stock', '#dcfce7', '#166534') : pill('Out of stock', '#fef2f2', '#dc2626'))
-                  : (Number(p.in_stock) ? pill('In stock', '#dcfce7', '#166534') : pill('Out', '#fef2f2', '#dc2626')))),
+                  : (Number(p.in_stock) ? pill('Available', '#dcfce7', '#166534') : pill('Hidden', '#f1f5f9', '#475569')))),
               h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' } },
                 btn('✏️ Edit', function () { productModal(p); }),
-                btn('➕ Stock', function () {
+                (invOn ? btn('➕ Stock', function () {
                   var q = prompt('Add how many units to “' + p.name + '” stock? (current: ' + (p.stock_qty != null ? p.stock_qty : 'untracked') + ')');
                   if (q == null) return; var n = Number(q); if (!n) { toast('Enter a number'); return; }
                   api('api_wapack_product_restock', { id: p.id, add: n }).then(function (r) { toast('Stock now ' + r.stock_qty); render(); }).catch(function (e) { toast(e.message); });
-                }),
+                }) : null),
                 btn('🗑', async function () { if (!confirm('Delete ' + p.name + '?')) return; try { await api('api_wapack_product_delete', { id: p.id }); render(); } catch (e) { toast(e.message); } })))));
         });
         body.appendChild(g);
@@ -770,9 +774,10 @@
         }
         imgI.oninput = drawPrev; nameI.oninput = drawPrev; priceI.oninput = drawPrev; drawPrev();
         modal(p.id ? 'Edit product' : 'Add product', h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 160px', gap: '14px' } },
-          h('div', {}, h('div', { style: { marginBottom: '8px' } }, nameI), h('div', { style: { display: 'flex', gap: '8px', marginBottom: '8px' } }, priceI, stockI),
+          h('div', {}, h('div', { style: { marginBottom: '8px' } }, nameI),
+            h('div', { style: { display: 'flex', gap: '8px', marginBottom: '8px' } }, priceI, (invOn ? stockI : null)),
             h('div', { style: { marginBottom: '8px' } }, imgI), h('div', { style: { marginBottom: '8px' } }, descI),
-            h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px' } }, inStockC, 'In stock')),
+            h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px' } }, inStockC, 'Available in store')),
           h('div', {}, h('div', { style: { fontSize: '11px', color: '#94a3b8', marginBottom: '6px' } }, 'Preview'), prev)),
           [['💾 Save', async function (close) {
             if (!nameI.value.trim()) { toast('Enter a product name'); return; }
@@ -817,7 +822,7 @@
             var nm = h('input', { value: d.name, style: Object.assign(inpS(), { flex: '1', fontSize: '13px', padding: '7px 9px' }) }); nm.oninput = function () { drafts[i].name = nm.value; };
             var pr = h('input', { value: d.price_inr != null ? d.price_inr : '', placeholder: '₹', inputmode: 'numeric', style: Object.assign(inpS(), { width: '72px', fontSize: '13px', padding: '7px 9px' }) }); pr.oninput = function () { drafts[i].price_inr = pr.value; };
             var st = h('input', { value: d.stock_qty != null ? d.stock_qty : '', placeholder: 'Qty', inputmode: 'numeric', title: 'Stock quantity', style: Object.assign(inpS(), { width: '58px', fontSize: '13px', padding: '7px 9px' }) }); st.oninput = function () { drafts[i].stock_qty = st.value; };
-            wrap.appendChild(h('div', { style: { display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '6px' } }, chk, thumb, nm, pr, st));
+            wrap.appendChild(h('div', { style: { display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '6px' } }, chk, thumb, nm, pr, (invOn ? st : null)));
           });
         }
         draw();
