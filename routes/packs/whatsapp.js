@@ -810,8 +810,38 @@ async function api_wapack_webview_delete(token, args) {
   await db.query(`DELETE FROM wapack_webviews WHERE id=$1`, [id]);
   return { ok: true };
 }
-// WEBVIEW_SEND_v1 — send a saved web page as a tappable link into a WhatsApp
-// chat (works today with no Meta Flows; true in-chat rendering needs Flows).
+// Send a WhatsApp interactive CTA-URL message — a proper tappable "Open"
+// button bubble in the chat (opens the URL in the browser). Works today with
+// no Meta Flows. Returns { wa_message_id, error }.
+async function _sendCtaUrl({ to, headerText, bodyText, buttonText, url, leadId }, cfg) {
+  const wb = require('../whatsbot');
+  const c = cfg || await wb._cfg();
+  const body = {
+    messaging_product: 'whatsapp',
+    to: String(to).replace(/[^\d]/g, ''),
+    type: 'interactive',
+    interactive: {
+      type: 'cta_url',
+      body: { text: String(bodyText || ' ').slice(0, 1024) || ' ' },
+      action: { name: 'cta_url', parameters: { display_text: String(buttonText || 'Open').slice(0, 20), url: String(url) } }
+    }
+  };
+  if (headerText) body.interactive.header = { type: 'text', text: String(headerText).slice(0, 60) };
+  const r = await wb._graphPost(`${c.phoneId}/messages`, body, c);
+  const waId = (r.body && r.body.messages && r.body.messages[0] && r.body.messages[0].id) || null;
+  const err = (r.body && r.body.error && r.body.error.message) || null;
+  try {
+    await db.query(
+      `INSERT INTO whatsapp_messages (lead_id, direction, from_number, to_number, body, wa_message_id, status, message_type, phone_number_id)
+       VALUES ($1,'out',$2,$3,$4,$5,$6,'interactive_cta',$7)`,
+      [leadId || null, c.phoneId, body.to, (headerText ? headerText + ' — ' : '') + url, waId, err ? 'failed' : 'sent', c.phoneId || null]);
+  } catch (_) {}
+  return { wa_message_id: waId, error: err };
+}
+
+// WEBVIEW_SEND_v1 — send a saved web page into a WhatsApp chat as a tappable
+// "Open" BUTTON (interactive cta_url). Falls back to a plain link if the
+// button send is rejected. True in-chat page rendering still needs Meta Flows.
 async function api_wapack_webview_send(token, args) {
   await _gate(token);
   args = args || {};
@@ -821,14 +851,22 @@ async function api_wapack_webview_send(token, args) {
   if (!phone) throw new Error('phone required');
   const w = (await db.query(`SELECT * FROM wapack_webviews WHERE id=$1`, [id])).rows[0];
   if (!w) throw new Error('WebView not found');
-  const text = '🌐 *' + w.title + '*' + (w.description ? ('\n' + w.description) : '') + '\n' + w.url;
   const wb = require('../whatsbot');
+  const cfg = await wb._cfg();
   const lead = (await db.query(
     `SELECT id FROM leads WHERE regexp_replace(COALESCE(phone,''),'\\D','','g')=$1
        OR regexp_replace(COALESCE(whatsapp,''),'\\D','','g')=$1 LIMIT 1`, [phone.slice(-10)])).rows[0];
-  const res = await wb._sendText({ to: phone, text: text, leadId: lead ? lead.id : null, userId: null }, await wb._cfg());
-  if (res && res.error) throw new Error(res.error);
-  return { ok: true, sent_to: phone };
+  const leadId = lead ? lead.id : null;
+  // Preferred: tappable Open button.
+  let res;
+  try { res = await _sendCtaUrl({ to: phone, headerText: w.title, bodyText: w.description || w.title, buttonText: 'Open', url: w.url, leadId: leadId }, cfg); }
+  catch (e) { res = { error: e.message }; }
+  if (res && !res.error) return { ok: true, sent_to: phone, mode: 'button' };
+  // Fallback: plain tappable link.
+  const text = '🌐 *' + w.title + '*' + (w.description ? ('\n' + w.description) : '') + '\n' + w.url;
+  const t = await wb._sendText({ to: phone, text: text, leadId: leadId, userId: null }, cfg);
+  if (t && t.error) throw new Error(t.error);
+  return { ok: true, sent_to: phone, mode: 'link' };
 }
 
 // ══════════════════════════════════════════════════════════════════
