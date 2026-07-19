@@ -3484,12 +3484,21 @@ async function _handleInbound(m, value) {
   let text = '';
   let mtype = m.type || 'text';
   let mediaId = null;
+  let _formNfm = null;   // WA_PACK_BOT_FORM_v1 — stashed WhatsApp Flow submission
   if (m.type === 'text') text = m.text?.body || '';
   else if (m.type === 'interactive') {
-    text = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || JSON.stringify(m.interactive || {});
-    // WA_REPORT_BUTTON_CLICK_v1 — capture button reply against most-recent
-    // campaign sent to this phone in the last 7 days. Fire and forget.
-    try { _recordButtonClick(from, m).catch(() => {}); } catch (_) {}
+    // WA_PACK_BOT_FORM_v1 — a WhatsApp Flow (in-chat form) submission arrives
+    // as interactive.nfm_reply with a response_json payload. Stash it now and
+    // capture into the lead remark below, once leadId is resolved.
+    if (m.interactive && m.interactive.nfm_reply) {
+      _formNfm = m.interactive.nfm_reply;
+      text = '📋 Form submitted';
+    } else {
+      text = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || JSON.stringify(m.interactive || {});
+      // WA_REPORT_BUTTON_CLICK_v1 — capture button reply against most-recent
+      // campaign sent to this phone in the last 7 days. Fire and forget.
+      try { _recordButtonClick(from, m).catch(() => {}); } catch (_) {}
+    }
   } else if (m.type === 'button') {
     text = m.button?.text || '';
     try { _recordButtonClick(from, m).catch(() => {}); } catch (_) {}
@@ -3666,6 +3675,19 @@ async function _handleInbound(m, value) {
       } catch (_) {}
     }
   } catch (e) { console.warn('[wb] save inbound failed:', e.message); }
+
+  // WA_PACK_BOT_FORM_v1 — a WhatsApp Flow (in-chat form) was submitted → write
+  // the answers into the lead's remark timeline. Pack-gated inside the helper,
+  // so it's a strict no-op for tenants without the WhatsApp Suite pack.
+  if (_formNfm && leadId) {
+    try {
+      const _wapack = require('./packs/whatsapp');
+      if (_wapack && typeof _wapack._captureFormResponse === 'function') {
+        const _cn = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || null;
+        await _wapack._captureFormResponse({ phone: from, leadId, nfmReply: _formNfm, contactName: _cn });
+      }
+    } catch (_) {}
+  }
 
   // Auto-assign the chat if no explicit assignment exists yet — applies
   // the active rule (lead_owner / round_robin / least_busy / manual).

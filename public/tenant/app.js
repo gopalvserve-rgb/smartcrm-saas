@@ -17159,6 +17159,56 @@ async function _aibotSettingsView(currentPhId) {
       saveBtn.disabled = false;
     }
   };
+  // WA_PACK_BOT_FORM_v1 — "Send a WhatsApp form" section. Only appears for
+  // tenants with the WhatsApp Suite pack (the api call throws otherwise, and
+  // we skip the whole section). Reads/writes the pack's bot-form trigger.
+  try {
+    const _forms = ((await api('api_wapack_forms_list')) || {}).forms || [];
+    let _trig = null; try { _trig = ((await api('api_wapack_bot_trigger_get')) || {}).trigger; } catch (_) {}
+    const _box = h('div', { class: 'card', style: { marginTop: '1rem', padding: '1rem', border: '1px solid #bfdbfe', borderRadius: '12px', background: '#eff6ff' } });
+    _box.appendChild(h('div', { style: { fontWeight: '700', marginBottom: '.3rem' } }, '📋 Send a WhatsApp form'));
+    if (!_forms.length) {
+      _box.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem' } },
+        'Create a form first in WhatsApp → Forms & WebViews, then come back here to have the bot send it automatically.'));
+      wrap.appendChild(_box);
+    } else {
+      const _curType = (_trig && _trig.trigger_type) || 'after_first_reply';
+      const _typeSel = h('select', { style: { padding: '.4rem', borderRadius: '7px', border: '1px solid #cbd5e1' } },
+        h('option', { value: 'after_first_reply' }, "After the bot's 1st reply"),
+        h('option', { value: 'keyword' }, 'When a message contains a word'));
+      _typeSel.value = _curType;
+      const _kw = h('input', { value: (_trig && _trig.keyword) || '', placeholder: 'trigger word (e.g. brochure)', style: { padding: '.4rem .5rem', borderRadius: '7px', border: '1px solid #cbd5e1', width: '170px' } });
+      const _formSel = h('select', { style: { padding: '.4rem', borderRadius: '7px', border: '1px solid #cbd5e1' } },
+        ..._forms.map(function (f) { return h('option', { value: String(f.id) }, f.name); }));
+      _formSel.value = _trig ? String(_trig.form_id) : String(_forms[0].id);
+      const _en = h('input', { type: 'checkbox' }); _en.checked = _trig ? _trig.enabled != 0 : false;
+      const _kwWrap = h('span', { style: { display: 'inline-flex', gap: '.4rem', alignItems: 'center' } }, h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'word'), _kw);
+      const _hint = h('div', { class: 'muted', style: { fontSize: '.78rem', margin: '.4rem 0' } }, '');
+      const _sync = function () {
+        _kwWrap.style.display = _typeSel.value === 'keyword' ? 'inline-flex' : 'none';
+        _hint.textContent = _typeSel.value === 'keyword'
+          ? 'When a customer message contains the trigger word, the bot sends the form (native in-chat form if the form has a Flow ID, else a text prompt).'
+          : "After the bot has replied once, the customer's next message triggers the form — sent one time per contact. Their answers are saved into the lead's remark.";
+      };
+      _typeSel.onchange = _sync;
+      const _saveForm = h('button', { class: 'btn', style: { padding: '.45rem 1rem' } }, '💾 Save form rule');
+      _saveForm.onclick = async function () {
+        if (_typeSel.value === 'keyword' && !_kw.value.trim()) { toast('Enter a trigger word', 'err'); return; }
+        try {
+          await api('api_wapack_bot_trigger_save', { trigger_type: _typeSel.value, keyword: _kw.value.trim(), form_id: Number(_formSel.value), enabled: _en.checked });
+          toast('Form rule saved', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+      };
+      _box.appendChild(_hint);
+      _box.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' } },
+        h('label', { style: { display: 'inline-flex', gap: '.3rem', alignItems: 'center', fontSize: '.85rem' } }, _en, 'Enable'),
+        h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Trigger:'), _typeSel, _kwWrap,
+        h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'send'), _formSel, _saveForm));
+      _sync();
+      wrap.appendChild(_box);
+    }
+  } catch (_) { /* WhatsApp pack not active → no form section */ }
+
   wrap.appendChild(h('div', { style: { marginTop: '1rem', textAlign: 'right' } }, saveBtn));
   return wrap;
 }

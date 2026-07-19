@@ -457,21 +457,34 @@
         if (forms.length) {
           let trig = null;
           try { trig = (await api('api_wapack_bot_trigger_get')).trigger; } catch (_) {}
-          const kwI = h('input', { value: (trig && trig.keyword) || '', placeholder: 'Trigger word (e.g. brochure)', style: { padding: '7px 9px', border: '1px solid #bfdbfe', borderRadius: '7px', fontSize: '13px', width: '180px' } });
+          const curType = (trig && trig.trigger_type) || 'keyword';
+          const typeSel = sel([['keyword', 'When a message contains a word'], ['after_first_reply', "After the bot's 1st reply"]], curType);
+          const kwI = h('input', { value: (trig && trig.keyword) || '', placeholder: 'Trigger word (e.g. brochure)', style: { padding: '7px 9px', border: '1px solid #bfdbfe', borderRadius: '7px', fontSize: '13px', width: '170px' } });
           const formSel = sel(forms.map(function (f) { return [String(f.id), f.name]; }), trig ? String(trig.form_id) : String(forms[0].id));
           const enChk = h('input', { type: 'checkbox' }); enChk.checked = trig ? trig.enabled != 0 : true;
           const enL = h('label', { style: { fontSize: '12px', display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer' } }, enChk, document.createTextNode('Enabled'));
+          const kwWrap = h('span', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, h('span', { style: { fontSize: '12px', color: '#64748b' } }, 'word'), kwI);
+          const hintEl = h('div', { style: { fontSize: '11.5px', color: '#475569', marginBottom: '8px' } }, '');
+          function syncType() {
+            kwWrap.style.display = typeSel.value === 'keyword' ? 'flex' : 'none';
+            hintEl.textContent = typeSel.value === 'keyword'
+              ? 'When a customer message contains the trigger word, the bot sends the form (native in-chat form if a Flow ID is set, else a text prompt).'
+              : "After the bot has replied once, the next customer message triggers the form — sent one time per contact. Great for capturing details right after the first exchange.";
+          }
+          typeSel.onchange = syncType;
           body.appendChild(h('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', padding: '12px 14px', marginBottom: '12px' } },
             h('div', { style: { fontWeight: 700, fontSize: '13px', color: '#1e40af', marginBottom: '6px' } }, '🤖 AI Bot auto-send'),
-            h('div', { style: { fontSize: '11.5px', color: '#475569', marginBottom: '8px' } }, 'When a customer message contains the trigger word, the AI bot sends this form automatically (native in-chat form if a Flow ID is set, else a text prompt).'),
+            hintEl,
             h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-              h('span', { style: { fontSize: '12px', color: '#64748b' } }, 'If message contains'), kwI,
+              h('span', { style: { fontSize: '12px', color: '#64748b' } }, 'Trigger:'), typeSel, kwWrap,
               h('span', { style: { fontSize: '12px', color: '#64748b' } }, 'send'), formSel, enL,
               btn('💾 Save', async function () {
-                if (!kwI.value.trim()) { toast('Enter a trigger word'); return; }
-                try { await api('api_wapack_bot_trigger_save', { keyword: kwI.value.trim(), form_id: Number(formSel.value), enabled: enChk.checked }); toast('Bot trigger saved'); }
+                const type = typeSel.value;
+                if (type === 'keyword' && !kwI.value.trim()) { toast('Enter a trigger word'); return; }
+                try { await api('api_wapack_bot_trigger_save', { trigger_type: type, keyword: kwI.value.trim(), form_id: Number(formSel.value), enabled: enChk.checked }); toast('Bot trigger saved'); }
                 catch (e) { toast(e.message); }
               }, 'primary'))));
+          syncType();
         }
 
         if (!forms.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No forms yet.')])); return; }

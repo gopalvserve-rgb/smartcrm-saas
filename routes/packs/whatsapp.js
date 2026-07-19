@@ -99,12 +99,16 @@ async function _installer({ db: D }) {
   // enough for v1 (single active trigger); the table allows more later.
   await D.query(`
     CREATE TABLE IF NOT EXISTS wapack_bot_form_triggers (
-      id         SERIAL PRIMARY KEY,
-      keyword    TEXT NOT NULL,
-      form_id    INT  NOT NULL,
-      enabled    INT  NOT NULL DEFAULT 1,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      id           SERIAL PRIMARY KEY,
+      keyword      TEXT,
+      form_id      INT  NOT NULL,
+      enabled      INT  NOT NULL DEFAULT 1,
+      trigger_type TEXT NOT NULL DEFAULT 'keyword',  -- keyword | after_first_reply
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     )`, []);
+  // Existing installs: add trigger_type + relax keyword NOT NULL (after_first_reply has none).
+  try { await D.query(`ALTER TABLE wapack_bot_form_triggers ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'keyword'`, []); } catch (_) {}
+  try { await D.query(`ALTER TABLE wapack_bot_form_triggers ALTER COLUMN keyword DROP NOT NULL`, []); } catch (_) {}
 
   // ── In-chat WebViews (web pages opened inside the chat) ─────────
   await D.query(`
@@ -568,7 +572,7 @@ async function _sendForm(form, phone, cfg, opts) {
       const r = await wb._graphPost(`${cfg.phoneId}/messages`, body, cfg);
       const waId = r.body && r.body.messages && r.body.messages[0] && r.body.messages[0].id || null;
       const err = r.body && r.body.error && r.body.error.message || null;
-      const dbBody = '[WA Form: ' + form.name + '] (native flow)';
+      const dbBody = '[WA Form #' + form.id + ': ' + form.name + '] (native flow)';
       try {
         await db.query(
           `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, phone_number_id)
@@ -620,16 +624,17 @@ async function api_wapack_bot_trigger_get(token) {
 async function api_wapack_bot_trigger_save(token, args) {
   await _gate(token);
   args = args || {};
+  const type = (args.trigger_type === 'after_first_reply') ? 'after_first_reply' : 'keyword';
   const keyword = String(args.keyword || '').trim();
   const formId = Number(args.form_id || 0);
   const enabled = args.enabled === false || args.enabled === 0 ? 0 : 1;
-  if (!keyword) throw new Error('keyword required');
   if (!formId) throw new Error('form_id required');
+  if (type === 'keyword' && !keyword) throw new Error('keyword required');
   // Single-row model: replace any existing trigger.
   await db.query(`DELETE FROM wapack_bot_form_triggers`, []);
   const r = await db.query(
-    `INSERT INTO wapack_bot_form_triggers (keyword, form_id, enabled) VALUES ($1,$2,$3) RETURNING id`,
-    [keyword.toLowerCase(), formId, enabled]);
+    `INSERT INTO wapack_bot_form_triggers (keyword, form_id, enabled, trigger_type) VALUES ($1,$2,$3,$4) RETURNING id`,
+    [type === 'keyword' ? keyword.toLowerCase() : null, formId, enabled, type]);
   return { ok: true, id: r.rows[0].id };
 }
 
@@ -643,9 +648,23 @@ async function _botMaybeSendForm({ phone, leadId, inboundText, inboundPhoneId })
     const tr = await db.query(`SELECT * FROM wapack_bot_form_triggers WHERE enabled=1 ORDER BY id DESC LIMIT 1`, []);
     if (!tr.rows.length) return false;
     const trig = tr.rows[0];
-    const kw = String(trig.keyword || '').toLowerCase().trim();
-    const t = String(inboundText || '').toLowerCase();
-    if (!kw || !t.includes(kw)) return false;
+    const type = trig.trigger_type || 'keyword';
+    if (type === 'after_first_reply') {
+      // Send the form ONCE per contact, only after the bot has already replied
+      // at least once to this thread. So: 1st inbound → bot welcomes/replies
+      // (no form yet); next inbound → form goes out; never again after that.
+      // ai_chat_log is the bot's own send ledger (phone stored digits-only).
+      const already = await db.query(
+        `SELECT 1 FROM ai_chat_log WHERE phone=$1 AND status='sent' AND mode_used='wa_form' LIMIT 1`, [phone]);
+      if (already.rows.length) return false;                 // already sent to this contact
+      const replied = await db.query(
+        `SELECT 1 FROM ai_chat_log WHERE phone=$1 AND status='sent' AND (mode_used IS NULL OR mode_used <> 'wa_form') LIMIT 1`, [phone]);
+      if (!replied.rows.length) return false;                // wait until the bot has replied once
+    } else {
+      const kw = String(trig.keyword || '').toLowerCase().trim();
+      const t = String(inboundText || '').toLowerCase();
+      if (!kw || !t.includes(kw)) return false;
+    }
     const fr = await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [trig.form_id]);
     if (!fr.rows.length) return false;
     const wb = require('../whatsbot');
@@ -654,6 +673,74 @@ async function _botMaybeSendForm({ phone, leadId, inboundText, inboundPhoneId })
     return res.sent ? { sent: true, form_name: fr.rows[0].name, mode: res.mode } : false;
   } catch (_) {
     return false;   // never break the bot flow
+  }
+}
+
+function _prettyKey(k) {
+  return String(k || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }).trim();
+}
+
+// WA_PACK_BOT_FORM_v1 — called from whatsbot._handleInbound when a WhatsApp
+// Flow (in-chat form) is submitted. Parses the answers, stores a form
+// response, and writes the answers into the lead's remark timeline (same
+// `remarks` + notes pattern the FB lead-form ingest uses). Pack-gated →
+// strict no-op for tenants without the WhatsApp Suite pack. Never throws.
+async function _captureFormResponse({ phone, leadId, nfmReply, contactName }) {
+  try {
+    if (!(await framework.isPackActive(PACK_ID))) return null;
+    await _ensure();
+    // Parse the response payload (Meta sends response_json as a JSON string).
+    let answers = {};
+    try {
+      const raw = nfmReply && nfmReply.response_json;
+      answers = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+    } catch (_) { answers = {}; }
+    // Drop Meta's internal keys (flow_token, screen names, etc.).
+    const clean = {};
+    Object.keys(answers || {}).forEach(function (k) {
+      if (k === 'flow_token' || /^flow_/i.test(k)) return;
+      const v = answers[k];
+      if (v == null || v === '') return;
+      clean[k] = (typeof v === 'object') ? JSON.stringify(v) : v;
+    });
+    const pairs = Object.keys(clean).map(function (k) { return _prettyKey(k) + ': ' + clean[k]; });
+
+    // Best-effort: correlate to the form via the most recent native-flow send
+    // to this phone (we tag those rows '[WA Form #<id>: ...]').
+    let formId = null;
+    try {
+      const tail = String(phone || '').replace(/\D/g, '').slice(-10);
+      const r = await db.query(
+        `SELECT body FROM whatsapp_messages
+          WHERE direction='out' AND message_type='interactive_flow'
+            AND RIGHT(regexp_replace(to_number, '[^0-9]', '', 'g'), 10) = $1
+          ORDER BY id DESC LIMIT 1`, [tail]);
+      const mm = r.rows[0] && String(r.rows[0].body || '').match(/\[WA Form #(\d+):/);
+      if (mm) formId = Number(mm[1]);
+    } catch (_) {}
+
+    // Store the structured response.
+    try {
+      await db.query(
+        `INSERT INTO wapack_form_responses (form_id, lead_id, phone, contact_name, answers_json)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [formId, leadId || null, phone || null, contactName || null, JSON.stringify(clean)]);
+      if (formId) { try { await db.query(`UPDATE wapack_forms SET submissions = COALESCE(submissions,0)+1 WHERE id=$1`, [formId]); } catch (_) {} }
+    } catch (_) {}
+
+    // Write into the lead remark timeline (remarks row + notes) — same shape
+    // as the FB lead-form ingest, so it renders in the standard timeline UI.
+    if (leadId && pairs.length) {
+      const remark = '📋 WhatsApp form answers:\n' + pairs.join('\n');
+      try { await db.insert('remarks', { lead_id: leadId, user_id: null, remark: remark, created_at: db.nowIso() }); } catch (_) {}
+      try { await db.query(
+        `UPDATE leads SET notes = LEFT($2 || CASE WHEN COALESCE(notes,'')='' THEN '' ELSE E'\n\n' || notes END, 4096) WHERE id=$1`,
+        [leadId, remark]); } catch (_) {}
+      try { require('../tat').logAction(leadId, 'form_response', null, { answers: pairs.length, preview: pairs.slice(0, 3).join(' · ').slice(0, 200) }); } catch (_) {}
+    }
+    return { captured: true, answers: pairs.length, form_id: formId };
+  } catch (_) {
+    return null;   // never break the inbound flow
   }
 }
 
@@ -990,6 +1077,7 @@ module.exports = {
   api_wapack_bot_trigger_get,
   api_wapack_bot_trigger_save,
   _botMaybeSendForm,
+  _captureFormResponse,
   api_wapack_webviews_list,
   api_wapack_webview_save,
   api_wapack_webview_delete,
