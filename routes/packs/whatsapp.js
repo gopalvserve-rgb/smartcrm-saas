@@ -851,7 +851,12 @@ async function api_wapack_form_publishFlow(token, args) {
   if (!fields.length) throw new Error('Add at least one field to the form first');
   const flowJson = _buildFlowJson(f, fields, args && args.version);
   const wb = require('../whatsbot');
-  const cfg = await wb._cfg();
+  // CRITICAL: a Flow is WABA-scoped. It can ONLY be sent from a number whose
+  // WhatsApp Business Account it was published under. So publish it under the
+  // WABA of the number the bot will actually reply from — otherwise Meta
+  // rejects the send with #131009 "flow_id is invalid / not in your WABA".
+  const phoneId = args && args.phone_number_id ? String(args.phone_number_id) : null;
+  const cfg = phoneId ? await wb._cfgForPhone(phoneId) : await wb._cfg();
   if (!cfg.wabaId) throw new Error('WhatsApp Business Account ID not configured (connect WhatsApp first)');
   // Create + publish in one call (Graph v19 accepts flow_json + publish).
   let r;
@@ -870,8 +875,10 @@ async function api_wapack_form_publishFlow(token, args) {
   }
   const flowId = r.body && (r.body.id || (r.body.flow_id));
   if (!flowId) return { ok: false, error: 'No flow id returned by Meta', raw: JSON.stringify(r.body).slice(0, 400) };
-  await db.query(`UPDATE wapack_forms SET flow_id=$1, flow_screen='FORM', status='published' WHERE id=$2`, [String(flowId), fid]);
-  return { ok: true, flow_id: String(flowId) };
+  try { await db.query(`ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS flow_phone_id TEXT`, []); } catch (_) {}
+  try { await db.query(`ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS flow_waba_id TEXT`, []); } catch (_) {}
+  await db.query(`UPDATE wapack_forms SET flow_id=$1, flow_screen='FORM', status='published', flow_phone_id=$2, flow_waba_id=$3 WHERE id=$4`, [String(flowId), phoneId, String(cfg.wabaId), fid]);
+  return { ok: true, flow_id: String(flowId), waba_id: String(cfg.wabaId), phone_number_id: phoneId };
 }
 
 function _prettyKey(k) {
