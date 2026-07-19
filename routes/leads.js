@@ -2391,12 +2391,12 @@ async function api_leads_recoverFromWebhookLog(token, payload) {
   let matched = 0, recovered = 0, skippedExists = 0, noBody = 0;
   const seen = new Set(); const sample = [];
   for (const row of rows) {
-    let resp; try { resp = JSON.parse(row.response_preview); } catch (_) { continue; }
+    let resp; try { resp = JSON.parse(row.response_text); } catch (_) { continue; }
     const lid = Number(resp && resp.id);
     if (!lid || lid < from || lid > to || seen.has(lid)) continue;
     seen.add(lid); matched++;
     try { const ex = await db.query(`SELECT 1 FROM leads WHERE id=$1`, [lid]); if (ex.rows.length) { skippedExists++; continue; } } catch (_) {}
-    const body = _parseBody(row.body_preview);
+    const body = _parseBody(row.body_text);
     const name = _field(body, ['name', 'full_name']) || ('Lead #' + lid);
     const phoneRaw = _field(body, ['phone', 'mobile', 'phone_number']);
     const phone = phoneRaw ? phoneRaw.replace(/[^\d+]/g, '') : null;
