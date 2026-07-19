@@ -605,11 +605,23 @@
       async function responsesModal(f) {
         let resp = [];
         try { resp = (await api('api_wapack_form_responses', { form_id: f.id })).responses || []; } catch (e) { toast(e.message); }
+        // Map raw flow field-keys (e.g. f1784…) back to the form's labels so
+        // answers read "How many users?: 5" instead of "f1784…: 5".
+        var flds = f.fields || f.fields_json || [];
+        if (typeof flds === 'string') { try { flds = JSON.parse(flds); } catch (_) { flds = []; } }
+        var labelMap = {};
+        (flds || []).forEach(function (fl, i) {
+          var key = String((fl.key || fl.label || ('field_' + i))).toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || ('field_' + i);
+          labelMap[key] = fl.label || fl.key || ('Field ' + (i + 1));
+        });
         const rows = resp.map(function (r) {
           const ans = r.answers || {};
-          return h('div', { style: { padding: '8px 0', borderBottom: '1px solid #ecfdf5', fontSize: '12.5px' } },
+          return h('div', { style: { padding: '10px 0', borderBottom: '1px solid #ecfdf5', fontSize: '12.5px' } },
             h('b', {}, r.contact_name || r.phone || '—'), ' ', h('span', { style: { color: '#94a3b8', fontSize: '11px' } }, fmtTime(r.created_at)),
-            h('div', { style: { color: '#475569', marginTop: '2px' } }, Object.keys(ans).map(function (k) { return k + ': ' + ans[k]; }).join(' · ')));
+            h('div', { style: { color: '#475569', marginTop: '4px', lineHeight: '1.5' } },
+              ...Object.keys(ans).filter(function (k) { return k !== 'flow_token' && !/^flow_/i.test(k); }).map(function (k) {
+                return h('div', {}, h('span', { style: { color: '#0f766e', fontWeight: '600' } }, (labelMap[k] || k) + ': '), String(ans[k]));
+              })));
         });
         modal('👁 Responses · ' + f.name, h('div', {}, resp.length ? h('div', {}, ...rows) : h('div', { style: { color: '#64748b', padding: '10px' } }, 'No responses yet.')), []);
       }
