@@ -4611,7 +4611,7 @@ module.exports = {
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
-  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendInteractiveButtons, _sendMedia, _sendMediaById, _graphPost,
+  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendInteractiveButtons, _sendMedia, _sendMediaById, _graphPost, _graphGet,
   api_wb_whitelist_list, api_wb_whitelist_add, api_wb_whitelist_remove,
   api_wb_thread_convertToLead,
   api_wb_campaigns_simpleList,
