@@ -629,7 +629,7 @@ async function _sendForm(form, phone, cfg, opts) {
             flow_id: String(form.flow_id),
             flow_cta: String(form.cta_text || 'Open form').slice(0, 30),
             flow_action: 'navigate',
-            flow_action_payload: { screen: String(form.flow_screen || 'RECOMMEND'), data: {} }
+            flow_action_payload: { screen: String(form.flow_screen || 'FORM') }
           }
         }
       }
