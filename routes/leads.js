@@ -2340,6 +2340,74 @@ async function api_leads_recoverDeleted(token, payload) {
   return { ok: true, dry_run: dry, recovered, skipped_exists: skippedExists, no_surviving_data: noData, sample };
 }
 
+/* LEAD_RECOVER_WEBHOOK_v1 — the BEST recovery source: webhook_log stores the
+ * full incoming lead payload (body_preview: name/phone/email/source/product…)
+ * AND the response (response_preview: the created lead id + assigned_to). So we
+ * re-create each deleted lead at its exact id with name/phone/email/source/
+ * product/owner. Only touches ids in [from,to] that don't currently exist. */
+function _field(body, keys) {
+  for (const k of keys) { if (body && body[k] != null && String(body[k]).trim() !== '') return String(body[k]).trim(); }
+  return null;
+}
+function _parseBody(txt) {
+  try { return JSON.parse(txt); } catch (_) {}
+  // Truncated JSON fallback — regex-pull the common fields.
+  const b = {}; const g = (re) => { const m = String(txt || '').match(re); return m ? m[1] : null; };
+  b.name = g(/"(?:name|full_name)"\s*:\s*"([^"]+)"/i);
+  b.phone = g(/"(?:phone|mobile|phone_number)"\s*:\s*"([^"]+)"/i);
+  b.email = g(/"email"\s*:\s*"([^"]+)"/i);
+  b.source = g(/"source"\s*:\s*"([^"]+)"/i);
+  b.product = g(/"product"\s*:\s*"([^"]+)"/i);
+  b.notes = g(/"notes"\s*:\s*"([^"]+)"/i);
+  return b;
+}
+async function api_leads_recoverFromWebhookLog(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  const from = Number(p.from_id), to = Number(p.to_id);
+  if (!from || !to || to < from) throw new Error('from_id and to_id required');
+  const dry = p.dry_run === true;
+  let rows = [];
+  try {
+    const r = await db.query(
+      `SELECT id, body_preview, response_preview, created_at FROM webhook_log
+        WHERE response_preview LIKE '%"id"%' ORDER BY id DESC LIMIT 8000`, []);
+    rows = r.rows || [];
+  } catch (e) { throw new Error('webhook_log read failed: ' + e.message); }
+  let newStatusId = null;
+  try { const s = await db.query(`SELECT id FROM statuses WHERE lower(name)='new' ORDER BY id ASC LIMIT 1`); newStatusId = s.rows[0] ? s.rows[0].id : null; } catch (_) {}
+  let matched = 0, recovered = 0, skippedExists = 0, noBody = 0;
+  const seen = new Set(); const sample = [];
+  for (const row of rows) {
+    let resp; try { resp = JSON.parse(row.response_preview); } catch (_) { continue; }
+    const lid = Number(resp && resp.id);
+    if (!lid || lid < from || lid > to || seen.has(lid)) continue;
+    seen.add(lid); matched++;
+    try { const ex = await db.query(`SELECT 1 FROM leads WHERE id=$1`, [lid]); if (ex.rows.length) { skippedExists++; continue; } } catch (_) {}
+    const body = _parseBody(row.body_preview);
+    const name = _field(body, ['name', 'full_name']) || ('Lead #' + lid);
+    const phoneRaw = _field(body, ['phone', 'mobile', 'phone_number']);
+    const phone = phoneRaw ? phoneRaw.replace(/[^\d+]/g, '') : null;
+    const email = _field(body, ['email']);
+    const source = _field(body, ['source']) || 'Meta';
+    const product = _field(body, ['product']);
+    const notes = _field(body, ['notes']);
+    const assigned = Number(resp.assigned_to) || null;
+    if (sample.length < 12) sample.push({ id: lid, name: name, phone: phone, email: email, assigned_to: assigned });
+    if (dry) { recovered++; continue; }
+    try {
+      await db.query(
+        `INSERT INTO leads (id, name, phone, whatsapp, email, source, product, notes, assigned_to, status_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, now()), now())`,
+        [lid, name, phone, email, source, product, notes, assigned, newStatusId, row.created_at]);
+      recovered++;
+    } catch (e) { noBody++; }
+  }
+  if (!dry) { try { await db.query(`SELECT setval(pg_get_serial_sequence('leads','id'), GREATEST((SELECT COALESCE(MAX(id),1) FROM leads),1))`); } catch (_) {} }
+  return { ok: true, dry_run: dry, matched, recovered, skipped_exists: skippedExists, insert_failed: noBody, sample };
+}
+
 /**
  * Bulk-create leads from a CSV upload, with flexible assignment.
  *
@@ -3470,7 +3538,7 @@ async function api_leads_bulkShare(token, leadIds, userId) {
 
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
-  api_leads_addRemark, api_leads_recoverDeleted, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
+  api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,
