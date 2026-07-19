@@ -2375,6 +2375,10 @@ async function api_leads_recoverFromWebhookLog(token, payload) {
         WHERE response_text LIKE '%"id"%' ORDER BY id DESC LIMIT 8000`, []);
     rows = r.rows || [];
   } catch (e) { throw new Error('webhook_logs read failed: ' + e.message); }
+  if (p.debug) {
+    return { ok: true, debug: true, rows_fetched: rows.length,
+      samples: rows.slice(0, 4).map(r => ({ log_id: r.id, resp: String(r.response_text || '').slice(0, 120), body: String(r.body_text || '').slice(0, 120) })) };
+  }
   let newStatusId = null;
   try { const s = await db.query(`SELECT id FROM statuses WHERE lower(name)='new' ORDER BY id ASC LIMIT 1`); newStatusId = s.rows[0] ? s.rows[0].id : null; } catch (_) {}
   let matched = 0, recovered = 0, skippedExists = 0, noBody = 0;
