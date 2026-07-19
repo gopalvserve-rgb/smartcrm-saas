@@ -703,6 +703,38 @@ async function api_wapack_flow_diagnose(token, args) {
   return out;
 }
 
+// Try several flow-message shapes and report Meta's FULL error (error_data.
+// details names the exact invalid parameter) so we can pin down #131009.
+async function api_wapack_flow_testsend(token, args) {
+  await _gate(token);
+  const fid = Number((args && args.form_id) || 0);
+  const to = String((args && args.phone) || '').replace(/[^\d]/g, '');
+  if (!fid || !to) throw new Error('form_id + phone required');
+  const f = (await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [fid])).rows[0];
+  if (!f || !f.flow_id) throw new Error('form has no published flow');
+  const wb = require('../whatsbot');
+  const cfg = args.phone_number_id ? await wb._cfgForPhone(String(args.phone_number_id)) : await wb._cfg();
+  const base = function (params) {
+    return { messaging_product: 'whatsapp', to, type: 'interactive', interactive: { type: 'flow', body: { text: 'Please fill this quick form 👇' }, action: { name: 'flow', parameters: Object.assign({ flow_message_version: '3', flow_token: 'test_' + Date.now(), flow_id: String(f.flow_id), flow_cta: 'Open form' }, params) } } };
+  };
+  const variants = {
+    A_navigate_payload: base({ flow_action: 'navigate', flow_action_payload: { screen: String(f.flow_screen || 'FORM') } }),
+    B_navigate_nopayload: base({ flow_action: 'navigate' }),
+    C_no_action: base({}),
+    D_published_false_publishedkey: base({ mode: 'published', flow_action: 'navigate', flow_action_payload: { screen: String(f.flow_screen || 'FORM') } })
+  };
+  const results = {};
+  for (const k of Object.keys(variants)) {
+    if (!(args && args.all) && k !== (args.variant || 'A_navigate_payload')) continue;
+    try {
+      const r = await wb._graphPost(`${cfg.phoneId}/messages`, variants[k], cfg);
+      const e = r.body && r.body.error;
+      results[k] = e ? { ok: false, code: e.code, msg: e.message, details: (e.error_data && e.error_data.details) || null } : { ok: true, id: r.body.messages && r.body.messages[0] && r.body.messages[0].id };
+    } catch (ex) { results[k] = { ok: false, threw: ex.message }; }
+  }
+  return { results };
+}
+
 async function api_wapack_form_send(token, args) {
   await _gate(token);
   args = args || {};
@@ -1806,6 +1838,7 @@ module.exports = {
   api_wapack_form_send,
   api_wapack_form_publishFlow,
   api_wapack_flow_diagnose,
+  api_wapack_flow_testsend,
   api_wapack_bot_trigger_get,
   api_wapack_bot_trigger_save,
   _botMaybeSendForm,
