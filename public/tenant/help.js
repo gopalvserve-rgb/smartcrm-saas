@@ -160,11 +160,15 @@
   /* ---------- styles ---------- */
   var css = document.createElement('style');
   css.textContent = [
-    '#ph-fab{position:fixed;right:16px;bottom:84px;z-index:99998;background:#6d28d9;color:#fff;border:none;border-radius:30px;padding:11px 15px;font-size:14px;font-weight:700;box-shadow:0 6px 18px rgba(109,40,217,.4);cursor:pointer;display:flex;gap:7px;align-items:center;font-family:inherit}',
+    '#ph-fab{position:fixed;right:18px;bottom:96px;z-index:2147483001;background:#6d28d9;color:#fff;border:2px solid #fff;border-radius:30px;padding:12px 17px;font-size:14.5px;font-weight:800;box-shadow:0 8px 22px rgba(109,40,217,.5);cursor:pointer;display:flex;gap:7px;align-items:center;font-family:inherit;animation:phpulse 2.4s infinite}',
     '#ph-fab:hover{background:#5b21b6}',
-    '#ph-back{position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:99998;opacity:0;pointer-events:none;transition:.2s}',
+    '@keyframes phpulse{0%{box-shadow:0 8px 22px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,.45)}70%{box-shadow:0 8px 22px rgba(109,40,217,.5),0 0 0 14px rgba(109,40,217,0)}100%{box-shadow:0 8px 22px rgba(109,40,217,.5),0 0 0 0 rgba(109,40,217,0)}}',
+    '#ph-hint{position:fixed;right:18px;bottom:150px;z-index:2147483001;background:#1f2937;color:#fff;font-size:12.5px;padding:10px 13px;border-radius:11px;max-width:220px;box-shadow:0 10px 30px rgba(0,0,0,.3);cursor:pointer;font-family:inherit;line-height:1.4}',
+    '#ph-hint b{color:#c4b5fd}',
+    '#ph-hint:after{content:"";position:absolute;right:26px;bottom:-7px;border-left:7px solid transparent;border-right:7px solid transparent;border-top:8px solid #1f2937}',
+    '#ph-back{position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:2147483000;opacity:0;pointer-events:none;transition:.2s}',
     '#ph-back.on{opacity:1;pointer-events:auto}',
-    '#ph-drawer{position:fixed;top:0;right:0;height:100%;width:370px;max-width:90vw;background:#fff;z-index:99999;transform:translateX(100%);transition:.28s;display:flex;flex-direction:column;box-shadow:-14px 0 40px rgba(0,0,0,.18);font-family:inherit}',
+    '#ph-drawer{position:fixed;top:0;right:0;height:100%;width:370px;max-width:90vw;background:#fff;z-index:2147483002;transform:translateX(100%);transition:.28s;display:flex;flex-direction:column;box-shadow:-14px 0 40px rgba(0,0,0,.18);font-family:inherit}',
     '#ph-drawer.on{transform:none}',
     '.ph-h{background:linear-gradient(135deg,#6d28d9,#7c3aed);color:#fff;padding:15px 16px}',
     '.ph-h .ph-ctx{font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.5px}',
@@ -185,7 +189,7 @@
     '.ph-none{color:#94a3b8;font-size:12.5px;text-align:center;padding:20px}',
     '.ph-foot{border-top:1px solid #eee;padding:10px 12px;font-size:11.5px;color:#94a3b8;text-align:center}',
     '.ph-hl{outline:3px solid #f59e0b !important;outline-offset:3px;border-radius:8px;transition:.15s}',
-    '.ph-tip{position:fixed;z-index:100000;background:#1f2937;color:#fff;font-size:12px;padding:7px 11px;border-radius:8px;max-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3)}',
+    '.ph-tip{position:fixed;z-index:2147483003;background:#1f2937;color:#fff;font-size:12px;padding:7px 11px;border-radius:8px;max-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3)}',
     '@media(max-width:640px){#ph-fab{bottom:74px;right:12px;padding:10px 13px}#ph-drawer{width:100vw;max-width:100vw}}'
   ].join('');
   document.head.appendChild(css);
@@ -204,11 +208,31 @@
 
   function mount() {
     if (!document.body) return;
-    document.body.appendChild(fab);
-    document.body.appendChild(back);
-    document.body.appendChild(drawer);
+    if (!document.getElementById('ph-fab')) document.body.appendChild(fab);
+    if (!document.getElementById('ph-back')) document.body.appendChild(back);
+    if (!document.getElementById('ph-drawer')) document.body.appendChild(drawer);
   }
   if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount, { once: true });
+  // Watchdog: some SPA re-renders can wipe body children — re-attach if the
+  // button ever disappears so users never lose access to Help.
+  setInterval(mount, 2000);
+
+  // First-visit nudge so users notice the button (shows a few times, then stops).
+  function maybeHint() {
+    try {
+      var n = Number(localStorage.getItem('ph_hint_seen') || '0');
+      if (n >= 3) return;
+      if (document.getElementById('ph-hint')) return;
+      var hint = document.createElement('div');
+      hint.id = 'ph-hint';
+      hint.innerHTML = '👋 New: tap <b>❓ Help</b> for a quick guide on this page.';
+      hint.onclick = function () { hint.remove(); open(); };
+      document.body.appendChild(hint);
+      localStorage.setItem('ph_hint_seen', String(n + 1));
+      setTimeout(function () { var h = document.getElementById('ph-hint'); if (h) h.remove(); }, 8000);
+    } catch (_) {}
+  }
+  setTimeout(maybeHint, 1800);
 
   var q = ''; // search text
   function render() {
