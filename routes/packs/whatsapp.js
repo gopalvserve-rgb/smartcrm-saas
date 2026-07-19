@@ -1151,11 +1151,34 @@ async function _tryShopify(url) {
   } catch (_) { return null; }
 }
 
-// Extract product(s) from a URL. Strategy: Shopify JSON feed (collection →
-// MANY, product → one) → OG/Twitter meta → JSON-LD → inline price → Gemini
-// fallback. Marketplaces that block bots (Flipkart/Amazon) return a clear
-// "add manually / scan" message. Returns { drafts:[...] } for collections,
-// else { draft:{...} }.
+// WooCommerce Store API (public, no key) — common on Indian small stores.
+async function _tryWoo(url) {
+  try {
+    const u = new URL(url);
+    const r = await fetch(u.origin + '/wp-json/wc/store/products?per_page=100', { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!Array.isArray(j) || !j.length) return null;
+    return {
+      list: j.map(function (p) {
+        const img = (p.images && p.images[0] && p.images[0].src) || null;
+        let price = null;
+        if (p.prices && p.prices.price != null) {
+          const cmu = Number(p.prices.currency_minor_unit || 0);
+          const raw = _num(p.prices.price);
+          price = raw != null ? raw / Math.pow(10, cmu) : null;
+        }
+        return { name: String(p.name || '').replace(/\s+/g, ' ').trim().slice(0, 140), price_inr: price, image_url: img, description: p.short_description ? String(p.short_description).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) : null, source: 'url' };
+      }).filter(function (x) { return x.name; })
+    };
+  } catch (_) { return null; }
+}
+
+// Extract product(s) from a URL. Strategy: Shopify feed → WooCommerce Store API
+// → OG/Twitter meta → JSON-LD → inline price → Gemini fallback. Marketplaces
+// that block bots (Flipkart/Amazon) and small trader/directory sites without a
+// product feed return a clear "add manually / scan" message. Returns
+// { drafts:[...] } for a catalog, else { draft:{...} }.
 async function api_wapack_product_from_url(token, args) {
   await _gate(token);
   const url = String((args && args.url) || '').trim();
@@ -1164,6 +1187,9 @@ async function api_wapack_product_from_url(token, args) {
   const shop = await _tryShopify(url);
   if (shop && shop.list && shop.list.length) return { drafts: shop.list };
   if (shop && shop.single && shop.single.name) return { draft: shop.single };
+  // WooCommerce Store API (whole catalog).
+  const woo = await _tryWoo(url);
+  if (woo && woo.list && woo.list.length) return { drafts: woo.list };
   let html = '';
   try {
     const r = await fetch(url, { headers: {
