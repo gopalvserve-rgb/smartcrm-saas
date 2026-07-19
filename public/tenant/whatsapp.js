@@ -451,6 +451,29 @@
         body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' } },
           h('div', { style: { fontSize: '11.5px', color: '#64748b' } }, 'Capture leads without leaving the WhatsApp chat. Publishing uses Meta Flows on your WABA.'),
           btn('＋ New form', function () { formModal(null); }, 'primary')));
+
+        // WA_PACK_BOT_FORM_v1 — AI Bot auto-send config: when an inbound message
+        // contains the keyword, the AI bot sends the chosen form automatically.
+        if (forms.length) {
+          let trig = null;
+          try { trig = (await api('api_wapack_bot_trigger_get')).trigger; } catch (_) {}
+          const kwI = h('input', { value: (trig && trig.keyword) || '', placeholder: 'Trigger word (e.g. brochure)', style: { padding: '7px 9px', border: '1px solid #bfdbfe', borderRadius: '7px', fontSize: '13px', width: '180px' } });
+          const formSel = sel(forms.map(function (f) { return [String(f.id), f.name]; }), trig ? String(trig.form_id) : String(forms[0].id));
+          const enChk = h('input', { type: 'checkbox' }); enChk.checked = trig ? trig.enabled != 0 : true;
+          const enL = h('label', { style: { fontSize: '12px', display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer' } }, enChk, document.createTextNode('Enabled'));
+          body.appendChild(h('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', padding: '12px 14px', marginBottom: '12px' } },
+            h('div', { style: { fontWeight: 700, fontSize: '13px', color: '#1e40af', marginBottom: '6px' } }, '🤖 AI Bot auto-send'),
+            h('div', { style: { fontSize: '11.5px', color: '#475569', marginBottom: '8px' } }, 'When a customer message contains the trigger word, the AI bot sends this form automatically (native in-chat form if a Flow ID is set, else a text prompt).'),
+            h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              h('span', { style: { fontSize: '12px', color: '#64748b' } }, 'If message contains'), kwI,
+              h('span', { style: { fontSize: '12px', color: '#64748b' } }, 'send'), formSel, enL,
+              btn('💾 Save', async function () {
+                if (!kwI.value.trim()) { toast('Enter a trigger word'); return; }
+                try { await api('api_wapack_bot_trigger_save', { keyword: kwI.value.trim(), form_id: Number(formSel.value), enabled: enChk.checked }); toast('Bot trigger saved'); }
+                catch (e) { toast(e.message); }
+              }, 'primary'))));
+        }
+
         if (!forms.length) { body.appendChild(card([h('div', { style: { textAlign: 'center', color: '#64748b', padding: '18px' } }, 'No forms yet.')])); return; }
         forms.forEach(function (f) {
           body.appendChild(h('div', { style: { background: '#fff', border: '1px solid #d1fae5', borderRadius: '10px',
@@ -460,6 +483,12 @@
                 f.status === 'published' ? pill('✓ Published', '#dcfce7', '#166534') : pill('Draft', '#f1f5f9', '#475569')),
               h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px' } },
                 (f.fields || []).length + ' fields · ' + (f.submissions || 0) + ' submissions')),
+            btn('📤 Send test', async function () {
+              const to = prompt('Send "' + f.name + '" to which WhatsApp number? (with country code)');
+              if (!to) return;
+              try { const r = await api('api_wapack_form_send', { form_id: f.id, phone: to }); toast(r && r.sent ? ('Sent (' + (r.mode || '') + ')') : ('Failed: ' + ((r && r.error) || 'unknown'))); }
+              catch (e) { toast(e.message); }
+            }),
             btn('👁 Responses', function () { responsesModal(f); }),
             btn('✏️ Edit', function () { formModal(f); }),
             btn('🗑', async function () { if (!confirm('Delete form?')) return; try { await api('api_wapack_form_delete', { id: f.id }); render(); } catch (e) { toast(e.message); } })));
@@ -471,6 +500,13 @@
         const nameI = h('input', { value: f.name || '', placeholder: 'Form name', style: inpS() });
         const descI = h('input', { value: f.description || '', placeholder: 'Short description', style: inpS() });
         const statusSel = sel([['draft', 'Draft'], ['published', 'Published']], f.status || 'draft');
+        // WA_PACK_BOT_FORM_v1 — native Flow linkage (optional). With a Flow ID the
+        // form is delivered as a real in-chat WhatsApp form; without it, the bot
+        // sends a text prompt listing the fields (works with no WABA Flow).
+        const flowIdI = h('input', { value: f.flow_id || '', placeholder: 'Meta Flow ID — optional, enables the NATIVE in-chat form', style: inpS() });
+        const ctaI = h('input', { value: f.cta_text || '', placeholder: 'Button text (e.g. Open form)', style: inpS() });
+        const bodyTxtI = h('input', { value: f.body_text || '', placeholder: 'Message shown above the form / prompt', style: inpS() });
+        const screenI = h('input', { value: f.flow_screen || '', placeholder: 'Flow first screen id (default RECOMMEND)', style: inpS() });
         const fieldsWrap = h('div');
         const preview = h('div');
         function draw() {
@@ -528,6 +564,12 @@
             h('div', { style: { marginBottom: '8px' } }, nameI),
             h('div', { style: { marginBottom: '8px' } }, descI),
             h('div', { style: { marginBottom: '8px' } }, statusSel),
+            h('details', { style: { margin: '4px 0 8px', border: '1px solid #d1fae5', borderRadius: '8px', padding: '8px 10px', background: '#f8fffb' } },
+              h('summary', { style: { cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: WA_D } }, '🔗 Native Flow & message (optional)'),
+              h('div', { style: { fontSize: '11px', color: '#64748b', margin: '6px 0' } }, 'Leave Flow ID blank to send the form as a text prompt. Add a published Meta Flow ID to deliver a real in-chat form.'),
+              h('div', { style: { marginBottom: '6px' } }, bodyTxtI),
+              h('div', { style: { marginBottom: '6px' } }, flowIdI),
+              h('div', { style: { display: 'flex', gap: '6px' } }, ctaI, screenI)),
             h('div', { style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.4px', color: '#64748b', fontWeight: 700, margin: '8px 0 6px' } }, 'Fields'),
             fieldsWrap,
             btn('＋ Add field', function () { fields.push({ key: 'f' + Date.now(), label: '', type: 'text', required: false, options: ['Option 1', 'Option 2'] }); draw(); })),
@@ -535,7 +577,7 @@
         draw();
         modal(f.id ? 'Edit form' : 'New form', bodyEl, [
           ['💾 Save form', async function (close) {
-            try { await api('api_wapack_form_save', { id: f.id || 0, name: nameI.value, description: descI.value, status: statusSel.value, fields: fields }); toast('Saved'); close(); render(); }
+            try { await api('api_wapack_form_save', { id: f.id || 0, name: nameI.value, description: descI.value, status: statusSel.value, fields: fields, flow_id: flowIdI.value, cta_text: ctaI.value, body_text: bodyTxtI.value, flow_screen: screenI.value }); toast('Saved'); close(); render(); }
             catch (e) { toast(e.message); }
           }, 'primary']
         ]);

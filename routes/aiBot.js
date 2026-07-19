@@ -1533,6 +1533,30 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     return;
   }
 
+  // WA_PACK_BOT_FORM_v1 (2026-07-19) — if the WhatsApp Suite pack is active
+  // AND an enabled form-trigger keyword matches this inbound, send the native
+  // in-chat WhatsApp form (or a text fallback) and stop. Strict no-op for
+  // every tenant without the pack: the isPackActive gate lives inside
+  // _botMaybeSendForm and the whole thing is wrapped so it can never break
+  // the normal bot flow.
+  try {
+    const _waPack = require('./packs/whatsapp');
+    if (_waPack && typeof _waPack._botMaybeSendForm === 'function') {
+      const _formRes = await _waPack._botMaybeSendForm({ phone, leadId, inboundText, inboundPhoneId });
+      if (_formRes && _formRes.sent) {
+        try {
+          await db.query(
+            `INSERT INTO ai_chat_log (phone, lead_id, inbound_msg_id, status, reply_text, mode_used, phone_number_id)
+             VALUES ($1,$2,$3,'sent',$4,'wa_form',$5)`,
+            [phone, leadId || null, inboundMsgId || null,
+             ('[WhatsApp form sent: ' + (_formRes.form_name || '') + ' · ' + (_formRes.mode || '') + ']').slice(0, 4000),
+             inboundPhoneId || null]);
+        } catch (_) {}
+        return;   // form sent — this turn is handled
+      }
+    }
+  } catch (_) { /* pack absent / inactive → normal bot flow */ }
+
   const modes = Array.isArray(settings.reply_modes) ? settings.reply_modes : ['always'];
   const isManual = modes.includes('manual') && !modes.includes('always');
 

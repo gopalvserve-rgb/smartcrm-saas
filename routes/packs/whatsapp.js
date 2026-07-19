@@ -81,6 +81,31 @@ async function _installer({ db: D }) {
     )`, []);
   await D.query(`CREATE INDEX IF NOT EXISTS wapack_form_resp_idx ON wapack_form_responses(form_id)`, []);
 
+  // WA_PACK_BOT_FORM_v1 (2026-07-19) — link a form to a published Meta
+  // WhatsApp Flow so it can be sent as a NATIVE in-chat form, plus the
+  // message copy shown with the CTA. flow_id is optional: without it the
+  // form is sent as a graceful text-prompt fallback (works with no Flow).
+  for (const [col, ddl] of [
+    ['flow_id',     `ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS flow_id TEXT`],
+    ['cta_text',    `ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS cta_text TEXT`],
+    ['header_text', `ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS header_text TEXT`],
+    ['body_text',   `ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS body_text TEXT`],
+    ['footer_text', `ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS footer_text TEXT`],
+    ['flow_screen', `ALTER TABLE wapack_forms ADD COLUMN IF NOT EXISTS flow_screen TEXT`]
+  ]) { try { await D.query(ddl, []); } catch (_) { /* col exists */ } }
+
+  // Bot → form trigger: when an inbound message matches `keyword`, the AI
+  // bot sends `form_id` instead of a text reply. One row per tenant is
+  // enough for v1 (single active trigger); the table allows more later.
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS wapack_bot_form_triggers (
+      id         SERIAL PRIMARY KEY,
+      keyword    TEXT NOT NULL,
+      form_id    INT  NOT NULL,
+      enabled    INT  NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`, []);
+
   // ── In-chat WebViews (web pages opened inside the chat) ─────────
   await D.query(`
     CREATE TABLE IF NOT EXISTS wapack_webviews (
@@ -458,16 +483,29 @@ async function api_wapack_form_save(token, args) {
     name: (args.name || '').trim() || 'Untitled form',
     description: args.description || null,
     fields_json: JSON.stringify(fields),
-    status: args.status === 'published' ? 'published' : 'draft'
+    status: args.status === 'published' ? 'published' : 'draft',
+    // WA_PACK_BOT_FORM_v1 — native-Flow linkage + message copy (all optional)
+    flow_id:     (args.flow_id || '').toString().trim() || null,
+    cta_text:    (args.cta_text || '').toString().trim() || null,
+    header_text: (args.header_text || '').toString().trim() || null,
+    body_text:   (args.body_text || '').toString().trim() || null,
+    footer_text: (args.footer_text || '').toString().trim() || null,
+    flow_screen: (args.flow_screen || '').toString().trim() || null
   };
   if (id > 0) {
-    await db.query(`UPDATE wapack_forms SET name=$1, description=$2, fields_json=$3, status=$4 WHERE id=$5`,
-      [data.name, data.description, data.fields_json, data.status, id]);
+    await db.query(
+      `UPDATE wapack_forms SET name=$1, description=$2, fields_json=$3, status=$4,
+              flow_id=$5, cta_text=$6, header_text=$7, body_text=$8, footer_text=$9, flow_screen=$10
+        WHERE id=$11`,
+      [data.name, data.description, data.fields_json, data.status,
+       data.flow_id, data.cta_text, data.header_text, data.body_text, data.footer_text, data.flow_screen, id]);
     return { ok: true, id };
   }
   const r = await db.query(
-    `INSERT INTO wapack_forms (name, description, fields_json, status) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [data.name, data.description, data.fields_json, data.status]);
+    `INSERT INTO wapack_forms (name, description, fields_json, status, flow_id, cta_text, header_text, body_text, footer_text, flow_screen)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [data.name, data.description, data.fields_json, data.status,
+     data.flow_id, data.cta_text, data.header_text, data.body_text, data.footer_text, data.flow_screen]);
   return { ok: true, id: r.rows[0].id };
 }
 async function api_wapack_form_delete(token, args) {
@@ -485,6 +523,138 @@ async function api_wapack_form_responses(token, args) {
   const r = await db.query(
     `SELECT * FROM wapack_form_responses WHERE form_id=$1 ORDER BY id DESC LIMIT 200`, [fid]);
   return { responses: (r.rows || []).map(x => ({ ...x, answers: _json(x.answers_json, {}) })) };
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  WA_PACK_BOT_FORM_v1 — send a form into a WhatsApp chat (native Flow
+//  when linked, graceful text-prompt fallback otherwise) + let the AI
+//  bot trigger it on a keyword.
+// ══════════════════════════════════════════════════════════════════
+
+// Core send. `cfg` is a resolved whatsbot cfg (token + phoneId). Returns
+// { sent, mode, wa_message_id, error }. NEVER throws to the bot path.
+async function _sendForm(form, phone, cfg, opts) {
+  const wb = require('../whatsbot');
+  opts = opts || {};
+  const to = String(phone || '').replace(/[^\d]/g, '');
+  if (!to) return { sent: false, error: 'no phone' };
+  const fields = _json(form.fields_json, []);
+
+  // NATIVE FLOW — only when the form is linked to a published Meta Flow.
+  if (form.flow_id) {
+    const body = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        body: { text: String(form.body_text || form.description || ('Please fill: ' + form.name)).slice(0, 1024) },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_token: 'wapack_' + (form.id || 'f') + '_' + Date.now(),
+            flow_id: String(form.flow_id),
+            flow_cta: String(form.cta_text || 'Open form').slice(0, 30),
+            flow_action: 'navigate',
+            flow_action_payload: { screen: String(form.flow_screen || 'RECOMMEND'), data: {} }
+          }
+        }
+      }
+    };
+    if (form.header_text) body.interactive.header = { type: 'text', text: String(form.header_text).slice(0, 60) };
+    if (form.footer_text) body.interactive.footer = { text: String(form.footer_text).slice(0, 60) };
+    try {
+      const r = await wb._graphPost(`${cfg.phoneId}/messages`, body, cfg);
+      const waId = r.body && r.body.messages && r.body.messages[0] && r.body.messages[0].id || null;
+      const err = r.body && r.body.error && r.body.error.message || null;
+      const dbBody = '[WA Form: ' + form.name + '] (native flow)';
+      try {
+        await db.query(
+          `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, phone_number_id)
+           VALUES ($1,$2,'out',$3,$4,$5,$6,$7,'interactive_flow',$8)`,
+          [opts.leadId || null, null, cfg.phoneId, to, dbBody, waId, err ? 'failed' : 'sent', cfg.phoneId || null]);
+      } catch (_) {}
+      return { sent: !err, mode: 'flow', wa_message_id: waId, error: err };
+    } catch (e) {
+      // Flow send failed (unpublished / bad screen) → fall through to text.
+    }
+  }
+
+  // FALLBACK — no published Flow: send a text prompt listing the fields so
+  // capture still works today. Answers come back as normal inbound messages.
+  const lines = fields.map((f, i) => (i + 1) + '. ' + (f.label || f.key || ('Field ' + (i + 1))) + (f.required ? ' *' : ''));
+  const intro = String(form.body_text || form.description || ('Please share the following so we can help you:')).trim();
+  const text = intro + (lines.length ? ('\n\n' + lines.join('\n')) : '') +
+    (form.flow_id ? '' : '\n\n(Reply here with your details.)');
+  try {
+    const r = await wb._sendText({ to, text, leadId: opts.leadId || null, userId: null }, cfg);
+    return { sent: !r.error, mode: 'text', wa_message_id: r.wa_message_id, error: r.error || null };
+  } catch (e) {
+    return { sent: false, mode: 'text', error: e.message };
+  }
+}
+
+// Manual/testing send from the UI. { form_id, phone, phone_number_id?, lead_id? }
+async function api_wapack_form_send(token, args) {
+  await _gate(token);
+  args = args || {};
+  const fid = Number(args.form_id || 0);
+  const phone = String(args.phone || '').trim();
+  if (!fid) throw new Error('form_id required');
+  if (!phone) throw new Error('phone required');
+  const fr = await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [fid]);
+  if (!fr.rows.length) throw new Error('form not found');
+  const wb = require('../whatsbot');
+  const cfg = args.phone_number_id ? await wb._cfgForPhone(String(args.phone_number_id)) : await wb._cfg();
+  const res = await _sendForm(fr.rows[0], phone, cfg, { leadId: args.lead_id || null });
+  return res;
+}
+
+// Bot → form trigger config (single active row in v1).
+async function api_wapack_bot_trigger_get(token) {
+  await _gate(token);
+  const r = await db.query(`SELECT * FROM wapack_bot_form_triggers ORDER BY id DESC LIMIT 1`, []);
+  return { trigger: r.rows[0] || null };
+}
+async function api_wapack_bot_trigger_save(token, args) {
+  await _gate(token);
+  args = args || {};
+  const keyword = String(args.keyword || '').trim();
+  const formId = Number(args.form_id || 0);
+  const enabled = args.enabled === false || args.enabled === 0 ? 0 : 1;
+  if (!keyword) throw new Error('keyword required');
+  if (!formId) throw new Error('form_id required');
+  // Single-row model: replace any existing trigger.
+  await db.query(`DELETE FROM wapack_bot_form_triggers`, []);
+  const r = await db.query(
+    `INSERT INTO wapack_bot_form_triggers (keyword, form_id, enabled) VALUES ($1,$2,$3) RETURNING id`,
+    [keyword.toLowerCase(), formId, enabled]);
+  return { ok: true, id: r.rows[0].id };
+}
+
+// Called from aiBot.maybeReplyToInbound (thin, pack-gated hook). Returns
+// { sent:true, form_name } if it sent a form (bot should stop), else falsy.
+// Strict no-op for any tenant without the WhatsApp pack active.
+async function _botMaybeSendForm({ phone, leadId, inboundText, inboundPhoneId }) {
+  try {
+    if (!(await framework.isPackActive(PACK_ID))) return false;
+    await _ensure();
+    const tr = await db.query(`SELECT * FROM wapack_bot_form_triggers WHERE enabled=1 ORDER BY id DESC LIMIT 1`, []);
+    if (!tr.rows.length) return false;
+    const trig = tr.rows[0];
+    const kw = String(trig.keyword || '').toLowerCase().trim();
+    const t = String(inboundText || '').toLowerCase();
+    if (!kw || !t.includes(kw)) return false;
+    const fr = await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [trig.form_id]);
+    if (!fr.rows.length) return false;
+    const wb = require('../whatsbot');
+    const cfg = inboundPhoneId ? await wb._cfgForPhone(String(inboundPhoneId)) : await wb._cfg();
+    const res = await _sendForm(fr.rows[0], phone, cfg, { leadId: leadId || null });
+    return res.sent ? { sent: true, form_name: fr.rows[0].name, mode: res.mode } : false;
+  } catch (_) {
+    return false;   // never break the bot flow
+  }
 }
 
 // ── In-chat WebViews ──────────────────────────────────────────────
@@ -816,6 +986,10 @@ module.exports = {
   api_wapack_form_save,
   api_wapack_form_delete,
   api_wapack_form_responses,
+  api_wapack_form_send,
+  api_wapack_bot_trigger_get,
+  api_wapack_bot_trigger_save,
+  _botMaybeSendForm,
   api_wapack_webviews_list,
   api_wapack_webview_save,
   api_wapack_webview_delete,
