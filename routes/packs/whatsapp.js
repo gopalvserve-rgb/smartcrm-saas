@@ -752,7 +752,7 @@ async function api_wapack_forms_backfill(token, args) {
   try {
     rows = (await db.query(
       `SELECT id, response_json FROM wa_activity_log
-        WHERE category='webhook_message' AND response_json LIKE '%nfm_reply%'
+        WHERE category='webhook_message' AND response_json::text LIKE '%nfm_reply%'
         ORDER BY id DESC LIMIT $1`, [limit])).rows || [];
   } catch (e) { return { ok: false, error: e.message }; }
   let captured = 0, skipped = 0;
