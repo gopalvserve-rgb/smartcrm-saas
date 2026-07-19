@@ -1174,6 +1174,42 @@ async function _tryWoo(url) {
   } catch (_) { return null; }
 }
 
+// Generic catalog extractor for non-Shopify/Woo sites (IndiaMART, TradeIndia,
+// custom microsites). Strips the page to text and asks Gemini to pull every
+// product + price. Returns an array of drafts, or null.
+async function _extractCatalog(html) {
+  try {
+    if (!html || html.length < 400) return null;
+    const priceHits = (html.match(/(?:₹|Rs\.?|INR)\s*[\d,]+/gi) || []).length;
+    if (priceHits < 2) return null; // not a multi-product page
+    let text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#\d+;/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+    if (text.length > 26000) text = text.slice(0, 26000);
+    const gem = require('../../utils/geminiClient');
+    const res = await gem.generate({
+      prompt: 'This is the visible text of an online catalog / seller storefront page. Extract EVERY distinct product being sold, with its price. IGNORE navigation, category links, company profile, contact details, testimonials, and footer. Return ONLY a compact JSON array like [{"name":"SM-109 Mobile Phone Charger","price_inr":100}]. price_inr = plain number (digits only, no ₹ symbol, no commas); use null only if a price is truly absent. Keep product names short and clean. TEXT:\n' + text,
+      maxOutputTokens: 4000, temperature: 0, call_kind: 'store_catalog'
+    });
+    if (!res || !res.ok) return null;
+    let t = String(res.text || '').trim();
+    const jm = t.match(/\[[\s\S]*\]/); if (jm) t = jm[0];
+    let arr; try { arr = JSON.parse(t); } catch (_) { return null; }
+    if (!Array.isArray(arr)) return null;
+    const seen = {};
+    return arr.map(function (it) {
+      const raw = it && (it.price_inr != null ? it.price_inr : (it.price != null ? it.price : it.amount));
+      return { name: String((it && it.name) || '').replace(/\s+/g, ' ').trim().slice(0, 140), price_inr: _num(raw), source: 'url' };
+    }).filter(function (d) {
+      if (!d.name || d.name.length < 2) return false;
+      const k = d.name.toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true;
+    });
+  } catch (_) { return null; }
+}
+
 // Extract product(s) from a URL. Strategy: Shopify feed → WooCommerce Store API
 // → OG/Twitter meta → JSON-LD → inline price → Gemini fallback. Marketplaces
 // that block bots (Flipkart/Amazon) and small trader/directory sites without a
@@ -1190,10 +1226,7 @@ async function api_wapack_product_from_url(token, args) {
   // WooCommerce Store API (whole catalog).
   const woo = await _tryWoo(url);
   if (woo && woo.list && woo.list.length) return { drafts: woo.list };
-  // A bare homepage on a non-Shopify/Woo site has no product list to extract.
-  if (new URL(url).pathname.replace(/\/+$/, '') === '') {
-    throw new Error('That’s a homepage, not a product page. This store isn’t on Shopify or WooCommerce, so there’s no product list to import. Paste a single product page link, or add products manually / by scanning a photo of your list.');
-  }
+  const isHomepage = new URL(url).pathname.replace(/\/+$/, '') === '';
   let html = '';
   try {
     const r = await fetch(url, { headers: {
@@ -1202,6 +1235,13 @@ async function api_wapack_product_from_url(token, args) {
     } });
     html = await r.text();
   } catch (e) { throw new Error('Could not fetch that URL'); }
+
+  // Generic catalog extractor — many small Indian sellers use IndiaMART /
+  // TradeIndia / custom microsites that server-render EVERY product with a ₹
+  // price right on the page. If the page has several price tags, let Gemini
+  // pull the whole list (name + price) in one shot.
+  const catalog = await _extractCatalog(html);
+  if (catalog && catalog.length >= 2) return { drafts: catalog };
 
   const meta = (props) => {
     for (const prop of props) {
