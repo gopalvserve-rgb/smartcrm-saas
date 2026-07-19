@@ -769,15 +769,50 @@
       }
 
       function fromUrlModal() {
-        var urlI = h('input', { placeholder: 'Paste product URL (https://…)', style: inpS() });
+        var urlI = h('input', { placeholder: 'Paste a product OR collection link (https://…)', style: inpS() });
+        var busy = h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '8px' } }, '');
         modal('🔗 Add from URL', h('div', {},
-          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Paste a product page link — we pull in the image, name and price. You can edit before saving.'),
-          urlI), [['Fetch', async function (close) {
+          h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Paste a link — a single product, or a whole collection/category (we’ll import all of them). Works great for Shopify stores. You can edit before saving.'),
+          urlI, busy), [['Fetch', async function (close) {
             if (!urlI.value.trim()) { toast('Enter a URL'); return; }
-            toast('Fetching…');
-            try { var r = await api('api_wapack_product_from_url', { url: urlI.value.trim() }); close(); productModal(r.draft || {}); }
-            catch (e) { toast(e.message); }
+            busy.textContent = '🔍 Reading the page…';
+            try {
+              var r = await api('api_wapack_product_from_url', { url: urlI.value.trim() });
+              close();
+              if (r.drafts && r.drafts.length) { reviewDraftsModal(r.drafts, r.drafts.length + ' products found'); }
+              else { productModal(r.draft || {}); }
+            } catch (e) { busy.textContent = ''; toast(e.message); }
           }, 'primary']]);
+      }
+
+      // Reusable review list for a batch of draft products (from a collection
+      // URL or a scanned photo): edit name/price, untick unwanted, then add all.
+      function reviewDraftsModal(drafts, subtitle) {
+        var wrap = h('div');
+        function draw() {
+          wrap.innerHTML = '';
+          wrap.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
+            h('div', { style: { fontSize: '12.5px', color: '#475569' } }, (subtitle || 'Review') + ' — edit, untick any you don’t want:'),
+            h('label', { style: { fontSize: '12px', display: 'flex', gap: '4px', alignItems: 'center' } },
+              (function () { var a = h('input', { type: 'checkbox' }); a.checked = true; a.onchange = function () { drafts.forEach(function (d) { d._on = a.checked; }); draw(); }; return a; })(), 'All')));
+          drafts.forEach(function (d, i) {
+            if (d._on === undefined) d._on = true;
+            var chk = h('input', { type: 'checkbox' }); chk.checked = d._on; chk.onchange = function () { drafts[i]._on = chk.checked; };
+            var thumb = d.image_url
+              ? h('img', { src: d.image_url, style: { width: '34px', height: '34px', objectFit: 'cover', borderRadius: '6px', flex: '0 0 34px' }, onerror: function () { this.style.visibility = 'hidden'; } })
+              : h('div', { style: { width: '34px', height: '34px', borderRadius: '6px', background: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 34px' } }, '📦');
+            var nm = h('input', { value: d.name, style: Object.assign(inpS(), { flex: '1', fontSize: '13px', padding: '7px 9px' }) }); nm.oninput = function () { drafts[i].name = nm.value; };
+            var pr = h('input', { value: d.price_inr != null ? d.price_inr : '', placeholder: '₹', inputmode: 'numeric', style: Object.assign(inpS(), { width: '76px', fontSize: '13px', padding: '7px 9px' }) }); pr.oninput = function () { drafts[i].price_inr = pr.value; };
+            wrap.appendChild(h('div', { style: { display: 'flex', gap: '7px', alignItems: 'center', marginBottom: '6px' } }, chk, thumb, nm, pr));
+          });
+        }
+        draw();
+        modal('🛒 ' + (subtitle || 'Review products'), h('div', { style: { maxHeight: '60vh', overflow: 'auto' } }, wrap), [['✅ Add selected', async function (close) {
+          var chosen = drafts.filter(function (d) { return d._on !== false && String(d.name || '').trim(); });
+          if (!chosen.length) { toast('Nothing selected'); return; }
+          try { var r = await api('api_wapack_products_bulk_add', { products: chosen, source: 'url' }); toast('Added ' + r.added + ' products'); close(); render(); }
+          catch (e) { toast(e.message); }
+        }, 'primary']]);
       }
 
       function scanModal() {

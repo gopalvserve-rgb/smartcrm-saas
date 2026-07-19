@@ -946,7 +946,7 @@ async function api_wapack_products_bulk_add(token, args) {
   for (const p of list) {
     const name = String((p && p.name) || '').trim();
     if (!name) continue;
-    const price = (p.price_inr != null && p.price_inr !== '') ? Number(p.price_inr) : null;
+    const price = _num(p.price_inr);
     try {
       await db.query(
         `INSERT INTO wapack_products (source, name, price_inr, image_url, description, in_stock, active)
@@ -968,15 +968,51 @@ function _num(v) {
   return isNaN(n) ? null : n;
 }
 
-// Extract a draft product from a product-page URL. Strategy (best-effort):
-// OG/Twitter meta → JSON-LD Product (name/image/offers.price) → itemprop /
-// inline price patterns → Gemini fallback on the page head+JSON-LD. Big
-// marketplaces (Flipkart/Amazon) block bots + render via JS, so those return
-// a clear "add manually / scan" message instead of a blank product.
+// Shopify stores (very common for D2C brands like Ambrane, boAt) expose a
+// public JSON feed. A /collections/<x> link → many products; a /products/<x>
+// link → one. Returns { list:[...] } | { single:{...} } | null.
+function _shopProd(p) {
+  const v = (p.variants && p.variants[0]) || {};
+  const img = (p.images && p.images[0] && p.images[0].src) || (p.image && p.image.src) || (p.featured_image) || null;
+  return {
+    name: String(p.title || '').replace(/\s+/g, ' ').trim().slice(0, 140),
+    price_inr: _num(v.price != null ? v.price : p.price),
+    image_url: img || null,
+    description: p.body_html ? String(p.body_html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) : null,
+    source: 'url'
+  };
+}
+async function _tryShopify(url) {
+  try {
+    const u = new URL(url);
+    let jsonUrl, single = false;
+    const pm = u.pathname.match(/\/products\/([^\/?#]+)/);
+    const cm = u.pathname.match(/\/collections\/([^\/?#]+)/);
+    if (pm) { jsonUrl = u.origin + '/products/' + pm[1] + '.json'; single = true; }
+    else if (cm) { jsonUrl = u.origin + '/collections/' + cm[1] + '/products.json?limit=100'; }
+    else { jsonUrl = u.origin + '/products.json?limit=100'; }
+    const r = await fetch(jsonUrl, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (single && j.product) return { single: _shopProd(j.product) };
+    if (Array.isArray(j.products) && j.products.length) return { list: j.products.map(_shopProd).filter(function (x) { return x.name; }) };
+    return null;
+  } catch (_) { return null; }
+}
+
+// Extract product(s) from a URL. Strategy: Shopify JSON feed (collection →
+// MANY, product → one) → OG/Twitter meta → JSON-LD → inline price → Gemini
+// fallback. Marketplaces that block bots (Flipkart/Amazon) return a clear
+// "add manually / scan" message. Returns { drafts:[...] } for collections,
+// else { draft:{...} }.
 async function api_wapack_product_from_url(token, args) {
   await _gate(token);
   const url = String((args && args.url) || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('Enter a valid product URL (starting http/https)');
+  // Shopify fast-path (handles collection pages = many products at once).
+  const shop = await _tryShopify(url);
+  if (shop && shop.list && shop.list.length) return { drafts: shop.list };
+  if (shop && shop.single && shop.single.name) return { draft: shop.single };
   let html = '';
   try {
     const r = await fetch(url, { headers: {
