@@ -186,7 +186,12 @@ async function _installer({ db: D }) {
     `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS stock_restored INT NOT NULL DEFAULT 0`,
     `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS stock_deducted INT NOT NULL DEFAULT 0`,
     // INVENTORY_PAUSE_v1 — master switch; default OFF (inventory/stock paused).
-    `ALTER TABLE wapack_store ADD COLUMN IF NOT EXISTS inventory_on INT NOT NULL DEFAULT 0`
+    `ALTER TABLE wapack_store ADD COLUMN IF NOT EXISTS inventory_on INT NOT NULL DEFAULT 0`,
+    // STORE_ADDRESS_v1 — structured delivery address on each order.
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS city TEXT`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS state TEXT`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS landmark TEXT`,
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS pincode TEXT`
   ]) { try { await D.query(ddl, []); } catch (_) {} }
 }
 
@@ -1505,6 +1510,12 @@ async function expressPlaceOrder(req, res) {
     const ref = 'ORD-' + Date.now().toString().slice(-6);
     const payMode = b.payment === 'upi' ? 'UPI' : 'COD';
     const address = String(b.address || '').slice(0, 500);
+    // STORE_ADDRESS_v1 — structured delivery address.
+    const landmark = String(b.landmark || '').slice(0, 200);
+    const city = String(b.city || '').slice(0, 120);
+    const state = String(b.state || '').slice(0, 120);
+    const pincode = _digits(b.pincode).slice(0, 10);
+    const fullAddr = [address, landmark ? ('Landmark: ' + landmark) : '', city, state, pincode].filter(Boolean).join(', ');
 
     // Find or create a lead for this customer.
     let leadId = null;
@@ -1522,9 +1533,9 @@ async function expressPlaceOrder(req, res) {
     } catch (_) {}
 
     await db.query(
-      `INSERT INTO wapack_orders (order_ref, customer_name, phone, address, items_json, total_inr, payment_mode, status, lead_id, stock_deducted)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'placed',$8,1)`,
-      [ref, name, phone, address, JSON.stringify(clean), total, payMode, leadId || null]);
+      `INSERT INTO wapack_orders (order_ref, customer_name, phone, address, city, state, landmark, pincode, items_json, total_inr, payment_mode, status, lead_id, stock_deducted)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'placed',$12,1)`,
+      [ref, name, phone, fullAddr, city, state, landmark, pincode, JSON.stringify(clean), total, payMode, leadId || null]);
 
     // INVENTORY_v1 — deduct stock for tracked products (only when inventory is ON).
     try { const st = await _getStore(); if (st && Number(st.inventory_on) === 1) await _applyStock(clean, -1); } catch (_) {}
@@ -1532,7 +1543,7 @@ async function expressPlaceOrder(req, res) {
     // Drop the order into the lead remark timeline.
     if (leadId) {
       const lines = clean.map(c => '• ' + c.name + ' × ' + c.qty + ' — ' + _inr(c.price * c.qty)).join('\n');
-      const remark = '🛒 Placed order ' + ref + ' — ' + _inr(total) + ' (' + payMode + ')\n' + lines + (address ? ('\n📍 ' + address) : '');
+      const remark = '🛒 Placed order ' + ref + ' — ' + _inr(total) + ' (' + payMode + ')\n' + lines + (fullAddr ? ('\n📍 ' + fullAddr) : '');
       try { await db.insert('remarks', { lead_id: leadId, user_id: null, remark: remark, created_at: db.nowIso() }); } catch (_) {}
       try { await db.query(`UPDATE leads SET notes = LEFT($2 || CASE WHEN COALESCE(notes,'')='' THEN '' ELSE E'\n\n' || notes END, 4096) WHERE id=$1`, [leadId, remark]); } catch (_) {}
       try { require('../tat').logAction(leadId, 'order_placed', null, { ref: ref, total: total, items: clean.length }); } catch (_) {}
@@ -1545,7 +1556,7 @@ async function expressPlaceOrder(req, res) {
       if (notify) {
         const wb = require('../whatsbot');
         const msg = '🛒 New order ' + ref + '\n' + name + ' · ' + phone + '\n' + _inr(total) + ' · ' + payMode + '\n' +
-          clean.map(c => '• ' + c.name + ' ×' + c.qty).join('\n') + (address ? ('\n📍 ' + address) : '');
+          clean.map(c => '• ' + c.name + ' ×' + c.qty).join('\n') + (fullAddr ? ('\n📍 ' + fullAddr) : '');
         await wb._sendText({ to: notify, text: msg, leadId: null, userId: null }, await wb._cfg());
       }
     } catch (_) {}
@@ -1590,18 +1601,24 @@ function _storeHtml(store, prods, slug) {
     'function bar(){var b=document.getElementById("bar");if(count()){b.classList.remove("hide");document.getElementById("barc").textContent="\\uD83D\\uDED2 "+count()+" item(s)";document.getElementById("bart").textContent=inr(total())+" \\u00B7 Checkout \\u2192";}else{b.classList.add("hide");}}' +
     'function openCart(){var items=P.filter(function(p){return cart[p.id];});var pm=(PAY.cod?"cod":"upi");' +
     'var h="<h2>Your order</h2>"+items.map(function(p){return "<div class=oi><span>"+esc(p.name)+" \\u00D7 "+cart[p.id]+"</span><span>"+inr(p.price*cart[p.id])+"</span></div>";}).join("")+"<div class=oi style=\\"font-weight:800;border:none\\"><span>Total</span><span>"+inr(total())+"</span></div>";' +
-    'h+="<input class=inp id=cn placeholder=\\"Your name\\"><input class=inp id=cp placeholder=\\"Phone number\\" inputmode=numeric><textarea class=inp id=ca placeholder=\\"Delivery address\\" style=height:60px></textarea>";' +
+    'h+="<input class=inp id=cn placeholder=\\"Your name\\"><input class=inp id=cp placeholder=\\"Phone number\\" inputmode=numeric>";' +
+    'h+="<textarea class=inp id=ca placeholder=\\"Address (house / street / area)\\" style=height:56px></textarea>";' +
+    'h+="<input class=inp id=clm placeholder=\\"Landmark (optional)\\"><input class=inp id=cci placeholder=\\"City\\"><input class=inp id=cst placeholder=\\"State\\"><input class=inp id=cpin placeholder=\\"Pincode\\" inputmode=numeric maxlength=6>";' +
     'h+="<div class=payopt>"+(PAY.cod?"<label class=on id=lcod><input type=radio name=pay value=cod checked>Cash on Delivery</label>":"")+(PAY.upi?"<label id=lupi"+(PAY.cod?"":" class=on")+"><input type=radio name=pay value=upi"+(PAY.cod?"":" checked")+">UPI"+(PAY.upi_id?(" "+esc(PAY.upi_id)):"")+"</label>":"")+"</div>";' +
     'h+="<button class=place onclick=place()>"+(WA?"\\uD83D\\uDCF2 Order on WhatsApp":("Place order \\u00B7 "+inr(total())))+"</button><div class=muted>"+(WA?"Opens WhatsApp with your order ready to send.":"You\\u2019ll get a confirmation.")+"</div>";' +
     'document.getElementById("panel").innerHTML=h;document.getElementById("sheet").classList.add("on");' +
     'var opts=document.querySelectorAll(".payopt label");opts.forEach(function(l){l.onclick=function(){opts.forEach(function(x){x.classList.remove("on");});l.classList.add("on");l.querySelector("input").checked=true;};});}' +
     'function place(){var n=document.getElementById("cn").value.trim();var p=document.getElementById("cp").value.trim();var a=document.getElementById("ca").value.trim();' +
-    'if(!n||!p){alert("Please enter your name and phone");return;}var pay=(document.querySelector("input[name=pay]:checked")||{}).value||"cod";' +
+    'var lm=document.getElementById("clm").value.trim();var ci=document.getElementById("cci").value.trim();var stt=document.getElementById("cst").value.trim();var pin=document.getElementById("cpin").value.trim();' +
+    'if(!n||!p){alert("Please enter your name and phone");return;}' +
+    'if(!a||!ci||!stt||!pin){alert("Please enter your address, city, state and pincode");return;}' +
+    'if(!/^\\d{6}$/.test(pin)){alert("Please enter a valid 6-digit pincode");return;}var pay=(document.querySelector("input[name=pay]:checked")||{}).value||"cod";' +
+    'var fullAddr=[a,lm?("Landmark: "+lm):"",ci,stt,pin].filter(Boolean).join(", ");' +
     'var items=P.filter(function(x){return cart[x.id];}).map(function(x){return{id:x.id,qty:cart[x.id]};});' +
-    'fetch("/t/"+SLUG+"/store/order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n,phone:p,address:a,payment:pay,items:items})}).then(function(r){return r.json();}).then(function(j){' +
+    'fetch("/t/"+SLUG+"/store/order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n,phone:p,address:a,landmark:lm,city:ci,state:stt,pincode:pin,payment:pay,items:items})}).then(function(r){return r.json();}).then(function(j){' +
     'if(j&&j.ok){if(WA){' +
     'var lines=P.filter(function(x){return cart[x.id];}).map(function(x){return "\\u2022 "+x.name+" x"+cart[x.id]+" - "+inr(x.price*cart[x.id]);}).join("\\n");' +
-    'var msg="Hi! I would like to order (Ref "+j.order_ref+"):\\n"+lines+"\\nTotal: "+inr(j.total)+"\\nPay: "+(pay=="upi"?"UPI":"COD")+"\\nName: "+n+"\\nPhone: "+p+(a?("\\nAddress: "+a):"");' +
+    'var msg="Hi! I would like to order (Ref "+j.order_ref+"):\\n"+lines+"\\nTotal: "+inr(j.total)+"\\nPay: "+(pay=="upi"?"UPI":"COD")+"\\nName: "+n+"\\nPhone: "+p+"\\nAddress: "+fullAddr;' +
     'var wa="https://wa.me/"+WA+"?text="+encodeURIComponent(msg);cart={};' +
     'document.getElementById("panel").innerHTML="<div style=\\"text-align:center;padding:32px 16px\\"><div style=font-size:54px>\\uD83D\\uDCF2</div><h2>Almost done!</h2><p style=\\"color:#64748b;margin:6px 0 14px\\">Tap to send your order on WhatsApp \\u2014 it\\u2019s saved too.</p><a href=\\""+wa+"\\" class=place style=\\"display:block;text-decoration:none;box-sizing:border-box\\">\\uD83D\\uDCF2 Send on WhatsApp</a></div>";' +
     'setTimeout(function(){location.href=wa;},500);' +
