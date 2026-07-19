@@ -1180,15 +1180,22 @@ async function _tryWoo(url) {
 async function _extractCatalog(html) {
   try {
     if (!html || html.length < 400) return null;
-    const priceHits = (html.match(/(?:₹|Rs\.?|INR)\s*[\d,]+/gi) || []).length;
-    if (priceHits < 2) return null; // not a multi-product page
-    let text = html
+    // Decode the rupee entity first so BOTH detection and Gemini see real ₹
+    // (IndiaMART/TradeIndia render prices as &#8377; not a literal ₹).
+    const decoded = html
+      .replace(/&#8377;?/g, '₹').replace(/&#x20b9;?/gi, '₹')
+      .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
+    let text = decoded
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#\d+;/g, ' ')
+      .replace(/&#\d+;/g, ' ')
       .replace(/\s+/g, ' ').trim();
-    if (text.length > 26000) text = text.slice(0, 26000);
+    // Price signals: ₹/Rs/INR amounts OR IndiaMART unit suffixes (/Piece, /Unit…)
+    const priceHits = (text.match(/(?:₹|Rs\.?|INR)\s*[\d,]+/gi) || []).length
+      + (text.match(/\/\s*(?:Piece|Unit|Pair|Box|Pack|Set|Dozen|Kg|Gram|Meter|Number|Pcs|Nos)\b/gi) || []).length;
+    if (priceHits < 2) return null; // not a multi-product page
+    if (text.length > 28000) text = text.slice(0, 28000);
     const gem = require('../../utils/geminiClient');
     const res = await gem.generate({
       prompt: 'This is the visible text of an online catalog / seller storefront page. Extract EVERY distinct product being sold, with its price. IGNORE navigation, category links, company profile, contact details, testimonials, and footer. Return ONLY a compact JSON array like [{"name":"SM-109 Mobile Phone Charger","price_inr":100}]. price_inr = plain number (digits only, no ₹ symbol, no commas); use null only if a price is truly absent. Keep product names short and clean. TEXT:\n' + text,
