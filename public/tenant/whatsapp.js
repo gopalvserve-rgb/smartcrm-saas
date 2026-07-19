@@ -702,6 +702,9 @@
         var upiC = h('input', { type: 'checkbox' }); upiC.checked = Number(store.pay_upi) === 1;
         var upiI = h('input', { value: store.upi_id || '', placeholder: 'yourupi@bank', style: inpS() });
         var notifyI = h('input', { value: store.notify_phone || '', placeholder: 'WhatsApp number for order alerts', style: inpS() });
+        var cPhoneI = h('input', { value: store.contact_phone || '', placeholder: 'Contact phone (shown to customers)', style: inpS() });
+        var cEmailI = h('input', { value: store.contact_email || '', placeholder: 'Contact email (optional)', style: inpS() });
+        var cAddrI = h('textarea', { placeholder: 'Shop address (optional)', style: Object.assign(inpS(), { height: '46px' }) }); cAddrI.value = store.address || '';
         var activeC = h('input', { type: 'checkbox' }); activeC.checked = store.id ? Number(store.active) === 1 : true;
         var invC = h('input', { type: 'checkbox' }); invC.checked = Number(store.inventory_on) === 1;
         var ck = function (c, label) { return h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px', cursor: 'pointer' } }, c, label); };
@@ -716,11 +719,15 @@
           h('div', { style: { marginTop: '8px' } }, upiI),
           h('div', { style: { fontWeight: 700, margin: '14px 0 6px', fontSize: '13px' } }, '🔔 Order alerts'),
           notifyI,
+          h('div', { style: { fontWeight: 700, margin: '14px 0 6px', fontSize: '13px' } }, '📇 Contact details (shown on your store)'),
+          cPhoneI,
+          h('div', { style: { marginTop: '8px' } }, cEmailI),
+          h('div', { style: { marginTop: '8px' } }, cAddrI),
           h('div', { style: { marginTop: '12px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } },
             ck(activeC, 'Store is open'),
             ck(invC, '📦 Track inventory / stock (off = paused)'),
             btn('💾 Save store', async function () {
-              try { await api('api_wapack_store_save', { store_name: nameI.value, tagline: tagI.value, logo_emoji: logoI.value, about: aboutI.value, pay_cod: codC.checked, pay_upi: upiC.checked, upi_id: upiI.value, notify_phone: notifyI.value, active: activeC.checked, inventory_on: invC.checked }); toast('Store saved'); render(); }
+              try { await api('api_wapack_store_save', { store_name: nameI.value, tagline: tagI.value, logo_emoji: logoI.value, about: aboutI.value, pay_cod: codC.checked, pay_upi: upiC.checked, upi_id: upiI.value, notify_phone: notifyI.value, contact_phone: cPhoneI.value, contact_email: cEmailI.value, address: cAddrI.value, active: activeC.checked, inventory_on: invC.checked }); toast('Store saved'); render(); }
               catch (e) { toast(e.message); }
             }, 'primary'))
         ]));
@@ -737,12 +744,14 @@
 
       /* ---------------- Products ---------------- */
       var invOn = false;   // INVENTORY_PAUSE_v1 — stock features hidden unless turned on in My Store
+      var knownCats = [];  // STORE_CATEGORY_v1 — datalist of existing categories
       async function renderProducts(body) {
         body.innerHTML = '<div style="padding:1rem;color:#64748b">Loading…</div>';
         let prods;
         try { prods = (await api('api_wapack_products_list')).products || []; }
         catch (e) { body.innerHTML = ''; body.appendChild(card([h('div', { style: { color: '#dc2626' } }, e.message)])); return; }
         try { invOn = Number(((await api('api_wapack_store_get')).store || {}).inventory_on) === 1; } catch (_) { invOn = false; }
+        knownCats = []; prods.forEach(function (p) { var c = (p.category || '').trim(); if (c && knownCats.indexOf(c) < 0) knownCats.push(c); }); knownCats.sort();
         body.innerHTML = '';
         body.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' } },
           btn('➕ Add product', function () { productModal(null); }, 'primary'),
@@ -758,6 +767,7 @@
             imgBox,
             h('div', { style: { padding: '10px' } },
               h('div', { style: { fontWeight: 700, fontSize: '13px', lineHeight: '1.3' } }, p.name),
+              p.category ? h('div', { style: { display: 'inline-block', fontSize: '10px', fontWeight: 700, color: '#166534', background: '#dcfce7', borderRadius: '6px', padding: '1px 7px', marginTop: '3px' } }, p.category) : null,
               p.description ? h('div', { style: { fontSize: '11px', color: '#64748b', marginTop: '3px', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' } }, p.description) : null,
               h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' } },
                 h('b', { style: { color: WA_D, fontSize: '13px' } }, p.price_inr ? money(p.price_inr) : '—'),
@@ -782,6 +792,8 @@
         var nameI = h('input', { value: p.name || '', placeholder: 'Product name', style: inpS() });
         var priceI = h('input', { value: p.price_inr != null ? p.price_inr : '', placeholder: 'Price ₹', inputmode: 'numeric', style: inpS() });
         var stockI = h('input', { value: p.stock_qty != null ? p.stock_qty : '', placeholder: 'Stock qty (optional)', inputmode: 'numeric', style: inpS() });
+        var catI = h('input', { value: p.category || '', placeholder: 'Category (e.g. Chargers)', list: 'wapack-catlist', style: inpS() });
+        var catList = h('datalist', { id: 'wapack-catlist' }); knownCats.forEach(function (c) { catList.appendChild(h('option', { value: c })); });
         var descI = h('textarea', { placeholder: 'Description (optional)', style: Object.assign(inpS(), { height: '50px' }) }); descI.value = p.description || '';
         var inStockC = h('input', { type: 'checkbox' }); inStockC.checked = p.id ? Number(p.in_stock) === 1 : true;
         var prev = h('div');
@@ -795,12 +807,13 @@
         modal(p.id ? 'Edit product' : 'Add product', h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 160px', gap: '14px' } },
           h('div', {}, h('div', { style: { marginBottom: '8px' } }, nameI),
             h('div', { style: { display: 'flex', gap: '8px', marginBottom: '8px' } }, priceI, (invOn ? stockI : null)),
+            h('div', { style: { marginBottom: '8px' } }, catI, catList),
             h('div', { style: { marginBottom: '8px' } }, imgI), h('div', { style: { marginBottom: '8px' } }, descI),
             h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px' } }, inStockC, 'Available in store')),
           h('div', {}, h('div', { style: { fontSize: '11px', color: '#94a3b8', marginBottom: '6px' } }, 'Preview'), prev)),
           [['💾 Save', async function (close) {
             if (!nameI.value.trim()) { toast('Enter a product name'); return; }
-            try { await api('api_wapack_product_save', { id: p.id || 0, name: nameI.value, price_inr: priceI.value, image_url: imgI.value, stock_qty: stockI.value, description: descI.value, in_stock: inStockC.checked }); toast('Saved'); close(); render(); }
+            try { await api('api_wapack_product_save', { id: p.id || 0, name: nameI.value, price_inr: priceI.value, image_url: imgI.value, stock_qty: stockI.value, description: descI.value, category: catI.value, in_stock: inStockC.checked }); toast('Saved'); close(); render(); }
             catch (e) { toast(e.message); }
           }, 'primary']]);
       }
@@ -826,6 +839,8 @@
       // URL or a scanned photo): edit name/price, untick unwanted, then add all.
       function reviewDraftsModal(drafts, subtitle) {
         var wrap = h('div');
+        var catAll = h('input', { placeholder: 'Category for all these (optional, e.g. Chargers)', list: 'wapack-catlist', style: Object.assign(inpS(), { marginBottom: '10px' }) });
+        var catAllList = h('datalist', { id: 'wapack-catlist' }); knownCats.forEach(function (c) { catAllList.appendChild(h('option', { value: c })); });
         function draw() {
           wrap.innerHTML = '';
           wrap.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } },
@@ -845,10 +860,10 @@
           });
         }
         draw();
-        modal('🛒 ' + (subtitle || 'Review products'), h('div', { style: { maxHeight: '60vh', overflow: 'auto' } }, wrap), [['✅ Add selected', async function (close) {
+        modal('🛒 ' + (subtitle || 'Review products'), h('div', { style: { maxHeight: '60vh', overflow: 'auto' } }, catAll, catAllList, wrap), [['✅ Add selected', async function (close) {
           var chosen = drafts.filter(function (d) { return d._on !== false && String(d.name || '').trim(); });
           if (!chosen.length) { toast('Nothing selected'); return; }
-          try { var r = await api('api_wapack_products_bulk_add', { products: chosen, source: 'url' }); toast('Added ' + r.added + ' products'); close(); render(); }
+          try { var r = await api('api_wapack_products_bulk_add', { products: chosen, source: 'url', category: catAll.value.trim() || null }); toast('Added ' + r.added + ' products'); close(); render(); }
           catch (e) { toast(e.message); }
         }, 'primary']]);
       }

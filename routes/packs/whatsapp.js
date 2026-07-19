@@ -144,7 +144,8 @@ async function _installer({ db: D }) {
     `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS description TEXT`,
     `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS stock_qty INT`,
     `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`,
-    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS active INT NOT NULL DEFAULT 1`
+    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS active INT NOT NULL DEFAULT 1`,
+    `ALTER TABLE wapack_products ADD COLUMN IF NOT EXISTS category TEXT`   // STORE_CATEGORY_v1
   ]) { try { await D.query(ddl, []); } catch (_) {} }
 
   // STOREFRONT_v1 — single store profile per tenant (id=1 singleton).
@@ -191,7 +192,11 @@ async function _installer({ db: D }) {
     `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS city TEXT`,
     `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS state TEXT`,
     `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS landmark TEXT`,
-    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS pincode TEXT`
+    `ALTER TABLE wapack_orders ADD COLUMN IF NOT EXISTS pincode TEXT`,
+    // STORE_CONTACT_v1 — merchant's public contact details shown on the store.
+    `ALTER TABLE wapack_store ADD COLUMN IF NOT EXISTS contact_phone TEXT`,
+    `ALTER TABLE wapack_store ADD COLUMN IF NOT EXISTS contact_email TEXT`,
+    `ALTER TABLE wapack_store ADD COLUMN IF NOT EXISTS address TEXT`
   ]) { try { await D.query(ddl, []); } catch (_) {} }
 }
 
@@ -1179,13 +1184,15 @@ async function api_wapack_store_save(token, args) {
   args = args || {};
   const invOn = args.inventory_on === true || args.inventory_on === 1 ? 1 : 0;
   await db.query(
-    `INSERT INTO wapack_store (id, store_name, tagline, logo_emoji, about, pay_cod, pay_upi, upi_id, notify_phone, active, inventory_on, updated_at)
-     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+    `INSERT INTO wapack_store (id, store_name, tagline, logo_emoji, about, pay_cod, pay_upi, upi_id, notify_phone, active, inventory_on, contact_phone, contact_email, address, updated_at)
+     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
      ON CONFLICT (id) DO UPDATE SET store_name=$1, tagline=$2, logo_emoji=$3, about=$4,
-        pay_cod=$5, pay_upi=$6, upi_id=$7, notify_phone=$8, active=$9, inventory_on=$10, updated_at=now()`,
+        pay_cod=$5, pay_upi=$6, upi_id=$7, notify_phone=$8, active=$9, inventory_on=$10,
+        contact_phone=$11, contact_email=$12, address=$13, updated_at=now()`,
     [(args.store_name || '').trim() || 'My Store', args.tagline || null, (args.logo_emoji || '🛍️').slice(0, 4),
      args.about || null, args.pay_cod === false || args.pay_cod === 0 ? 0 : 1, args.pay_upi ? 1 : 0,
-     args.upi_id || null, _digits(args.notify_phone) || null, args.active === false ? 0 : 1, invOn]);
+     args.upi_id || null, _digits(args.notify_phone) || null, args.active === false ? 0 : 1, invOn,
+     _digits(args.contact_phone) || null, (args.contact_email || '').trim() || null, (args.address || '').trim() || null]);
   return { ok: true };
 }
 
@@ -1199,17 +1206,18 @@ async function api_wapack_product_save(token, args) {
   const price = args.price_inr != null && args.price_inr !== '' ? Number(args.price_inr) : null;
   const active = args.active === false || args.active === 0 ? 0 : 1;
   const inStock = args.in_stock === false || args.in_stock === 0 ? 0 : 1;
+  const category = (args.category || '').trim() || null;
   if (id > 0) {
     await db.query(
-      `UPDATE wapack_products SET name=$1, price_inr=$2, image_url=$3, description=$4, stock_qty=$5, in_stock=$6, active=$7 WHERE id=$8`,
-      [name, price, args.image_url || null, args.description || null, args.stock_qty != null && args.stock_qty !== '' ? Number(args.stock_qty) : null, inStock, active, id]);
+      `UPDATE wapack_products SET name=$1, price_inr=$2, image_url=$3, description=$4, stock_qty=$5, in_stock=$6, active=$7, category=$8 WHERE id=$9`,
+      [name, price, args.image_url || null, args.description || null, args.stock_qty != null && args.stock_qty !== '' ? Number(args.stock_qty) : null, inStock, active, category, id]);
     return { ok: true, id };
   }
   const r = await db.query(
-    `INSERT INTO wapack_products (source, name, price_inr, image_url, description, stock_qty, in_stock, active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    `INSERT INTO wapack_products (source, name, price_inr, image_url, description, stock_qty, in_stock, active, category)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [args.source || 'manual', name, price, args.image_url || null, args.description || null,
-     args.stock_qty != null && args.stock_qty !== '' ? Number(args.stock_qty) : null, inStock, active]);
+     args.stock_qty != null && args.stock_qty !== '' ? Number(args.stock_qty) : null, inStock, active, category]);
   return { ok: true, id: r.rows[0].id };
 }
 async function api_wapack_product_delete(token, args) {
@@ -1229,9 +1237,9 @@ async function api_wapack_products_bulk_add(token, args) {
     const price = _num(p.price_inr);
     try {
       await db.query(
-        `INSERT INTO wapack_products (source, name, price_inr, image_url, description, stock_qty, in_stock, active)
-         VALUES ($1,$2,$3,$4,$5,$6,1,1)`,
-        [args.source || 'scan', name, price, p.image_url || null, p.description || null, _num(p.stock_qty)]);
+        `INSERT INTO wapack_products (source, name, price_inr, image_url, description, stock_qty, in_stock, active, category)
+         VALUES ($1,$2,$3,$4,$5,$6,1,1,$7)`,
+        [args.source || 'scan', name, price, p.image_url || null, p.description || null, _num(p.stock_qty), (p.category || args.category || '').trim() || null]);
       n++;
     } catch (_) {}
   }
@@ -1617,14 +1625,20 @@ async function expressPlaceOrder(req, res) {
 
 function _storeHtml(store, prods, slug) {
   const items = prods.map(function (p) {
-    return { id: p.id, name: p.name, price: Number(p.price_inr || 0), img: p.image_url || '', desc: p.description || '', stock: Number(p.in_stock) };
+    return { id: p.id, name: p.name, price: Number(p.price_inr || 0), img: p.image_url || '', desc: p.description || '', stock: Number(p.in_stock), cat: (p.category || '').trim() };
   });
   const pay = { cod: Number(store.pay_cod) === 1, upi: Number(store.pay_upi) === 1, upi_id: store.upi_id || '' };
+  const contact = { name: store.store_name || 'Store', about: store.about || '', phone: _digits(store.contact_phone) || _digits(store.notify_phone) || '', email: store.contact_email || '', addr: store.address || '' };
   return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">' +
     '<title>' + _esc(store.store_name || 'Store') + '</title>' +
     '<style>:root{--wa:#25d366;--wd:#075e54}*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f7f9fb;color:#0f172a;padding-bottom:78px}' +
     '.hero{background:linear-gradient(135deg,#128c7e,#075e54);color:#fff;padding:22px 16px;text-align:center}.logo{font-size:40px}.hero h1{font-size:20px;margin:6px 0 2px}.hero p{font-size:12.5px;opacity:.9}' +
     '.wrap{max-width:640px;margin:0 auto;padding:12px}.lbl{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin:8px 4px}' +
+    '.search{width:100%;padding:11px 13px;border:1px solid #e6ebf1;border-radius:10px;font-size:14px;margin:2px 0 10px;background:#fff}' +
+    '.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:4px;-webkit-overflow-scrolling:touch}.chips::-webkit-scrollbar{display:none}' +
+    '.chip{white-space:nowrap;padding:7px 14px;border-radius:20px;border:1px solid #cfe9d8;background:#fff;color:#334155;font-size:12.5px;font-weight:600;cursor:pointer;flex:0 0 auto}.chip.on{background:var(--wd);color:#fff;border-color:var(--wd)}' +
+    '.sech{font-size:15px;font-weight:800;color:#0f172a;margin:16px 4px 9px;display:flex;align-items:center;gap:6px}.sech span{color:#94a3b8;font-weight:600;font-size:12px}' +
+    '.contact{background:#fff;border:1px solid #e6ebf1;border-radius:14px;padding:16px;margin:20px 0}.contact h3{font-size:15px;margin-bottom:4px}.crow{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;color:#334155;margin:9px 0}.contact a{color:var(--wd);text-decoration:none;font-weight:600}' +
     '.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:#fff;border:1px solid #e6ebf1;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}' +
     '.pi{height:150px;background:linear-gradient(135deg,#e0f2fe,#dcfce7);display:flex;align-items:center;justify-content:center;font-size:46px;overflow:hidden;cursor:pointer}.pi img{width:100%;height:100%;object-fit:cover}' +
     '.pb{padding:10px;flex:1;display:flex;flex-direction:column;gap:3px}.pn{font-size:13.5px;font-weight:700;line-height:1.3;cursor:pointer}.pp{color:var(--wd);font-weight:800;font-size:14px}.pd{font-size:11.5px;color:#64748b;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.viewd{font-size:11px;color:var(--wd);font-weight:700;cursor:pointer;margin-top:1px}' +
@@ -1636,16 +1650,24 @@ function _storeHtml(store, prods, slug) {
     '.place{width:100%;background:var(--wa);color:#fff;border:none;border-radius:11px;padding:13px;font-weight:800;font-size:15px;cursor:pointer;margin-top:10px}.muted{color:#94a3b8;font-size:11px;text-align:center;margin-top:12px}.empty{text-align:center;color:#94a3b8;padding:30px}</style></head><body>' +
     '<div class="hero"><div class="logo">' + _esc(store.logo_emoji || '🛍️') + '</div><h1>' + _esc(store.store_name || 'Store') + '</h1>' +
     (store.tagline ? '<p>' + _esc(store.tagline) + '</p>' : '') + '</div>' +
-    '<div class="wrap"><div class="lbl">Products</div><div id="grid" class="grid"></div>' +
-    (items.length ? '' : '<div class="empty">No products yet. Please check back soon.</div>') + '</div>' +
+    '<div class="wrap">' +
+    (items.length ? '<input id="q" class="search" placeholder="\\uD83D\\uDD0D Search products\\u2026" oninput="render()"><div id="chips" class="chips"></div>' : '') +
+    '<div id="secs"></div>' +
+    (items.length ? '' : '<div class="empty">No products yet. Please check back soon.</div>') +
+    '<div id="contact"></div></div>' +
     '<div class="bar hide" id="bar" onclick="openCart()"><span id="barc">🛒 0 items</span><span id="bart">' + _inr(0) + ' · Checkout →</span></div>' +
     '<div class="sheet" id="sheet"><div class="panel" id="panel"></div></div>' +
     '<script>' +
-    'var P=' + JSON.stringify(items) + ';var PAY=' + JSON.stringify(pay) + ';var SLUG=' + JSON.stringify(slug) + ';var WA=' + JSON.stringify(_digits(store.notify_phone)) + ';var cart={};' +
+    'var P=' + JSON.stringify(items) + ';var PAY=' + JSON.stringify(pay) + ';var SLUG=' + JSON.stringify(slug) + ';var WA=' + JSON.stringify(_digits(store.notify_phone)) + ';var STORE=' + JSON.stringify(contact) + ';var activeCat="all";var cart={};' +
     'function inr(n){return "\\u20B9"+Number(n||0).toLocaleString("en-IN");}' +
     'function count(){return Object.values(cart).reduce(function(a,b){return a+b;},0);}' +
     'function total(){return P.reduce(function(s,p){return s+(cart[p.id]||0)*p.price;},0);}' +
-    'function grid(){var g=document.getElementById("grid");g.innerHTML=P.map(function(p){var q=cart[p.id]||0;return "<div class=card><div class=pi onclick=\\"detail("+p.id+")\\">"+(p.img?("<img src=\\""+p.img+"\\" onerror=\\"this.style.display=\\x27none\\x27\\">"):"\\uD83D\\uDCE6")+"</div><div class=pb><div class=pn onclick=\\"detail("+p.id+")\\">"+esc(p.name)+"</div><div class=pp>"+inr(p.price)+"</div>"+(p.desc?("<div class=pd>"+esc(p.desc)+"</div>"):"")+"<div class=viewd onclick=\\"detail("+p.id+")\\">View details \\u203A</div>"+(q?("<div class=qtyrow><button class=qbtn onclick=\\"chg("+p.id+",-1)\\">\\u2212</button><b>"+q+"</b><button class=qbtn onclick=\\"chg("+p.id+",1)\\">+</button></div>"):("<button class=add onclick=\\"chg("+p.id+",1)\\">Add</button>"))+"</div></div>";}).join("");bar();}' +
+    'function cardHtml(p){var q=cart[p.id]||0;return "<div class=card><div class=pi onclick=\\"detail("+p.id+")\\">"+(p.img?("<img src=\\""+p.img+"\\" onerror=\\"this.style.display=\\x27none\\x27\\">"):"\\uD83D\\uDCE6")+"</div><div class=pb><div class=pn onclick=\\"detail("+p.id+")\\">"+esc(p.name)+"</div><div class=pp>"+inr(p.price)+"</div>"+(p.desc?("<div class=pd>"+esc(p.desc)+"</div>"):"")+"<div class=viewd onclick=\\"detail("+p.id+")\\">View details \\u203A</div>"+(q?("<div class=qtyrow><button class=qbtn onclick=\\"chg("+p.id+",-1)\\">\\u2212</button><b>"+q+"</b><button class=qbtn onclick=\\"chg("+p.id+",1)\\">+</button></div>"):("<button class=add onclick=\\"chg("+p.id+",1)\\">Add</button>"))+"</div></div>";}' +
+    'function cats(){var s=[];P.forEach(function(p){var c=(p.cat||"").trim();if(c&&s.indexOf(c)<0)s.push(c);});return s.sort();}' +
+    'function renderChips(){var el=document.getElementById("chips");if(!el)return;var cs=cats();if(!cs.length){el.style.display="none";return;}var html="<div class=\\"chip"+(activeCat==="all"?" on":"")+"\\" onclick=\\"setCat(-1)\\">All</div>";cs.forEach(function(c,i){html+="<div class=\\"chip"+(activeCat===c?" on":"")+"\\" onclick=\\"setCat("+i+")\\">"+esc(c)+"</div>";});el.innerHTML=html;}' +
+    'function setCat(i){var cs=cats();activeCat=(i<0?"all":cs[i]);render();}' +
+    'function render(){renderChips();var secs=document.getElementById("secs");if(!secs)return;var qi=document.getElementById("q");var q=qi?qi.value.toLowerCase().trim():"";var cs=cats();var fil=P.filter(function(p){var okc=(activeCat==="all"||((p.cat||"").trim()||"Other")===activeCat);var okq=(!q||p.name.toLowerCase().indexOf(q)>=0||(p.desc||"").toLowerCase().indexOf(q)>=0);return okc&&okq;});if(activeCat==="all"&&!q&&cs.length){var groups={},order=[];fil.forEach(function(p){var c=(p.cat||"").trim()||"Other";if(!groups[c]){groups[c]=[];order.push(c);}groups[c].push(p);});secs.innerHTML=order.map(function(c){return "<div class=sech>"+esc(c)+" <span>("+groups[c].length+")</span></div><div class=grid>"+groups[c].map(cardHtml).join("")+"</div>";}).join("");}else{secs.innerHTML=fil.length?("<div class=grid>"+fil.map(cardHtml).join("")+"</div>"):"<div class=empty>No products found.</div>";}bar();}' +
+    'function renderContact(){var el=document.getElementById("contact");if(!el)return;var p=[];if(STORE.about)p.push("<div style=\\"color:#475569;font-size:13px;line-height:1.5;margin-bottom:2px\\">"+esc(STORE.about)+"</div>");if(STORE.phone){p.push("<div class=crow>\\uD83D\\uDCDE <a href=\\"tel:+"+STORE.phone+"\\">+"+STORE.phone+"</a></div>");p.push("<div class=crow>\\uD83D\\uDCAC <a href=\\"https://wa.me/"+STORE.phone+"\\">Chat on WhatsApp</a></div>");}if(STORE.email)p.push("<div class=crow>\\u2709\\uFE0F <a href=\\"mailto:"+esc(STORE.email)+"\\">"+esc(STORE.email)+"</a></div>");if(STORE.addr)p.push("<div class=crow>\\uD83D\\uDCCD <span>"+esc(STORE.addr)+"</span></div>");el.innerHTML=p.length?("<div class=contact><h3>Contact "+esc(STORE.name)+"</h3>"+p.join("")+"</div>"):"";}' +
     'function detail(id){var p=P.filter(function(x){return x.id==id;})[0];if(!p)return;var q=cart[id]||0;' +
     'var h="<div style=\\"text-align:center\\">"+(p.img?("<img src=\\""+p.img+"\\" style=\\"width:100%;max-height:260px;object-fit:contain;border-radius:12px;background:#f1f5f9\\" onerror=\\"this.style.display=\\x27none\\x27\\">"):("<div style=\\"height:200px;display:flex;align-items:center;justify-content:center;font-size:64px;background:linear-gradient(135deg,#e0f2fe,#dcfce7);border-radius:12px\\">\\uD83D\\uDCE6</div>"))+"</div>";' +
     'h+="<h2 style=\\"margin-top:14px\\">"+esc(p.name)+"</h2>";' +
@@ -1658,7 +1680,7 @@ function _storeHtml(store, prods, slug) {
     'function detailAdd(id){if(cart[id]){openCart();}else{chg(id,1);detail(id);}}' +
     'function closeSheet(){document.getElementById("sheet").classList.remove("on");}' +
     'function esc(s){return String(s).replace(/[&<>\\"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}' +
-    'function chg(id,d){cart[id]=Math.max(0,(cart[id]||0)+d);if(!cart[id])delete cart[id];grid();}' +
+    'function chg(id,d){cart[id]=Math.max(0,(cart[id]||0)+d);if(!cart[id])delete cart[id];render();}' +
     'function bar(){var b=document.getElementById("bar");if(count()){b.classList.remove("hide");document.getElementById("barc").textContent="\\uD83D\\uDED2 "+count()+" item(s)";document.getElementById("bart").textContent=inr(total())+" \\u00B7 Checkout \\u2192";}else{b.classList.add("hide");}}' +
     'function openCart(){var items=P.filter(function(p){return cart[p.id];});var pm=(PAY.cod?"cod":"upi");' +
     'var h="<h2>Your order</h2>"+items.map(function(p){return "<div class=oi><span>"+esc(p.name)+" \\u00D7 "+cart[p.id]+"</span><span>"+inr(p.price*cart[p.id])+"</span></div>";}).join("")+"<div class=oi style=\\"font-weight:800;border:none\\"><span>Total</span><span>"+inr(total())+"</span></div>";' +
@@ -1685,7 +1707,7 @@ function _storeHtml(store, prods, slug) {
     'setTimeout(function(){location.href=wa;},500);' +
     '}else{document.getElementById("panel").innerHTML="<div style=text-align:center;padding:40px><div style=font-size:54px>\\u2705</div><h2>Order placed!</h2><p style=color:#64748b;margin-top:6px>Order "+j.order_ref+" \\u00B7 "+inr(j.total)+"</p><button class=place onclick=\\"location.reload()\\">Done</button></div>";cart={};}}' +
     'else{alert((j&&j.error)||"Could not place order");}}).catch(function(){alert("Network error, please try again");});}' +
-    'grid();</script></body></html>';
+    'render();renderContact();</script></body></html>';
 }
 
 // ══════════════════════════════════════════════════════════════════
