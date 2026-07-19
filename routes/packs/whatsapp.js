@@ -810,6 +810,26 @@ async function api_wapack_webview_delete(token, args) {
   await db.query(`DELETE FROM wapack_webviews WHERE id=$1`, [id]);
   return { ok: true };
 }
+// WEBVIEW_SEND_v1 — send a saved web page as a tappable link into a WhatsApp
+// chat (works today with no Meta Flows; true in-chat rendering needs Flows).
+async function api_wapack_webview_send(token, args) {
+  await _gate(token);
+  args = args || {};
+  const id = Number((args.id || args.webview_id) || 0);
+  const phone = _digits(args.phone);
+  if (!id) throw new Error('webview id required');
+  if (!phone) throw new Error('phone required');
+  const w = (await db.query(`SELECT * FROM wapack_webviews WHERE id=$1`, [id])).rows[0];
+  if (!w) throw new Error('WebView not found');
+  const text = '🌐 *' + w.title + '*' + (w.description ? ('\n' + w.description) : '') + '\n' + w.url;
+  const wb = require('../whatsbot');
+  const lead = (await db.query(
+    `SELECT id FROM leads WHERE regexp_replace(COALESCE(phone,''),'\\D','','g')=$1
+       OR regexp_replace(COALESCE(whatsapp,''),'\\D','','g')=$1 LIMIT 1`, [phone.slice(-10)])).rows[0];
+  const res = await wb._sendText({ to: phone, text: text, leadId: lead ? lead.id : null, userId: null }, await wb._cfg());
+  if (res && res.error) throw new Error(res.error);
+  return { ok: true, sent_to: phone };
+}
 
 // ══════════════════════════════════════════════════════════════════
 //  FEATURE 4 — Storefront (Shopify / WooCommerce / FB catalog)
@@ -1501,6 +1521,7 @@ module.exports = {
   api_wapack_webviews_list,
   api_wapack_webview_save,
   api_wapack_webview_delete,
+  api_wapack_webview_send,
   api_wapack_shop_connections,
   api_wapack_shop_connect,
   api_wapack_products_list,

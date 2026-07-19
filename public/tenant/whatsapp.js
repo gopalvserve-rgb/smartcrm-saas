@@ -623,7 +623,13 @@
             h('div', { style: { fontWeight: 700 } }, '🌐 ' + w.title),
             h('div', { style: { fontSize: '12px', color: WA_D, wordBreak: 'break-all' } }, w.url),
             w.description ? h('div', { style: { fontSize: '11.5px', color: '#64748b', margin: '4px 0' } }, w.description) : null,
-            h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+            h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' } },
+              btn('📤 Send in chat', function () {
+                var ph = h('input', { placeholder: 'WhatsApp number e.g. 9198…', style: inpS() });
+                modal('📤 Send "' + w.title + '" in chat', h('div', {},
+                  h('div', { style: { fontSize: '12.5px', color: '#475569', marginBottom: '10px' } }, 'Sends the page as a tappable link in the WhatsApp chat. Enter the customer\'s number:'),
+                  ph), [['Send', async function (close) { try { var r = await api('api_wapack_webview_send', { id: w.id, phone: ph.value }); toast('Sent to ' + r.sent_to); close(); } catch (e) { toast(e.message); } }, 'primary']]);
+              }, 'primary'),
               btn('✏️', function () { wvModal(w); }),
               btn('🗑', async function () { if (!confirm('Delete?')) return; try { await api('api_wapack_webview_delete', { id: w.id }); render(); } catch (e) { toast(e.message); } }))));
         });
