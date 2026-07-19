@@ -958,35 +958,88 @@ async function api_wapack_products_bulk_add(token, args) {
   return { ok: true, added: n };
 }
 
-// Extract a draft product from a product-page URL (og tags / JSON-LD / ₹ pattern).
+// Parse any price-ish value ("₹1,499", "1499.00", 1499) → number | null.
+function _num(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  const d = String(v).replace(/[^\d.]/g, '');
+  if (!d) return null;
+  const n = Number(d);
+  return isNaN(n) ? null : n;
+}
+
+// Extract a draft product from a product-page URL. Strategy (best-effort):
+// OG/Twitter meta → JSON-LD Product (name/image/offers.price) → itemprop /
+// inline price patterns → Gemini fallback on the page head+JSON-LD. Big
+// marketplaces (Flipkart/Amazon) block bots + render via JS, so those return
+// a clear "add manually / scan" message instead of a blank product.
 async function api_wapack_product_from_url(token, args) {
   await _gate(token);
   const url = String((args && args.url) || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('Enter a valid product URL (starting http/https)');
   let html = '';
   try {
-    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SmartCRM-Storefront' } });
+    const r = await fetch(url, { headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml'
+    } });
     html = await r.text();
   } catch (e) { throw new Error('Could not fetch that URL'); }
-  const meta = (prop) => {
-    const re = new RegExp('<meta[^>]+(?:property|name)=["\']' + prop + '["\'][^>]+content=["\']([^"\']+)["\']', 'i');
-    const m = html.match(re) || html.match(new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']' + prop + '["\']', 'i'));
-    return m ? m[1] : '';
+
+  const meta = (props) => {
+    for (const prop of props) {
+      const m = html.match(new RegExp('<meta[^>]+(?:property|name|itemprop)=["\']' + prop + '["\'][^>]*content=["\']([^"\']+)["\']', 'i'))
+             || html.match(new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name|itemprop)=["\']' + prop + '["\']', 'i'));
+      if (m) return m[1];
+    }
+    return '';
   };
-  let name = meta('og:title') || (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
-  let image = meta('og:image') || '';
-  let price = meta('og:price:amount') || meta('product:price:amount') || '';
-  if (!price) {
-    const jl = html.match(/"price"\s*:\s*"?([\d,]+(?:\.\d+)?)"?/i);
-    if (jl) price = jl[1].replace(/,/g, '');
+  let name = meta(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+  let image = meta(['og:image', 'twitter:image', 'twitter:image:src']) || '';
+  let price = _num(meta(['og:price:amount', 'product:price:amount', 'price']));
+  let desc = meta(['og:description', 'twitter:description', 'description']) || '';
+
+  // JSON-LD Product blocks
+  try {
+    const blocks = html.match(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi) || [];
+    for (const b of blocks) {
+      let data;
+      try { data = JSON.parse(b.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim()); } catch (_) { continue; }
+      const arr = Array.isArray(data) ? data : (data['@graph'] ? data['@graph'] : [data]);
+      for (const node of arr) {
+        if (!node) continue;
+        const t = node['@type'];
+        const isProd = t === 'Product' || (Array.isArray(t) && t.indexOf('Product') >= 0);
+        if (!isProd) continue;
+        if (!name && node.name) name = node.name;
+        if (!image && node.image) image = Array.isArray(node.image) ? node.image[0] : (typeof node.image === 'object' ? node.image.url : node.image);
+        if (price == null && node.offers) { const off = Array.isArray(node.offers) ? node.offers[0] : node.offers; if (off) price = _num(off.price || off.lowPrice || (off.priceSpecification && off.priceSpecification.price)); }
+        if (!desc && node.description) desc = node.description;
+      }
+    }
+  } catch (_) {}
+
+  if (price == null) { const m = html.match(/itemprop=["\']price["\'][^>]*content=["\']?([\d,.]+)/i); if (m) price = _num(m[1]); }
+  if (price == null) { const m = html.match(/"(?:price|sellingPrice|final_price|sale_price|amount)"\s*:\s*"?([\d,]+(?:\.\d+)?)"?/i); if (m) price = _num(m[1]); }
+  if (price == null) { const m = html.match(/(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/i); if (m) price = _num(m[1]); }
+
+  // Gemini fallback — feed just the <head> + JSON-LD (small, targeted).
+  if ((!name || price == null) && html && html.length > 200) {
+    try {
+      const gem = require('../../utils/geminiClient');
+      const head = (html.match(/<head[\s\S]*?<\/head>/i) || [''])[0].slice(0, 6000);
+      const ld = (html.match(/<script[^>]+application\/ld\+json[^>]*>[\s\S]*?<\/script>/gi) || []).join('\n').slice(0, 6000);
+      const blob = (head + '\n' + ld).slice(0, 11000);
+      const res = await gem.generate({ prompt: 'From this HTML head/metadata of a shopping page, extract the single product. Return ONLY JSON {"name":"","price_inr":<number or null>,"image_url":""} — price as digits only. HTML:\n' + blob, maxOutputTokens: 300, temperature: 0, call_kind: 'store_url' });
+      if (res && res.ok) { let t = String(res.text || '').trim(); const jm = t.match(/\{[\s\S]*\}/); if (jm) t = jm[0]; const g = JSON.parse(t); if (!name && g.name) name = g.name; if (price == null && g.price_inr != null) price = _num(g.price_inr); if (!image && g.image_url) image = g.image_url; }
+    } catch (_) {}
   }
-  if (!price) {
-    const rs = html.match(/(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/i);
-    if (rs) price = rs[1].replace(/,/g, '');
+
+  name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  if (!name && price == null && !image) {
+    throw new Error('Could not read this page. Big sites like Flipkart/Amazon block automated reading, and store/collection links hold many products. Try a single product page — or add it manually / by scanning a photo.');
   }
-  const desc = meta('og:description') || '';
-  name = String(name).replace(/\s+/g, ' ').trim().slice(0, 140);
-  return { draft: { name, price_inr: price ? Number(price) : null, image_url: image || null, description: desc ? desc.slice(0, 300) : null, source: 'url' } };
+  return { draft: { name, price_inr: price, image_url: image || null, description: desc ? String(desc).replace(/\s+/g, ' ').slice(0, 300) : null, source: 'url' } };
 }
 
 // Scan a menu / product photo → draft product list via Gemini vision.
@@ -1002,18 +1055,20 @@ async function api_wapack_product_scan(token, args) {
   try {
     gem = require('../../utils/geminiClient');
   } catch (_) { throw new Error('AI not available'); }
-  const prompt = 'You are reading a photo of a menu or product list. Extract every distinct item you can see with its price. ' +
-    'Return ONLY a compact JSON array, no prose, like: [{"name":"Paneer Tikka","price_inr":220},{"name":"Cold Coffee","price_inr":120}]. ' +
-    'If a price is missing use null. Keep names short and clean.';
-  const res = await gem.generate({ prompt, images: [{ mime_type: mime, data: data }], maxOutputTokens: 1200, temperature: 0.1, call_kind: 'store_scan' });
+  const prompt = 'You are reading a photo of a menu or product list. Extract EVERY distinct item with its price. ' +
+    'Look carefully for prices printed next to each item (they may be at the end of the line, in a separate column, or after a ₹/Rs symbol). ' +
+    'Return ONLY a compact JSON array, no prose, exactly like: [{"name":"Paneer Tikka","price_inr":220},{"name":"Cold Coffee","price_inr":120}]. ' +
+    'price_inr MUST be a plain number (digits only, no ₹ sign, no commas). If a price is genuinely not visible use null. Keep names short and clean.';
+  const res = await gem.generate({ prompt, images: [{ mime_type: mime, data: data }], maxOutputTokens: 1500, temperature: 0.1, call_kind: 'store_scan' });
   if (!res || !res.ok) throw new Error((res && res.error) || 'Scan failed');
   let txt = String(res.text || '').trim();
   const jm = txt.match(/\[[\s\S]*\]/);
   if (jm) txt = jm[0];
   let items = [];
-  try { items = JSON.parse(txt); } catch (_) { throw new Error('Could not read items from the image — try a clearer photo'); }
+  try { items = JSON.parse(txt); } catch (_) { throw new Error('Could not read items from the image — try a clearer, straight-on photo'); }
   const drafts = (Array.isArray(items) ? items : []).map(function (it) {
-    return { name: String(it.name || '').trim().slice(0, 120), price_inr: (it.price_inr != null && it.price_inr !== '') ? Number(it.price_inr) : null };
+    const raw = (it.price_inr != null && it.price_inr !== '') ? it.price_inr : (it.price != null ? it.price : (it.amount != null ? it.amount : null));
+    return { name: String(it.name || '').trim().slice(0, 120), price_inr: _num(raw) };
   }).filter(function (d) { return d.name; });
   return { drafts: drafts };
 }
