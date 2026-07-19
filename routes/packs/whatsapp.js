@@ -744,6 +744,70 @@ async function _botMaybeSendForm({ phone, leadId, inboundText, inboundPhoneId })
   }
 }
 
+// WA_FLOW_PUBLISH_v1 — turn a wapack_forms form into a WhatsApp Flow JSON.
+function _flowFieldName(fl, i) { return String(fl.key || fl.label || ('field_' + i)).toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || ('field_' + i); }
+function _buildFlowJson(form, fields) {
+  const children = []; const payload = {}; const used = {};
+  fields.forEach(function (fl, i) {
+    let name = _flowFieldName(fl, i);
+    if (used[name]) name = name + '_' + i; used[name] = 1;
+    const label = String(fl.label || fl.key || ('Field ' + (i + 1))).slice(0, 30);
+    const req = !!fl.required;
+    payload[name] = '${form.' + name + '}';
+    if (fl.type === 'select' && Array.isArray(fl.options) && fl.options.length) {
+      children.push({ type: 'Dropdown', name: name, label: label, required: req, 'data-source': fl.options.map(function (o, oi) { return { id: String(oi), title: String(o).slice(0, 30) }; }) });
+    } else if (fl.type === 'textarea') {
+      children.push({ type: 'TextArea', name: name, label: label, required: req });
+    } else {
+      const it = fl.type === 'email' ? 'email' : fl.type === 'phone' ? 'phone' : fl.type === 'number' ? 'number' : 'text';
+      children.push({ type: 'TextInput', name: name, label: label, required: req, 'input-type': it });
+    }
+  });
+  children.push({ type: 'Footer', label: String(form.cta_text || 'Submit').slice(0, 30), 'on-click-action': { name: 'complete', payload: payload } });
+  return {
+    version: '5.0',
+    screens: [{
+      id: 'FORM', title: String(form.name || 'Form').slice(0, 30), terminal: true, data: {},
+      layout: { type: 'SingleColumnLayout', children: [{ type: 'Form', name: 'form', children: children }] }
+    }]
+  };
+}
+// Publish a form as a WhatsApp Flow (embeds/opens in the chat). Needs the WABA
+// to have Flows enabled (Business Verification + whatsapp_business_management).
+async function api_wapack_form_publishFlow(token, args) {
+  await _gate(token);
+  const fid = Number((args && args.form_id) || 0);
+  if (!fid) throw new Error('form_id required');
+  const f = (await db.query(`SELECT * FROM wapack_forms WHERE id=$1`, [fid])).rows[0];
+  if (!f) throw new Error('Form not found');
+  const fields = _json(f.fields_json, []);
+  if (!fields.length) throw new Error('Add at least one field to the form first');
+  const flowJson = _buildFlowJson(f, fields);
+  const wb = require('../whatsbot');
+  const cfg = await wb._cfg();
+  if (!cfg.wabaId) throw new Error('WhatsApp Business Account ID not configured (connect WhatsApp first)');
+  // Create + publish in one call (Graph v19 accepts flow_json + publish).
+  let r;
+  try {
+    r = await wb._graphPost(`${cfg.wabaId}/flows`, {
+      name: (f.name || 'Form') + ' #' + fid + ' ' + Date.now().toString().slice(-4),
+      categories: ['LEAD_GENERATION'],
+      flow_json: JSON.stringify(flowJson),
+      publish: true
+    }, cfg);
+  } catch (e) { throw new Error('Meta API call failed: ' + e.message); }
+  const err = r.body && r.body.error;
+  if (err) {
+    const msg = err.error_user_msg || err.message || JSON.stringify(err);
+    // Common: Flows not enabled on this WABA → give a clear message.
+    return { ok: false, error: msg, validation: (r.body.validation_errors || err.error_data || null) };
+  }
+  const flowId = r.body && (r.body.id || (r.body.flow_id));
+  if (!flowId) return { ok: false, error: 'No flow id returned by Meta', raw: JSON.stringify(r.body).slice(0, 400) };
+  await db.query(`UPDATE wapack_forms SET flow_id=$1, flow_screen='FORM', status='published' WHERE id=$2`, [String(flowId), fid]);
+  return { ok: true, flow_id: String(flowId) };
+}
+
 function _prettyKey(k) {
   return String(k || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }).trim();
 }
@@ -1626,6 +1690,7 @@ module.exports = {
   api_wapack_form_delete,
   api_wapack_form_responses,
   api_wapack_form_send,
+  api_wapack_form_publishFlow,
   api_wapack_bot_trigger_get,
   api_wapack_bot_trigger_save,
   _botMaybeSendForm,
