@@ -2376,8 +2376,15 @@ async function api_leads_recoverFromWebhookLog(token, payload) {
     rows = r.rows || [];
   } catch (e) { throw new Error('webhook_logs read failed: ' + e.message); }
   if (p.debug) {
-    return { ok: true, debug: true, rows_fetched: rows.length,
-      samples: rows.slice(0, 4).map(r => ({ log_id: r.id, resp: String(r.response_text || '').slice(0, 120), body: String(r.body_text || '').slice(0, 120) })) };
+    let parsed = 0, withId = 0, inRange = 0; const ids = [];
+    for (const row of rows) {
+      let resp; try { resp = JSON.parse(row.response_text); } catch (_) { continue; }
+      parsed++;
+      const lid = Number(resp && resp.id);
+      if (lid) { withId++; ids.push(lid); if (lid >= from && lid <= to) inRange++; }
+    }
+    ids.sort((a, b) => a - b);
+    return { ok: true, debug: true, rows_fetched: rows.length, parsed: parsed, with_id: withId, in_range: inRange, id_min: ids[0], id_max: ids[ids.length - 1], from: from, to: to };
   }
   let newStatusId = null;
   try { const s = await db.query(`SELECT id FROM statuses WHERE lower(name)='new' ORDER BY id ASC LIMIT 1`); newStatusId = s.rows[0] ? s.rows[0].id : null; } catch (_) {}
