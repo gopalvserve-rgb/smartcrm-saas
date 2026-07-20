@@ -157,6 +157,7 @@ const NAV = [
   { id: 'signup_requests', label: '🆕 Signup Requests',  requiresPerm: 'signup_req.view' },
   { id: 'packages',      label: '📦 Packages',           requiresPerm: 'packages.view' },
   { id: 'invoices',      label: '🧾 Invoices',           requiresPerm: 'invoices.view' },
+  { id: 'transactions',  label: '💳 Transactions' },  /* SAAS_TXN_v1 */
   { id: 'webhooks',      label: '📡 Webhook Logs',       requiresPerm: 'webhooks.view' },
   { id: 'errors',        label: '🐞 Errors',             requiresPerm: 'errors.view' },
   { id: 'crashes',       label: '🚨 Crashes',            requiresPerm: 'crashes.view' },
@@ -165,11 +166,13 @@ const NAV = [
   { id: 'wl_billing',    label: '🏷️ White-Label Billing', requiresPerm: 'wl_billing.view' },  /* WL_BILLING_v1 */
   { id: 'announcements', label: '📣 Updates',            requiresPerm: 'announcements.view' },
   { id: 'copilot_kb',    label: '🧠 Copilot Training' },  /* COPILOT_KB_v1 — no perm gate: all super-admins */
+  { id: 'whatsapp',      label: '📲 WhatsApp' },  /* SAAS_WA_EMBEDDED_v1 — notify tenants via WhatsApp */
   { id: 'requirements',  label: '🛠 Custom Requirements', requiresPerm: 'requirements.view' },
   { id: 'tickets',       label: '🎫 Support Tickets',    requiresPerm: 'tickets.view' },     // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Roles & Permissions', requiresPerm: 'admins.view' },
   { id: 'device_health', label: '📱 Device Health',      requiresPerm: 'device_health.view' },
-  { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' }
+  { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' },
+  { id: 'email_template', label: '✉️ Welcome Email',      requiresPerm: 'settings.edit' }   /* WELCOME_EMAIL_v4 */
 ];
 
 
@@ -452,6 +455,31 @@ function editPackage(p) {
   document.body.appendChild(m);
 }
 
+// PAGINATION_HELPER_v1 — reusable client-side pager for super-admin lists.
+function _mkPager({ total, page, pageSize, sizes, onPage, onPageSize, noun }) {
+  sizes = sizes || [25, 50, 100, 200, 500];
+  noun = noun || 'rows';
+  const bar = h('div', { class: 'pagination-bar', style: { display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', padding: '.6rem .2rem' } });
+  const pages = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safe = Math.min(Math.max(1, page), pages);
+  const from = total === 0 ? 0 : (safe - 1) * pageSize + 1;
+  const to = Math.min(safe * pageSize, total);
+  const sizeSel = h('select', { onchange: ev => onPageSize && onPageSize(Number(ev.target.value) || 50) });
+  sizes.forEach(n => sizeSel.appendChild(h('option', { value: n, selected: n === pageSize ? 'selected' : null }, n + ' per page')));
+  bar.appendChild(sizeSel);
+  bar.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } }, total === 0 ? ('No ' + noun) : (from + '–' + to + ' of ' + total)));
+  const nav = h('span', { style: { display: 'inline-flex', gap: '.25rem', flexWrap: 'wrap' } });
+  const btn = (label, p, dis, isNum) => h('button', { class: 'btn ghost xs' + (isNum && p === safe ? ' primary' : ''), disabled: dis ? 'disabled' : null, onclick: () => onPage && onPage(p) }, label);
+  nav.appendChild(btn('« First', 1, safe === 1));
+  nav.appendChild(btn('‹ Prev', safe - 1, safe === 1));
+  const start = Math.max(1, safe - 2), end = Math.min(pages, start + 4);
+  for (let p = start; p <= end; p++) nav.appendChild(btn(String(p), p, false, true));
+  nav.appendChild(btn('Next ›', safe + 1, safe >= pages));
+  nav.appendChild(btn('Last »', pages, safe >= pages));
+  bar.appendChild(nav);
+  return bar;
+}
+
 VIEWS.tenants = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
     h('h1', {}, 'Tenants'),
@@ -568,6 +596,7 @@ VIEWS.tenants = async (view) => {
     active: _origList.filter(t => t.status === 'active').length,
     suspended: _origList.filter(t => t.status === 'suspended').length,
     today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
+    loggedInToday: _origList.filter(t => { try { return t.last_login_at && new Date(t.last_login_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
     demo: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() === 'demo').length,
     live: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() !== 'demo').length,
     balance: _origList.reduce((a, t) => a + (Number(t.pending_balance_inr) || 0), 0),
@@ -578,6 +607,7 @@ VIEWS.tenants = async (view) => {
     h('div', { style:{ fontSize:'.74rem', color:'#64748b', fontWeight:'600', textTransform:'uppercase', letterSpacing:'.03em' } }, label));
   view.appendChild(h('div', { style:{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'12px' } },
     kpi('Registered today', _cnt.today, '#0891b2'),
+    kpi('Logged in today', _cnt.loggedInToday, '#7c3aed'),
     kpi('Total active', _cnt.active, '#16a34a'),
     kpi('Total suspended', _cnt.suspended, '#dc2626'),
     kpi('Total tenants', _cnt.total),
@@ -587,7 +617,7 @@ VIEWS.tenants = async (view) => {
     kpi('Pending balance', '₹' + Number(_cnt.balance).toLocaleString('en-IN'), '#b45309')));
 
   // ---- #5 Filter bar + #6 view toggle -------------------------------------
-  const _f = { q:'', status:'', dateFrom:null, dateTo:null, datePreset:'all' };
+  const _f = { q:'', status:'', dateFrom:null, dateTo:null, datePreset:'all', overCap:false };
   let _viewMode = (function(){ try { return localStorage.getItem('saas.tenantView') || 'card'; } catch(_) { return 'card'; } })();
   const qInp = h('input', { type:'search', placeholder:'Search org / slug / email…', style:{ flex:'1', minWidth:'180px', padding:'.4rem .6rem', border:'1px solid #cbd5e1', borderRadius:'8px' } });
   const STATUSES = ['', 'active', 'trial', 'past_due', 'suspended', 'pending_payment', 'pending_delete', 'deleted'];
@@ -623,14 +653,18 @@ VIEWS.tenants = async (view) => {
   }
   dFrom.onchange = () => { _f.dateFrom = dFrom.value ? new Date(dFrom.value+'T00:00:00') : null; _f.datePreset='custom'; _paintDateChips(); paint(); };
   dTo.onchange   = () => { _f.dateTo   = dTo.value   ? new Date(dTo.value+'T23:59:59')   : null; _f.datePreset='custom'; _paintDateChips(); paint(); };
-  view.appendChild(h('div', { style:{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap', marginBottom:'8px' } },
-    h('span', { style:{ fontSize:'.78rem', color:'#475569', fontWeight:'600' } }, '🗓 Registered:'),
-    _mkChip('all','All time'), _mkChip('this_month','This month'), _mkChip('last_month','Last month'),
-    _mkChip('last_7','Last 7d'), _mkChip('last_30','Last 30d'),
-    h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'from'), dFrom,
-    h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'to'), dTo));
-  view.appendChild(h('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap', marginBottom:'10px' } },
-    qInp, stSel, countLbl, h('span', { style:{ flex:'1' } }), cardBtn, listBtn));
+  // TENANT_FILTER_PANEL_v1 — one tidy filter card (was two loose full-width rows).
+  const overCapBtn = h('button', { class:'btn xs', title:'Show only tenants whose active users exceed their seat cap',
+    onclick: () => { _f.overCap = !_f.overCap; overCapBtn.style.background = _f.overCap ? '#dc2626' : ''; overCapBtn.style.color = _f.overCap ? '#fff' : ''; paint(); } }, '⚠ Over seat cap');
+  view.appendChild(h('div', { style:{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px 12px', marginBottom:'12px', display:'flex', flexDirection:'column', gap:'8px' } },
+    h('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap' } },
+      qInp, stSel, overCapBtn, countLbl, h('span', { style:{ flex:'1' } }), cardBtn, listBtn),
+    h('div', { style:{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap', borderTop:'1px solid #f1f5f9', paddingTop:'8px' } },
+      h('span', { style:{ fontSize:'.78rem', color:'#475569', fontWeight:'600' } }, '🗓 Registered:'),
+      _mkChip('all','All time'), _mkChip('this_month','This month'), _mkChip('last_month','Last month'),
+      _mkChip('last_7','Last 7d'), _mkChip('last_30','Last 30d'),
+      h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'from'), dFrom,
+      h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'to'), dTo)));
 
   view.appendChild(fbBackfillBar);
   const host = h('div', {});
@@ -640,6 +674,11 @@ VIEWS.tenants = async (view) => {
     const q = _f.q.trim().toLowerCase();
     return _origList.filter(t => {
       if (_f.status && t.status !== _f.status) return false;
+      if (_f.overCap) {
+        const _uc = (t.user_count_active == null) ? null : Number(t.user_count_active);
+        const _cap = (t.user_cap_effective == null || t.user_cap_effective === '') ? null : Number(t.user_cap_effective);
+        if (!(_uc != null && _cap != null && _uc > _cap)) return false;
+      }
       if (_f.dateFrom || _f.dateTo) {
         const c = t.created_at ? new Date(t.created_at) : null;
         if (!c) return false;
@@ -674,23 +713,31 @@ VIEWS.tenants = async (view) => {
 function _tenantListTable(rows, sizeMap) {
   const th = (txt) => h('th', { style:{ textAlign:'left', padding:'8px 10px', fontSize:'.72rem', textTransform:'uppercase', letterSpacing:'.03em', color:'#64748b', borderBottom:'1px solid #e2e8f0', whiteSpace:'nowrap' } }, txt);
   const td = (kids, style) => h('td', { style: Object.assign({ padding:'8px 10px', fontSize:'.82rem', borderBottom:'1px solid #f1f5f9', verticalAlign:'top' }, style||{}) }, kids);
-  const body = rows.map(t => {
+  const body = rows.map((t, _i) => {
     const capEff = (t.user_cap_effective == null || t.user_cap_effective === '') ? null : Number(t.user_cap_effective);
     const usedRaw = (t.user_count_active == null) ? null : Number(t.user_count_active);
     const usersTxt = (usedRaw==null?'—':usedRaw) + ' / ' + (capEff==null?'∞':capEff);
     const usersOver = (capEff != null && usedRaw != null && usedRaw > capEff);
     const bal = Number(t.pending_balance_inr) || 0;
+    const sz = sizeMap.get(t.slug);
     const isLive = (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete');
     return h('tr', {},
+      td(String(_i + 1), { color:'#64748b', fontWeight:'700', whiteSpace:'nowrap' }),
       td([ h('div', { style:{ fontWeight:'700', color:'#0f172a' } }, t.org_name || t.slug),
            h('div', { style:{ fontSize:'.72rem', color:'#94a3b8' } }, '/' + t.slug) ]),
       td(_tenantStatusBadge(t.status)),
       td(_tenantTypeBadge(t)),
       td(t.package_name || '—'),
       td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
+      td(sz ? ((Number(sz.percent_of_volume) >= 80 ? '⚠ ' : '') + sz.pretty + ' · ' + sz.percent_of_volume + '%') : '—',
+         (sz && Number(sz.percent_of_volume) >= 80)
+           ? { whiteSpace:'nowrap', color:'#dc2626', fontWeight:'700', background:'#fef2f2' }
+           : { whiteSpace:'nowrap', color: sz ? '#475569' : '#94a3b8' }),  /* STORAGE_ALERT_v1 — red >80% */
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
       td(fmtDate(t.created_at) || '—', { whiteSpace:'nowrap', color:'#475569' }),
+      td(t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', { whiteSpace:'nowrap', color: t.last_login_at ? '#0f172a' : '#94a3b8', fontWeight: t.last_login_at ? '600' : '400' }),
+      td(_welcomeBadge(t), { whiteSpace:'nowrap' }),
       // TENANT_LIST_ACTIONS_v1 (2026-06-26) — match the full action set the
       // Cards view exposes so super-admins don't have to toggle just to
       // reset a password / install a pack / open Users / manage Modules.
@@ -698,17 +745,19 @@ function _tenantListTable(rows, sizeMap) {
           h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t), title:'Edit billing, plan, dates, remarks' }, '✏️ Edit'),
           isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t), title:'Open this tenant as a super-admin' }, '🔓 Login') : null,
           isLive ? h('button', { class:'btn xs', style:{ background:'#fef3c7', borderColor:'#f59e0b', color:'#92400e' }, onclick:()=>resetTenantAdminPassword(t), title:'Reset the tenant admin password' }, '🔑 Pwd') : null,
+          isLive ? _welcomeBtn(t) : null,
           h('button', { class:'btn ghost xs', onclick:()=>openModulesModal(t), title:'Toggle modules ON/OFF' }, '🧩 Modules'),
           h('button', { class:'btn ghost xs', onclick:()=>openInstallPackModal(t), title:'Install / change industry pack' }, '🏗️ Pack'),
           h('button', { class:'btn ghost xs', onclick:()=>openTenantUsersModal(t), title:'Manage tenant users' }, '👤 Users'),
           h('button', { class:'btn ghost xs', onclick:()=>openAiRecordingModal(t), title:'AI Call Summary settings' }, '🎙️ AI Rec'),
           t.status === 'active'
             ? h('button', { class:'btn ghost xs', style:{ color:'#b91c1c' }, onclick: async()=>{ if (!confirm('Suspend ' + (t.org_name||t.slug) + '?')) return; await api('api_saas_tenants_suspend', t.id); navigate('tenants'); }, title:'Suspend tenant access' }, 'Suspend')
-            : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); }, title:'Restore suspended tenant' }, 'Restore')
+            : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); }, title:'Restore suspended tenant' }, 'Restore'),
+          _tenantDeleteBtn(t)
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
-    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Registered'), th('Actions'))),
+    h('thead', {}, h('tr', {}, th('#'), th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Storage'), th('Balance'), th('Period ends'), th('Registered'), th('Last login'), th('Welcome'), th('Actions'))),
     h('tbody', {}, ...body));
 }
 
@@ -745,15 +794,18 @@ function renderTenantCard(t, sizeMap) {
     h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t) }, '✏️ Details / Edit'),
     isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t) }, '🔓 Login ↗') : null,
     isLive ? h('button', { class:'btn xs', style:{ background:'#fef3c7', borderColor:'#f59e0b', color:'#92400e' }, onclick:()=>resetTenantAdminPassword(t) }, '🔑 Password') : null,
+    isLive ? _welcomeBtn(t) : null,
     h('button', { class:'btn ghost xs', onclick:()=>openModulesModal(t) }, '🧩 Modules'),
     h('button', { class:'btn ghost xs', onclick:()=>openInstallPackModal(t) }, '🏗️ Pack'),
     h('button', { class:'btn ghost xs', onclick:()=>openTenantUsersModal(t) }, '👤 Users'),
     h('button', { class:'btn ghost xs', onclick:()=>openAiRecordingModal(t) }, '🎙️ AI Rec'),
     t.status === 'active'
       ? h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
-      : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
+      : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore'),
+    _tenantDeleteBtn(t)
   );
-  return h('div', { style:{ background:'#fff', border:'1px solid '+(usersOver?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
+  const _storageOver = sz && Number(sz.percent_of_volume) >= 80;  /* STORAGE_ALERT_v1 */
+  return h('div', { style:{ background:'#fff', border:'1px solid '+((usersOver||_storageOver)?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
     h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', marginBottom:'8px' } },
       h('div', { style:{ minWidth:'0' } },
         h('div', { style:{ fontWeight:'700', fontSize:'1rem', color:'#0f172a', wordBreak:'break-word' } }, t.org_name || t.slug, (String(t.tenant_type||'live').toLowerCase()==='demo' ? h('span', { style:{ marginLeft:'6px', fontSize:'.6rem', fontWeight:'800', color:'#7c3aed', background:'#f3e8ff', border:'1px solid #e9d5ff', borderRadius:'6px', padding:'1px 6px', verticalAlign:'middle' } }, 'DEMO') : null)),
@@ -765,7 +817,9 @@ function renderTenantCard(t, sizeMap) {
     bal > 0 ? _row('Balance due', '₹' + bal.toLocaleString('en-IN'), '#b45309') : null,
     _row('Period ends', fmtDate(t.current_period_end) || '—'),
     _row('Registered', fmtDate(t.created_at) || '—'),
-    sz ? _row('DB size', sz.pretty + ' · ' + sz.percent_of_volume + '%') : null,
+    _row('Last login', t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', t.last_login_at ? '#0f172a' : '#94a3b8'),
+    h('div', { style:{ display:'flex', justifyContent:'space-between', gap:'8px', fontSize:'.8rem', padding:'2px 0' } }, h('span', { style:{ color:'#64748b' } }, 'Welcome email'), _welcomeBadge(t)),
+    sz ? _row('DB size', (Number(sz.percent_of_volume) >= 80 ? '⚠ ' : '') + sz.pretty + ' · ' + sz.percent_of_volume + '%', Number(sz.percent_of_volume) >= 80 ? '#dc2626' : undefined) : null,  /* STORAGE_ALERT_v1 */
     (String(t.admin_remarks||'').trim()) ? h('div', { style:{ marginTop:'8px', padding:'6px 8px', background:'#fffbeb', border:'1px solid #fde68a', borderRadius:'8px', fontSize:'.76rem', color:'#78350f', whiteSpace:'pre-wrap', wordBreak:'break-word' } }, '📝 ' + String(t.admin_remarks).trim()) : null,
     actions);
 }
@@ -782,6 +836,14 @@ async function openTenantDetailsModal(t) {
     return { wrap: h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, label), inp), inp };
   };
   const fOrg = fld('Organisation name', t.org_name);
+  // TENANT_SLUG_EDIT_v1 — slug (login URL path). Editable; flagged if missing.
+  const _slugBlank = !String(t.slug || '').trim();
+  const fSlug = fld('🔗 URL slug (login path /t/…)' + (_slugBlank ? '  ⚠ MISSING — set one' : ''), t.slug);
+  fSlug.inp.placeholder = 'e.g. acme-corp';
+  if (_slugBlank) { fSlug.inp.style.border = '1px solid #ef4444'; fSlug.inp.style.background = '#fef2f2'; }
+  const _slugHint = h('div', { style: { fontSize: '.72rem', color: '#94a3b8', marginTop: '-4px', marginBottom: '8px' } },
+    'Lowercase letters, numbers, hyphens; starts with a letter. Login URL: ', h('code', {}, location.origin + '/t/'), h('b', { class: 'slug-live' }, String(t.slug || '…')));
+  fSlug.inp.addEventListener('input', () => { const el = _slugHint.querySelector('.slug-live'); if (el) el.textContent = fSlug.inp.value || '…'; });
   const fName = fld('Contact name', t.contact_name);
   const fEmail = fld('Contact email', t.contact_email);
   const fMobile = fld('Contact mobile', t.contact_mobile);
@@ -793,7 +855,7 @@ async function openTenantDetailsModal(t) {
   const _typeWrap = h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, 'Tenant type'), _typeSel);
   card.appendChild(h('div', { style:{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, 'Edit'),
-    fOrg.wrap, _typeWrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
+    fOrg.wrap, fSlug.wrap, _slugHint, _typeWrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
 
   // TENANT_EDIT_BILLING_v1 — Billing + Plan section in the edit modal.
   const numFld = (label, val) => {
@@ -822,9 +884,19 @@ async function openTenantDetailsModal(t) {
     balEl.style.color = bal>0 ? '#b45309' : '#16a34a';
   };
   fTotal.inp.oninput = paintBal; fPaid.inp.oninput = paintBal; paintBal();
+  // TENANT_GST_VIEW_v1 — show the GST split + transaction captured at signup.
+  const _inrT = v => (v == null || v === '') ? '—' : ('₹' + Number(v).toLocaleString('en-IN'));
+  const _hasGstTxn = (t.gst_amount_inr != null && t.gst_amount_inr !== '') || (t.sale_amount_inr != null && t.sale_amount_inr !== '') || t.transaction_mode || t.transaction_id;
+  const gstInfo = _hasGstTxn
+    ? h('div', { style:{ marginTop:'8px', paddingTop:'8px', borderTop:'1px dashed #bae6fd', fontSize:'.82rem', color:'#334155' } },
+        h('div', {}, 'Sale (excl GST): ', h('b', {}, _inrT(t.sale_amount_inr)), '  ·  GST: ', h('b', { style:{ color:'#0891b2' } }, _inrT(t.gst_amount_inr))),
+        (t.transaction_mode || t.transaction_id || t.transaction_date)
+          ? h('div', { style:{ marginTop:'3px', color:'#475569' } }, '🧾 Txn: ', (t.transaction_mode || '—'), (t.transaction_id ? (' · ' + t.transaction_id) : ''), (t.transaction_date ? (' · ' + fmtDate(t.transaction_date)) : ''))
+          : null)
+    : h('div', { style:{ marginTop:'8px', fontSize:'.78rem', color:'#94a3b8' } }, 'No GST / transaction recorded (was a "No GST" signup or entered before this feature).');
   card.appendChild(h('div', { style:{ background:'#f0f9ff', border:'1px solid #bae6fd', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '💳 Billing & plan'),
-    fPkgWrap, fCap.wrap, fTotal.wrap, fPaid.wrap, fRemind.wrap, balEl));
+    fPkgWrap, fCap.wrap, fTotal.wrap, fPaid.wrap, fRemind.wrap, balEl, gstInfo));
 
   // TENANT_AUDIT_v1 — who/when edited + what changed.
   const _fmtV = (v) => { if (v===null||v===undefined||v==='') return '\u2205'; const x=String(v); return x.length>48? x.slice(0,48)+'\u2026' : x; };
@@ -865,6 +937,7 @@ async function openTenantDetailsModal(t) {
         org_name: fOrg.inp.value, contact_name: fName.inp.value,
         contact_email: fEmail.inp.value, contact_mobile: fMobile.inp.value,
         admin_remarks: fRemarks.inp.value,
+        slug: fSlug.inp.value.trim().toLowerCase(),
         tenant_type: _typeSel.value,
         total_amount_inr: fTotal.inp.value === '' ? '' : Number(fTotal.inp.value),
         amount_paid_inr:  fPaid.inp.value  === '' ? '' : Number(fPaid.inp.value),
@@ -1595,8 +1668,10 @@ VIEWS.invoices = async (view) => {
       h('td', {}, fmtRupees(i.total_inr)),
       h('td', {}, h('span', { class: 'tag ' + (i.status === 'paid' ? 'ok' : i.status === 'pending' ? 'warn' : 'err') }, i.status)),
       h('td', { class: 'muted' }, fmtDate(i.created_at)),
-      h('td', { style: { textAlign: 'right' } },
-        i.status !== 'paid' ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_invoices_markPaid', i.id); navigate('invoices'); } }, 'Mark paid') : null
+      h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+        i.status !== 'paid' ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_invoices_markPaid', i.id); navigate('invoices'); } }, 'Mark paid') : null,
+        h('button', { class: 'btn ghost xs', style: { marginLeft: '4px' }, title: 'Send this invoice to the tenant (email / WhatsApp)', onclick: () => _openInvoiceSendModal(i) }, '📧 Send'),
+        h('button', { class: 'btn ghost xs', style: { marginLeft: '4px' }, title: 'Email this tenant (reminder / any info)', onclick: () => _openTenantEmailModal(i) }, '✉ Email')
       )
     )))
   );
@@ -1810,17 +1885,12 @@ VIEWS.errors = async (view) => {
     return;
   }
 
-  const tbl = h('table', {},
-    h('thead', {}, h('tr', {},
-      h('th', {}, 'Last seen'),
-      h('th', {}, 'Source'),
-      h('th', {}, 'Sev'),
-      h('th', {}, 'Message'),
-      h('th', {}, 'URL'),
-      h('th', { style: { textAlign: 'right' } }, '×'),
-      h('th', {}, '')
-    )),
-    h('tbody', {}, ...rows.map(r => h('tr', { class: Number(r.resolved) === 1 ? 'row-resolved' : '' },
+  // PAGINATION_HELPER_v1 — client-side paging over fetched error rows.
+  const _errBody = h('tbody', {});
+  const _errPager = h('div', {});
+  let _errPage = APP._errPage || 1;
+  let _errPS = APP._errPS || 50;
+  const _errRow = (r) => h('tr', { class: Number(r.resolved) === 1 ? 'row-resolved' : '' },
       h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDateTime(r.last_seen_at)),
       h('td', { style: { fontSize: '.78rem' } }, r.source || '—'),
       h('td', {}, h('span', { class: 'tag ' + _errSeverityClass(r.severity) }, r.severity || 'error')),
@@ -1841,9 +1911,30 @@ VIEWS.errors = async (view) => {
               catch (e) { toast(e.message, 'err'); }
             } }, '✓ Resolve')
       )
-    )))
+    );
+  function _renderErrPage() {
+    _errBody.innerHTML = ''; _errPager.innerHTML = '';
+    const pages = Math.max(1, Math.ceil(rows.length / _errPS));
+    if (_errPage > pages) _errPage = pages;
+    const st = (_errPage - 1) * _errPS;
+    rows.slice(st, st + _errPS).forEach(r => _errBody.appendChild(_errRow(r)));
+    if (rows.length > 25) _errPager.appendChild(_mkPager({
+      total: rows.length, page: _errPage, pageSize: _errPS, noun: 'errors',
+      onPage: p => { _errPage = p; APP._errPage = p; _renderErrPage(); },
+      onPageSize: n => { _errPS = n; APP._errPS = n; _errPage = 1; APP._errPage = 1; _renderErrPage(); }
+    }));
+  }
+  const tbl = h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Last seen'), h('th', {}, 'Source'), h('th', {}, 'Sev'),
+      h('th', {}, 'Message'), h('th', {}, 'URL'),
+      h('th', { style: { textAlign: 'right' } }, '×'), h('th', {}, '')
+    )),
+    _errBody
   );
+  _renderErrPage();
   view.appendChild(h('div', { class: 'card', style: { padding: 0, overflowX: 'auto' } }, tbl));
+  view.appendChild(_errPager);
 
   // Restore filter selections after re-render
   setTimeout(() => {
@@ -2591,6 +2682,49 @@ function editAdmin(a) {
   document.body.appendChild(m);
 }
 
+VIEWS.email_template = async (view) => {
+  view.appendChild(h('h1', {}, '✉️ Welcome Email Template'));
+  let data;
+  try { data = await api('api_saas_welcome_template_get'); }
+  catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+
+  view.appendChild(h('p', { class: 'muted', style: { marginTop: '.2rem' } },
+    'This is the email new tenants receive on account creation (manual create or accepted signup). Edit the HTML on the left, preview on the right, then Save. These tokens are auto-filled per tenant: '));
+  view.appendChild(h('div', { style: { margin: '.2rem 0 .8rem' } },
+    ...data.tokens.map(t => h('code', { style: { marginRight: '8px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '.78rem' } }, t))));
+
+  const ta = h('textarea', { spellcheck: 'false', style: { width: '100%', height: '560px', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '10px', boxSizing: 'border-box' } }, data.source);
+  const iframe = h('iframe', { style: { width: '100%', height: '560px', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#fff' } });
+  iframe.srcdoc = data.preview_html;
+
+  async function doPreview() {
+    try { const r = await api('api_saas_welcome_template_preview', { html: ta.value }); iframe.srcdoc = r.preview_html; }
+    catch (e) { toast(e.message, 'err'); }
+  }
+  const badge = h('span', {}, data.is_custom
+    ? h('span', { style: { color: '#059669', fontWeight: 700 } }, '● Custom template active')
+    : h('span', { style: { color: '#94a3b8' } }, '○ Using default template'));
+
+  const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
+    try { await api('api_saas_welcome_template_save', { html: ta.value }); toast('Saved — new tenants will receive this template', 'ok'); navigate('email_template'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '💾 Save template');
+  const previewBtn = h('button', { class: 'btn', onclick: doPreview }, '🔄 Update preview');
+  const resetBtn = h('button', { class: 'btn ghost', onclick: async () => {
+    if (!confirm('Reset to the built-in default template? Your custom edits will be removed.')) return;
+    try { const r = await api('api_saas_welcome_template_reset'); ta.value = r.source; await doPreview(); toast('Reset to default', 'ok'); navigate('email_template'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '↩ Reset to default');
+
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '10px 0' } },
+    saveBtn, previewBtn, resetBtn, h('span', { style: { flex: 1 } }), badge));
+
+  view.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' } },
+    h('div', {}, h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '4px' } }, 'HTML source (with tokens)'), ta),
+    h('div', {}, h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '4px' } }, 'Live preview — sample data'), iframe)
+  ));
+};
+
 VIEWS.settings = async (view) => {
   view.appendChild(h('h1', {}, 'Settings'));
   let list;
@@ -3049,6 +3183,9 @@ async function openSignupRequestModal(id, onClose) {
 
   // SR_DETAILS_v1 — show everything the customer submitted, incl. plan PRICE + payment.
   let _meta = {}; try { _meta = (typeof row.metadata === 'string') ? JSON.parse(row.metadata || '{}') : (row.metadata || {}); } catch (_) {}
+  // SIGNUP_AUTOFILL_v1 — metadata fields live in row.metadata; flatten them so
+  // the editable form (which reads row[key]) pre-fills instead of showing blank.
+  try { Object.keys(_meta).forEach(k => { if (row[k] == null || row[k] === '') row[k] = _meta[k]; }); } catch (_) {}
   const _inr = (v) => (v == null || v === '') ? '—' : ('₹' + Number(v).toLocaleString('en-IN'));
   const _txt = (v) => (v == null || String(v).trim() === '') ? '—' : String(v);
   const _TEN = { month:'Monthly', quarter:'Quarterly', half_year:'6-month', year:'Yearly', '2year':'2-year', '3year':'3-year' };
@@ -3062,6 +3199,9 @@ async function openSignupRequestModal(id, onClose) {
       ['Users', _txt(_meta.desired_users)],
       ['Payment status', _txt(_meta.payment_status)],
       ['Total amount', _inr(_meta.total_amount_inr)],
+      ['GST mode', _meta.gst_mode === 'with_gst' ? 'With GST (18% incl.)' : 'No GST'],
+      ['Sale amount (excl GST)', _inr(_meta.sale_amount_inr != null ? _meta.sale_amount_inr : _meta.total_amount_inr)],
+      ['GST (18%)', _inr(_meta.gst_amount_inr != null ? _meta.gst_amount_inr : 0)],
       ['Amount paid', _inr(_meta.amount_paid_inr)],
       ['Next payment due', _txt(_meta.next_payment_at)],
       ['Transaction mode', _txt(_meta.transaction_mode)],
@@ -3122,7 +3262,7 @@ async function openSignupRequestModal(id, onClose) {
     }
     el.value = row[key] == null ? '' : row[key];
     el.dataset.field = key;
-    if (row.status !== 'pending') el.disabled = true;
+    // SIGNUP_EDIT_ANY_STATUS_v1 — editable for every status (fix slug/details anytime).
     wrap.appendChild(el);
     f.appendChild(wrap);
     return el;
@@ -3131,85 +3271,42 @@ async function openSignupRequestModal(id, onClose) {
   field('Organisation', 'org_name');
   field('Email', 'email', 'email');
   field('Mobile', 'mobile');
-  field('Desired slug', 'desired_slug');
+  const _slugField = field('Desired slug *', 'desired_slug');
   const pkgOptions = [{ value: '', label: '— pick a package —' }].concat(
     packages.map(p => ({ value: String(p.id), label: p.name + ' — ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') + ' / ' + (p.is_lifetime ? 'lifetime' : ((p.recurring_period_count || 1) + ' ' + (p.recurring_period || 'month'))) }))
   );
-  const pkgSel = field('Package', 'package_id', 'select', false, pkgOptions);
-  pkgSel.value = String(row.package_id || '');
-  // End-date preview — recomputes whenever the package selection changes.
-  const endPreview = h('div', {
-    style: {
-      gridColumn: 'span 2', background: '#f1f5f9', padding: '.6rem .8rem',
-      borderRadius: '6px', fontSize: '.85rem', color: '#334155', marginTop: '.25rem'
-    }
-  }, 'Pick a package to see the end date');
-  function _computeEnd(pkg) {
-    if (!pkg) return null;
-    const d = new Date();
-    if (Number(pkg.is_lifetime) === 1) { d.setFullYear(d.getFullYear() + 99); return d; }
-    const n = Number(pkg.recurring_period_count) || 1;
-    const per = String(pkg.recurring_period || 'month').toLowerCase();
-    if (per === 'year') d.setFullYear(d.getFullYear() + n);
-    else if (per === 'quarter') d.setMonth(d.getMonth() + (3 * n));
-    else if (per === 'week') d.setDate(d.getDate() + (7 * n));
-    else d.setMonth(d.getMonth() + n);
-    return d;
+  // SIGNUP_NOPACKAGE_v1 — Plan/Package removed. Validity comes from Tenure +
+  // custom amount below; the preview is tenure-driven.
+  const endPreview = h('div', { style: { gridColumn: 'span 2', background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '6px', fontSize: '.85rem', color: '#334155', marginTop: '.25rem' } }, 'Pick a tenure to see the valid-till date');
+  function _tenureMonths(t) { return ({ month:1, quarter:3, half_year:6, year:12, '2year':24, '3year':36 })[String(t||'').toLowerCase()] || 0; }
+  function _refreshEndPreview(force) {
+    const tenEl = f.querySelector('[data-field="desired_tenure"]');
+    const mo = _tenureMonths(tenEl && tenEl.value);
+    if (!mo) { endPreview.textContent = 'Pick a tenure to see the valid-till date'; endPreview.style.background = '#f1f5f9'; endPreview.style.color = '#334155'; return; }
+    const end = new Date(); end.setMonth(end.getMonth() + mo);
+    const days = Math.round((end - new Date()) / 86400000);
+    endPreview.style.background = '#ecfdf5'; endPreview.style.color = '#065f46';
+    endPreview.innerHTML = '<b>✓ Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) + '</b> &nbsp;·&nbsp; ' + days + ' days from today';
+    try { const due = f.querySelector('[data-field="next_payment_at"]'); if (due && (force || !due.value)) { const y=end.getFullYear(), m=String(end.getMonth()+1).padStart(2,'0'), d=String(end.getDate()).padStart(2,'0'); due.value=y+'-'+m+'-'+d; } } catch(_){}  /* SIGNUP_NEXTDUE_v1 — tenure drives the due date (force on change, fill-if-empty on load) */
   }
-  function _refreshEndPreview() {
-    const pkg = packages.find(p => String(p.id) === pkgSel.value);
-    if (!pkg) {
-      endPreview.textContent = 'Pick a package to see the end date';
-      endPreview.style.background = '#f1f5f9';
-      return;
-    }
-    const end = _computeEnd(pkg);
-    const today = new Date();
-    const ms = end - today;
-    const days = Math.round(ms / (1000 * 60 * 60 * 24));
-    const lifetimePkg = Number(pkg.is_lifetime) === 1;
-    endPreview.style.background = '#ecfdf5';
-    endPreview.style.color = '#065f46';
-    endPreview.innerHTML =
-      '<b>✓ ' + (lifetimePkg ? 'Lifetime plan' : 'Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })) + '</b>' +
-      (lifetimePkg ? ' — no renewal needed' : ' &nbsp;·&nbsp; ' + days + ' days from today &nbsp;·&nbsp; ₹' + Number(pkg.base_price_inr || 0).toLocaleString('en-IN'));
-    // SIGNUP_FIX_v1 (2026-06-26) — also auto-populate the Next payment due
-    // date input (unless admin already set a custom value). Lifetime plans
-    // get cleared since renewal isn't applicable.
-    try {
-      const due = f.querySelector('[data-field="next_payment_at"]');
-      if (due && !due.dataset.touched) {
-        if (lifetimePkg) { due.value = ''; }
-        else {
-          const yyyy = end.getFullYear();
-          const mm = String(end.getMonth() + 1).padStart(2, '0');
-          const dd = String(end.getDate()).padStart(2, '0');
-          due.value = yyyy + '-' + mm + '-' + dd;
-        }
-      }
-      if (due && !due._signupFixListener) {
-        due.addEventListener('input', () => { due.dataset.touched = '1'; });
-        due._signupFixListener = true;
-      }
-    } catch (_) {}
-  }
-  pkgSel.addEventListener('change', _refreshEndPreview);
   f.appendChild(endPreview);
-  _refreshEndPreview();
   field('Industry pack', 'industry_pack', 'select', false, [
     { value: '', label: 'Generic' },
     { value: 'education', label: 'Education' },
     { value: 'realestate', label: 'Real Estate' }
   ]).value = row.industry_pack || '';
-  field('Desired tenure', 'desired_tenure', 'select', false, [
-    { value: '', label: '— not specified —' },
+  const _tenSel = field('Tenure *', 'desired_tenure', 'select', false, [
+    { value: '', label: '— select tenure —' },
     { value: 'month', label: 'Monthly' },
     { value: 'quarter', label: 'Quarterly' },
     { value: 'half_year', label: 'Half-yearly (6 months)' },
     { value: 'year', label: 'Yearly' },
     { value: '2year', label: '2 years' },
     { value: '3year', label: '3 years' }
-  ]).value = row.desired_tenure || '';
+  ]);
+  _tenSel.value = row.desired_tenure || '';
+  _tenSel.addEventListener('change', () => _refreshEndPreview(true));
+  _refreshEndPreview();
   field('Number of users', 'desired_users', 'number');
   // SIGNUP_REQUEST_v2 — payment fields shown in the edit modal so admin
   // can correct or fill in if the customer didn't.
@@ -3218,14 +3315,57 @@ async function openSignupRequestModal(id, onClose) {
     { value: 'fully_paid', label: 'Fully paid' },
     { value: 'partial',    label: 'Partial paid' }
   ]).value = row.payment_status || '';
-  field('Total amount (₹)',     'total_amount_inr', 'number');
+  const _gstSel = field('GST', 'gst_mode', 'select', false, [
+    { value: 'no_gst', label: 'No GST' },
+    { value: 'with_gst', label: 'With GST (18% included)' }
+  ]);
+  _gstSel.value = row.gst_mode || 'no_gst';
+  const _totInp = field('Total amount (₹)', 'total_amount_inr', 'number');
+  const _gstOut = h('div', { style: { gridColumn: 'span 2', fontSize: '.82rem', color: '#334155', marginTop: '-.2rem' } });
+  f.appendChild(_gstOut);
+  function _refreshGst() {
+    const t = Number(_totInp.value);
+    if (!isFinite(t) || t <= 0) { _gstOut.textContent = ''; return; }
+    if (String(_gstSel.value) === 'with_gst') { const sale = Math.round((t/1.18)*100)/100, g = Math.round((t-sale)*100)/100; _gstOut.innerHTML = '<span style="color:#1e40af">Sale (excl GST): <b>₹' + sale.toLocaleString('en-IN') + '</b> &middot; GST 18%: <b>₹' + g.toLocaleString('en-IN') + '</b></span>'; }
+    else { _gstOut.innerHTML = '<span style="color:#475569">No GST — the full ₹' + t.toLocaleString('en-IN') + ' is the sale amount.</span>'; }
+  }
+  _gstSel.addEventListener('change', _refreshGst); _totInp.addEventListener('input', _refreshGst); _refreshGst();
   field('Amount paid so far (₹)','amount_paid_inr',  'number');
   field('Next payment due date','next_payment_at',  'date');
+  _refreshEndPreview(false);  // SIGNUP_NEXTDUE_v1 — now that the due field exists, fill it from tenure
+  field('Transaction mode', 'transaction_mode', 'select', false, [
+    { value: '', label: '— not specified —' },
+    { value: 'upi', label: 'UPI' }, { value: 'bank_transfer', label: 'Bank transfer / NEFT' },
+    { value: 'card', label: 'Card' }, { value: 'cash', label: 'Cash' },
+    { value: 'cheque', label: 'Cheque' }, { value: 'gateway', label: 'Payment gateway' },
+    { value: 'other', label: 'Other' }
+  ]).value = row.transaction_mode || '';
+  field('Transaction ID / reference', 'transaction_id');
+  field('Transaction date', 'transaction_date', 'date');
   field('Notes', 'notes', 'textarea', true);
   body.appendChild(f);
   body.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.4rem' } },
     'Submitted by: ' + (row.submitted_by || 'public form') + (row.ip_address ? ' · IP ' + row.ip_address : '')
   ));
+
+  // SIGNUP_EDIT_ANY_STATUS_v1 — shared collect + slug validation, used by the
+  // pending Save/Approve AND the any-status Save button below.
+  function collect() {
+    const out = { id: row.id };
+    f.querySelectorAll('[data-field]').forEach(el => { out[el.dataset.field] = el.value; });
+    return out;
+  }
+  function _ensureSlug() {
+    const el = f.querySelector('[data-field="desired_slug"]');
+    const v = String((el && el.value) || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]{2,40}$/.test(v)) {
+      toast('Enter a valid slug first — 3–41 chars, lowercase letters/numbers/hyphens, starts with a letter.', 'err');
+      if (el) { el.style.border = '1px solid #ef4444'; el.focus(); }
+      return null;
+    }
+    if (el) { el.value = v; el.style.border = ''; }
+    return v;
+  }
 
   // ── Action buttons (only for pending)
   if (row.status === 'pending') {
@@ -3241,12 +3381,8 @@ async function openSignupRequestModal(id, onClose) {
     actions.appendChild(btnApprove);
     body.appendChild(actions);
 
-    function collect() {
-      const out = { id: row.id };
-      f.querySelectorAll('[data-field]').forEach(el => { out[el.dataset.field] = el.value; });
-      return out;
-    }
     btnSave.onclick = async () => {
+      if (!_ensureSlug()) return;
       btnSave.disabled = true;
       try { await api('api_saas_sr_update', collect()); toast('Saved', 'ok'); }
       catch (e) { toast(e.message, 'err'); }
@@ -3263,6 +3399,7 @@ async function openSignupRequestModal(id, onClose) {
       } catch (e) { toast(e.message, 'err'); btnReject.disabled = false; }
     };
     btnApprove.onclick = async () => {
+      if (!_ensureSlug()) return;
       if (!confirm('Approve this request? This will create the tenant workspace and generate login credentials.')) return;
       // Save edits first
       btnApprove.disabled = true;
@@ -3281,6 +3418,52 @@ async function openSignupRequestModal(id, onClose) {
         btnApprove.textContent = '✓ Approve & Provision';
       }
     };
+  }
+
+  // SR_MOVE_TO_TENANT_v1 — a request that is already paid/approved but whose
+  // provisioning failed or was never completed (no login button appears) can be
+  // moved to a tenant here. Provisioning is idempotent: it creates the tenant if
+  // missing (or returns the existing one), shares the id+password and sends the
+  // welcome email.
+  // SIGNUP_EDIT_ANY_STATUS_v1 — for ANY non-pending status show a Save button so
+  // slug/details can be edited + saved; paid/approved also get Move-to-Tenant.
+  if (row.status && row.status !== 'pending') {
+    const hasTenant = !!(row.provisioned_tenant_slug || row.provisioned_slug);
+    const canProvision = row.status !== 'rejected';
+    const prov = h('div', { class: 'modal-foot', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '1.25rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem', flexWrap: 'wrap' } });
+    prov.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginRight: 'auto' } },
+      canProvision
+        ? (hasTenant ? 'Edit any field (e.g. slug) and Save. Re-run to resend the login details + welcome email.'
+                     : 'Edit any field (e.g. slug) and Save, then create the tenant workspace + send the welcome email.')
+        : 'Edit any field and Save.'));
+    const saveBtn2 = h('button', { class: 'btn sm ghost' }, '💾 Save changes');
+    saveBtn2.onclick = async () => {
+      if (!_ensureSlug()) return;
+      saveBtn2.disabled = true;
+      try { await api('api_saas_sr_update', collect()); toast('Saved', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+      finally { saveBtn2.disabled = false; }
+    };
+    prov.appendChild(saveBtn2);
+    if (canProvision) {
+      const btn = h('button', { class: 'btn sm', style: { background: '#16a34a', color: '#fff' } },
+        hasTenant ? '🔁 Re-provision & Resend Welcome' : '🚀 Move to Tenant & Send Welcome');
+      prov.appendChild(btn);
+      btn.onclick = async () => {
+        if (!_ensureSlug()) return;
+        if (!confirm('Save changes, create / verify the tenant workspace, and send the welcome email?')) return;
+        btn.disabled = true; const _t = btn.textContent; btn.textContent = 'Provisioning…';
+        try {
+          await api('api_saas_sr_update', collect());   // persist slug/edits first
+          const r = await api('api_saas_sr_provision', row.id);
+          const res = (r && r.result) ? r.result : r;
+          toast('Tenant ready — credentials generated & welcome email sent', 'ok');
+          showCredentialsModal(res);
+          close();
+        } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = _t; }
+      };
+    }
+    body.appendChild(prov);
   }
 }
 
@@ -3421,14 +3604,52 @@ function _tkFmt(ts) {
   } catch (_) { return ts; }
 }
 
+// TKT_LAST_REMARK_AUTHOR_v1 — who wrote the latest remark on a ticket.
+// author_type is 'admin' for our super-admin team, anything else (customer/tenant)
+// is the client. Falls back to support_tickets.last_reply_by when the reply row
+// predates author_name.
+function _tkAuthorLabel(t) {
+  const type = String(t.last_reply_author_type || t.last_reply_by || '').toLowerCase();
+  const name = String(t.last_reply_author_name || '').trim();
+  if (type === 'admin' || type === 'super_admin' || type === 'system') {
+    return { text: '🧑‍💼 Team' + (name ? (' · ' + name) : ''), bg: '#e0e7ff', fg: '#3730a3' };
+  }
+  return { text: '🏢 Tenant' + (name ? (' · ' + name) : ''), bg: '#dcfce7', fg: '#166534' };
+}
+
 VIEWS.tickets = async (view) => {
   const cat = await _loadTkCatalog();
   view.appendChild(h('h1', {}, '🎫 Support Tickets'));
 
   // Filter bar
-  const statusSel = h('select', { class: 'input' });
-  statusSel.appendChild(h('option', { value: '' }, 'All statuses'));
-  (cat.statuses || []).forEach(s => statusSel.appendChild(h('option', { value: s.id }, s.label)));
+  // TKT_STATUS_MULTI_v1 — multi-select status; resolved + closed hidden by default.
+  const _hiddenByDefault = ['resolved', 'closed'];
+  let _tkStatuses = (cat.statuses || []).map(s => s.id).filter(id => !_hiddenByDefault.includes(id));
+  const statusBox = h('details', { style: { position: 'relative', display: 'inline-block' } });
+  const statusSummary = h('summary', { style: { cursor: 'pointer', listStyle: 'none', padding: '.45rem .7rem', border: '1px solid #cbd5e1', borderRadius: '6px', background: '#fff', fontSize: '.9rem', userSelect: 'none' } }, 'Status');
+  const statusMenu = h('div', { style: { position: 'absolute', zIndex: '30', top: '100%', left: '0', marginTop: '4px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.4rem .6rem', minWidth: '200px', boxShadow: '0 8px 22px rgba(0,0,0,.14)', maxHeight: '260px', overflow: 'auto' } });
+  function _statusLabel() {
+    const all = (cat.statuses || []).length;
+    statusSummary.textContent = 'Status: ' + (_tkStatuses.length >= all ? 'All' : (_tkStatuses.length ? (_tkStatuses.length + ' selected') : 'None'));
+  }
+  const _allCb = h('label', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', padding: '2px 0', fontSize: '.82rem', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', marginBottom: '3px', fontWeight: 700 } });
+  const _allBox = h('input', { type: 'checkbox' });
+  _allCb.appendChild(_allBox); _allCb.appendChild(h('span', {}, 'All / none'));
+  statusMenu.appendChild(_allCb);
+  const _cbs = [];
+  (cat.statuses || []).forEach(sT => {
+    const cb = h('input', { type: 'checkbox', checked: _tkStatuses.includes(sT.id) ? 'checked' : null });
+    cb.onchange = () => { _tkStatuses = _tkStatuses.filter(x => x !== sT.id); if (cb.checked) _tkStatuses.push(sT.id); _statusLabel(); load(); };
+    _cbs.push({ id: sT.id, cb });
+    statusMenu.appendChild(h('label', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', padding: '2px 0', fontSize: '.85rem', cursor: 'pointer' } }, cb, sT.label));
+  });
+  _allBox.onchange = () => {
+    _tkStatuses = _allBox.checked ? (cat.statuses || []).map(s => s.id) : [];
+    _cbs.forEach(x => { x.cb.checked = _allBox.checked; });
+    _statusLabel(); load();
+  };
+  statusBox.appendChild(statusSummary); statusBox.appendChild(statusMenu);
+  _statusLabel();
   const prioSel = h('select', { class: 'input' });
   prioSel.appendChild(h('option', { value: '' }, 'All priorities'));
   (cat.priorities || []).forEach(p => prioSel.appendChild(h('option', { value: p.id }, p.label)));
@@ -3446,11 +3667,15 @@ VIEWS.tickets = async (view) => {
     onclick: () => exportCsv('tickets-' + _csvTs() + '.csv', _lastTickets) }, '\u2b07 Export CSV');
 
   view.appendChild(h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '1rem 0' } },
-    statusSel, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn, exportBtn
+    statusBox, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn, exportBtn
   ));
 
   const statsRow = h('div', { id: 'tk-stats', style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } });
   view.appendChild(statsRow);
+  // TKT_ASSIGNEE_SUMMARY_v1 — assigned-wise counts; click a card to filter.
+  let _tkAssigneeFilter = null;
+  const assigneeRow = h('div', { id: 'tk-assignee-summary', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '1rem' } });
+  view.appendChild(assigneeRow);
   const tableWrap = h('div', { id: 'tk-table' });
   view.appendChild(tableWrap);
 
@@ -3459,11 +3684,12 @@ VIEWS.tickets = async (view) => {
     let res;
     try {
       res = await api('api_saas_tk_admin_listAll', {
-        status: statusSel.value || null,
+        statuses: _tkStatuses,
         priority: prioSel.value || null,
         category: catSel.value || null,
         q: searchIn.value.trim() || null,
-        unassigned: document.getElementById('tk-unassigned').checked ? 1 : null
+        unassigned: document.getElementById('tk-unassigned').checked ? 1 : null,
+        assignee_id: _tkAssigneeFilter || null
       });
     } catch (e) {
       tableWrap.innerHTML = '';
@@ -3488,6 +3714,40 @@ VIEWS.tickets = async (view) => {
     statsRow.appendChild(statCard('Urgent open', s.urgent_open, '#dc2626'));
     statsRow.appendChild(statCard('Resolved', s.resolved, '#10b981'));
 
+    // TKT_ASSIGNEE_SUMMARY_v1 — assigned-wise summary cards (click to filter).
+    assigneeRow.innerHTML = '';
+    const byA = (res && res.byAssignee) || [];
+    if (byA.length) {
+      assigneeRow.appendChild(h('div', { style: { fontSize: '.72rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '.04em', width: '100%', marginBottom: '-.2rem' } }, 'Assigned-wise summary'));
+      byA.forEach(a => {
+        const active = (String(_tkAssigneeFilter || '') === String(a.assignee_id || ''));
+        const isUnassigned = !a.assignee_id;
+        const card = h('div', {
+          style: {
+            background: active ? '#eef2ff' : '#fff',
+            border: '1px solid ' + (active ? '#6366f1' : (a.urgent_open ? '#fca5a5' : '#e5e7eb')),
+            borderRadius: '8px', padding: '.5rem .8rem', minWidth: '120px', cursor: isUnassigned ? 'default' : 'pointer'
+          },
+          title: isUnassigned ? 'Tickets not yet assigned' : 'Click to filter to ' + a.assignee_name + "'s tickets",
+          onclick: () => {
+            if (isUnassigned) return;
+            _tkAssigneeFilter = active ? null : a.assignee_id;
+            load();
+          }
+        },
+          h('div', { style: { fontSize: '.8rem', fontWeight: 700, color: isUnassigned ? '#94a3b8' : '#0f172a', whiteSpace: 'nowrap' } }, (isUnassigned ? '👤 ' : '🧑‍💼 ') + a.assignee_name),
+          h('div', { style: { fontSize: '.74rem', color: '#475569', marginTop: '.15rem' } },
+            h('b', { style: { color: '#0f172a' } }, String(a.total)), ' total · ',
+            h('b', { style: { color: a.open_count ? '#3b82f6' : '#94a3b8' } }, String(a.open_count)), ' open',
+            a.urgent_open ? h('span', { style: { color: '#dc2626', fontWeight: 700 } }, ' · ' + a.urgent_open + ' urgent') : null)
+        );
+        assigneeRow.appendChild(card);
+      });
+      if (_tkAssigneeFilter) {
+        assigneeRow.appendChild(h('button', { class: 'btn ghost small', style: { alignSelf: 'center' }, onclick: () => { _tkAssigneeFilter = null; load(); } }, '✕ Clear assignee filter'));
+      }
+    }
+
     // Table
     tableWrap.innerHTML = '';
     const tickets = res.tickets || [];
@@ -3504,6 +3764,8 @@ VIEWS.tickets = async (view) => {
       h('th', {}, 'Status'),
       h('th', {}, 'Priority'),
       h('th', {}, 'Assignee'),
+      h('th', {}, 'Created'),
+      h('th', {}, 'Last remark'),
       h('th', {}, 'Last activity'),
       h('th', {}, 'Replies'),
       h('th', {}, '')
@@ -3521,7 +3783,24 @@ VIEWS.tickets = async (view) => {
         h('td', {}, (catObj ? catObj.icon + ' ' + catObj.label : t.category)),
         h('td', {}, _tkStatusPill(t.status, cat)),
         h('td', {}, _tkPrioPill(t.priority, cat)),
-        h('td', { class: 'muted', style: { fontSize: '.85rem' } }, t.assignee_name || '—'),
+        h('td', { style: { fontSize: '.85rem', fontWeight: t.assignee_name ? 600 : 400, color: t.assignee_name ? '#0f172a' : '#94a3b8', whiteSpace: 'nowrap' } }, t.assignee_name ? ('🧑‍💼 ' + t.assignee_name) : 'Unassigned'),
+        h('td', { class: 'muted', style: { fontSize: '.82rem', whiteSpace: 'nowrap' } }, _tkFmt(t.created_at)),
+        // TKT_LAST_REMARK_AUTHOR_v1 — show WHO left the last remark: our team vs the tenant.
+        h('td', { style: { fontSize: '.8rem', maxWidth: '260px' },
+                  title: t.last_reply_body ? ((_tkAuthorLabel(t).text) + ' · ' + t.last_reply_body) : '' },
+          t.last_reply_body
+            ? h('div', {},
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '2px' } },
+                  (function () {
+                    const a = _tkAuthorLabel(t);
+                    return h('span', { style: { background: a.bg, color: a.fg, borderRadius: '6px', padding: '0 6px', fontSize: '.68rem', fontWeight: 700, whiteSpace: 'nowrap' } }, a.text);
+                  })(),
+                  Number(t.last_reply_internal) === 1
+                    ? h('span', { style: { background: '#e5e7eb', color: '#374151', borderRadius: '6px', padding: '0 5px', fontSize: '.66rem', fontWeight: 700 }, title: 'Internal note — not visible to the tenant' }, '🔒')
+                    : null),
+                h('div', { style: { color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                  String(t.last_reply_body).slice(0, 70) + (String(t.last_reply_body).length > 70 ? '…' : '')))
+            : h('span', { class: 'muted' }, '—')),
         h('td', { class: 'muted', style: { fontSize: '.82rem' } }, _tkFmt(t.last_reply_at || t.created_at)),
         h('td', { style: { textAlign: 'center' } }, String(t.reply_count || 0)),
         h('td', {}, h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); openAdminTicketModal(t.id); } }, 'Open →'))
@@ -3531,7 +3810,8 @@ VIEWS.tickets = async (view) => {
     tableWrap.appendChild(tbl);
   }
   refreshBtn.onclick = load;
-  statusSel.onchange = load; prioSel.onchange = load; catSel.onchange = load;
+  // TKT_STATUS_MULTI_v1 — status is a multi-select menu now (its checkboxes call load() themselves).
+  prioSel.onchange = load; catSel.onchange = load;
   document.getElementById('tk-unassigned').onchange = load;
   searchIn.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
   await load();
@@ -3540,6 +3820,9 @@ VIEWS.tickets = async (view) => {
 // ---- Ticket detail modal ----------------------------------------
 async function openAdminTicketModal(ticketId) {
   const cat = await _loadTkCatalog();
+  // TKT_REPLY_DRAFT_v1 — preserve the reply being typed across in-modal reloads
+  // (assign / status / priority changes call load() which rebuilds the composer).
+  let _replyDraft = '';
   const m = h('div', { class: 'modal-bd' });
   const card = h('div', { class: 'modal', style: { maxWidth: '880px', maxHeight: '90vh', overflow: 'auto', width: '95%' } });
   m.appendChild(card);
@@ -3665,13 +3948,36 @@ async function openAdminTicketModal(ticketId) {
 
     // Composer
     const compWrap = h('div', { style: { marginTop: '1rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.85rem' } });
+    const _draftKey = 'tk_draft_' + t.id;   // TKT_REPLY_DRAFT_v2 — persist across close/reopen
     const replyIn = h('textarea', { class: 'input', rows: 4, placeholder: 'Type your reply...', style: { width: '100%', minHeight: '80px' } });
+    let _saved = ''; try { _saved = localStorage.getItem(_draftKey) || ''; } catch (_) {}
+    replyIn.value = _replyDraft || _saved || '';
+    const _draftHint = h('span', { style: { fontSize: '.72rem', color: '#94a3b8' } }, replyIn.value ? '📝 Draft restored' : '');
+    replyIn.addEventListener('input', () => {
+      _replyDraft = replyIn.value;
+      try { if (replyIn.value.trim()) localStorage.setItem(_draftKey, replyIn.value); else localStorage.removeItem(_draftKey); } catch (_) {}
+      _draftHint.textContent = replyIn.value.trim() ? '📝 Draft saved' : '';
+    });
     const fileIn = h('input', { type: 'file' });
     const intCb = h('input', { type: 'checkbox' });
     compWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '✏ Reply'));
     compWrap.appendChild(replyIn);
+    const aiBtn = h('button', { class: 'btn', title: 'Let AI draft a step-by-step resolution from the ticket — you can edit before sending' }, '✨ AI Suggest');
+    aiBtn.onclick = async () => {
+      aiBtn.disabled = true; const _t = aiBtn.textContent; aiBtn.textContent = '✨ Thinking…';
+      try {
+        const r = await api('api_saas_tk_admin_aiSuggest', { ticket_id: t.id });
+        replyIn.value = r.suggestion || '';
+        _replyDraft = replyIn.value;
+        try { localStorage.setItem(_draftKey, replyIn.value); } catch (_) {}
+        _draftHint.textContent = '✨ AI draft — review & edit before sending';
+        toast('AI suggestion ready — review & edit', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      aiBtn.disabled = false; aiBtn.textContent = _t;
+    };
     compWrap.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
       fileIn,
+      aiBtn, _draftHint,
       h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem', fontSize: '.85rem' } }, intCb, '🔒 Internal note (hidden from customer)'),
       h('button', { class: 'btn primary', onclick: async (e) => {
         if (!replyIn.value.trim()) { toast('Type a reply', 'err'); return; }
@@ -3696,8 +4002,10 @@ async function openAdminTicketModal(ticketId) {
             } catch (_) {}
           }
           replyIn.value = '';
+          _replyDraft = '';
+          try { localStorage.removeItem(_draftKey); } catch (_) {}
           intCb.checked = false;
-          toast('✓ Reply sent');
+          toast('✓ Reply sent — ticket assigned to you');
           load();
         } catch (err) {
           toast(err.message, 'err');
@@ -4384,309 +4692,167 @@ VIEWS.finance = async (view) => {
     refreshBtn, exportBtn
   ));
 
-  // Containers we will populate after data loads
-  const kpiCard      = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading overview…'));
-  const chartCard    = h('div', { class: 'card' });
-  const packageCard  = h('div', { class: 'card' });
-  const expiringCard = h('div', { class: 'card' });
-  const overdueCard  = h('div', { class: 'card' });
-  const salesCard    = h('div', { class: 'card' });
-  view.appendChild(kpiCard);
-  view.appendChild(chartCard);
-  view.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '.75rem' } },
-    packageCard, expiringCard));
-  view.appendChild(overdueCard);
-  view.appendChild(salesCard);
+  // ============ FIN_REDESIGN_v1 — Revenue-focused dashboard ============
+  const _inr = (v) => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const _kpiHost = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', marginBottom: '14px' } });
+  view.appendChild(_kpiHost);
+  function _grid2(a, b) { return h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '12px', marginBottom: '12px' } }, a, b); }
+  function _panel(title, sub) { const c = h('div', { class: 'card' }); c.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: sub ? '2px' : '10px' } }, title)); if (sub) c.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem', marginBottom: '10px' } }, sub)); const b = h('div', {}); c.appendChild(b); c._body = b; return c; }
+  const pTrend = _panel('📈 Revenue Trend', 'Paid revenue, last 12 months');
+  const pCollect = _panel('💰 Payment Collection');
+  const pGst = _panel('🧾 GST Analysis');
+  const pInvStatus = _panel('📊 Invoice Status');
+  const pTopCust = _panel('🏆 Top Paying Customers');
+  const pRenewMonthly = _panel('🔁 Monthly Renewals', 'Payments per month');
+  const pRecent = h('div', { class: 'card' });
+  const pUpcoming = h('div', { class: 'card' });
+  view.appendChild(_grid2(pTrend, pCollect));
+  view.appendChild(_grid2(pGst, pInvStatus));
+  view.appendChild(_grid2(pTopCust, pRenewMonthly));
+  view.appendChild(pRecent);
+  view.appendChild(pUpcoming);
 
-  function kpi(label, value, hint, color) {
-    // FIN_DASH_DATE_v1 — larger, clearer KPI cards
-    return h('div', { style: {
-      padding: '1rem 1.1rem',
-      background: (color || '#f8fafc'),
-      borderRadius: '12px',
-      border: '1px solid rgba(15,23,42,.07)',
-      boxShadow: '0 1px 2px rgba(15,23,42,.03)',
-      minHeight: '90px',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between'
-    } },
-      h('div', { style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.05em', color: '#64748b', fontWeight: '600' } }, label),
-      h('div', { style: { fontSize: '1.7rem', fontWeight: '800', color: '#0f172a', lineHeight: '1.1', margin: '.35rem 0 .1rem' } }, value),
-      hint ? h('div', { style: { fontSize: '.74rem', color: '#475569', fontWeight: '500' } }, hint) : null
-    );
-  }
-
-  // ---- KPI cards ---------------------------------------------------
-  async function loadOverview() {
-    kpiCard.innerHTML = '';
-    kpiCard.appendChild(h('div', { class: 'muted' }, 'Loading overview…'));
-    let d;
-    try { d = await api('api_saas_finance_overview', _rangePayload()); }
-    catch (e) { kpiCard.innerHTML = ''; kpiCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    kpiCard.innerHTML = '';
-
-    kpiCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue'));
-    const revGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.75rem' } });
-    const r = d.revenue;
-    const periodLabel = (d.period && d.period.label) ? d.period.label : 'This month';
-    const pctVal = (r.delta_pct != null ? r.delta_pct : r.mom_pct);
-    const deltaTxt = pctVal == null ? 'no prior period to compare' :
-      (pctVal >= 0 ? '▲ ' : '▼ ') + Math.abs(pctVal).toFixed(1) + '% vs prior ' + periodLabel.toLowerCase();
-    const periodPaid = (r.period_paid != null ? r.period_paid : r.this_month);
-    const prevPaid   = (r.prev_paid   != null ? r.prev_paid   : r.last_month);
-    revGrid.appendChild(kpi('MRR',  fmtRupees(r.mrr),  r.paying_tenants + ' paying tenants', '#ecfdf5'));
-    revGrid.appendChild(kpi('ARR',  fmtRupees(r.arr),  '12 × MRR projection', '#ecfdf5'));
-    revGrid.appendChild(kpi(periodLabel + ' (paid)', fmtRupees(periodPaid), deltaTxt,
-      pctVal != null && pctVal < 0 ? '#fef2f2' : '#eff6ff'));
-    revGrid.appendChild(kpi('Prior ' + periodLabel.toLowerCase(), fmtRupees(prevPaid), 'previous comparable window', '#f1f5f9'));
-    revGrid.appendChild(kpi('Lifetime collected', fmtRupees(r.lifetime_paid), 'all paid invoices', '#fefce8'));
-    kpiCard.appendChild(revGrid);
-
-    kpiCard.appendChild(h('h2', { style: { marginTop: '1rem' } }, 'Tenants'));
-    const tn = d.tenants;
-    const tGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.75rem' } });
-    tGrid.appendChild(kpi('Total tenants', tn.total));
-    tGrid.appendChild(kpi('Active',        tn.active,    null, '#ecfdf5'));
-    tGrid.appendChild(kpi('Trial',         tn.trial,     null, '#eff6ff'));
-    tGrid.appendChild(kpi('Past due',      tn.past_due,  null, '#fff7ed'));
-    tGrid.appendChild(kpi('Suspended',     tn.suspended, null, '#fef2f2'));
-    tGrid.appendChild(kpi('New this month',     tn.new_this_month,     'signups since 1st', '#f0fdf4'));
-    tGrid.appendChild(kpi('Expired this month', tn.expired_this_month, 'period ended, not renewed', '#fef2f2'));
-    tGrid.appendChild(kpi('Churned this month', tn.churned_this_month, 'moved to deleted/suspended', '#fef2f2'));
-    tGrid.appendChild(kpi('Expiring in 7 days',  tn.expiring_in_7,  null, '#fff7ed'));
-    tGrid.appendChild(kpi('Expiring in 30 days', tn.expiring_in_30, null, '#fff7ed'));
-    kpiCard.appendChild(tGrid);
-
-    kpiCard.appendChild(h('h2', { style: { marginTop: '1rem' } }, 'Invoices'));
-    const iv = d.invoices;
-    const iGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.75rem' } });
-    iGrid.appendChild(kpi('Paid (lifetime)',   iv.paid_count));
-    iGrid.appendChild(kpi('Pending',           iv.pending_count, fmtRupees(iv.pending_total) + ' open', '#fff7ed'));
-    iGrid.appendChild(kpi('Overdue',           iv.overdue_count, fmtRupees(iv.overdue_total) + ' past due', '#fef2f2'));
-    iGrid.appendChild(kpi('Failed payments',   iv.failed_count, null, '#fef2f2'));
-    kpiCard.appendChild(iGrid);
-
-    kpiCard.appendChild(h('div', { class: 'muted', style: { marginTop: '.6rem', fontSize: '.72rem' } },
-      'Generated ' + new Date(d.generated_at).toLocaleString('en-IN')));
-  }
-
-  // ---- Revenue by month — simple SVG bar chart ---------------------
-  async function loadChart() {
-    chartCard.innerHTML = '';
-    chartCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue — last 12 months'));
-    chartCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
-    let d;
-    try { d = await api('api_saas_finance_revenueByMonth'); }
-    catch (e) { chartCard.innerHTML = '<div class="error-box">' + e.message + '</div>'; return; }
-    chartCard.innerHTML = '';
-    chartCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue — last 12 months'));
-    const rows = d.rows || [];
-    if (!rows.length) { chartCard.appendChild(h('div', { class: 'muted' }, 'No data.')); return; }
-    const max = Math.max(1, ...rows.map(r => Number(r.paid_total) || 0));
-    const w = 760, h_ = 220, pad = 30, bw = (w - pad * 2) / rows.length;
-    const svgNS = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h_);
-    svg.setAttribute('style', 'width:100%; height:auto; max-width:760px');
-    rows.forEach((r, i) => {
-      const v = Number(r.paid_total) || 0;
-      const bh = (v / max) * (h_ - pad * 2);
-      const x = pad + i * bw + bw * 0.1;
-      const y = h_ - pad - bh;
-      const rect = document.createElementNS(svgNS, 'rect');
-      rect.setAttribute('x', x); rect.setAttribute('y', y);
-      rect.setAttribute('width', bw * 0.8); rect.setAttribute('height', Math.max(0, bh));
-      rect.setAttribute('fill', '#4f46e5'); rect.setAttribute('rx', '3');
-      const ttl = document.createElementNS(svgNS, 'title');
-      ttl.textContent = r.month + ': ' + fmtRupees(v) + ' (' + r.paid_count + ' invoice' + (r.paid_count === 1 ? '' : 's') + ')';
-      rect.appendChild(ttl);
-      svg.appendChild(rect);
-      const lbl = document.createElementNS(svgNS, 'text');
-      lbl.setAttribute('x', x + bw * 0.4); lbl.setAttribute('y', h_ - pad + 14);
-      lbl.setAttribute('text-anchor', 'middle');
-      lbl.setAttribute('font-size', '9'); lbl.setAttribute('fill', '#64748b');
-      lbl.textContent = (r.month || '').slice(2); // YY-MM
-      svg.appendChild(lbl);
+  function _bars(items, opts) {
+    opts = opts || {};
+    const max = Math.max(1, ...items.map(i => Number(i.value) || 0));
+    const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+    items.forEach(i => {
+      const pct = Math.round(((Number(i.value) || 0) / max) * 100);
+      wrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '92px 1fr auto', gap: '8px', alignItems: 'center' } },
+        h('div', { style: { fontSize: '.75rem', color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: String(i.label) }, i.label),
+        h('div', { style: { background: '#f1f5f9', borderRadius: '6px', height: '18px', overflow: 'hidden' } }, h('div', { style: { width: pct + '%', height: '100%', background: opts.color || '#4f46e5', borderRadius: '6px' } })),
+        h('div', { style: { fontSize: '.75rem', fontWeight: '700', color: '#0f172a', whiteSpace: 'nowrap' } }, opts.fmt ? opts.fmt(i.value) : String(i.value))));
     });
-    chartCard.appendChild(svg);
-    // Total below
-    const total = rows.reduce((s, r) => s + (Number(r.paid_total) || 0), 0);
-    chartCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } },
-      '12-month total: ' + fmtRupees(total)));
+    return wrap;
+  }
+  function _donut(segs) {
+    const total = segs.reduce((a, x) => a + (Number(x.value) || 0), 0) || 1;
+    let acc = 0; const stops = [];
+    segs.forEach(x => { const from = acc / total * 360; acc += (Number(x.value) || 0); const to = acc / total * 360; stops.push(x.color + ' ' + from + 'deg ' + to + 'deg'); });
+    const ring = h('div', { style: { width: '116px', height: '116px', borderRadius: '50%', background: 'conic-gradient(' + stops.join(',') + ')', flex: '0 0 auto', position: 'relative' } },
+      h('div', { style: { position: 'absolute', inset: '17px', background: '#fff', borderRadius: '50%' } }));
+    const legend = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
+      ...segs.map(x => h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '.8rem' } },
+        h('span', { style: { width: '11px', height: '11px', borderRadius: '3px', background: x.color, display: 'inline-block' } }),
+        h('span', { class: 'muted' }, x.label + ' '), h('b', {}, x.fmt ? x.fmt(x.value) : String(x.value)))));
+    return h('div', { style: { display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } }, ring, legend);
+  }
+  function kpi(label, value, hint, color) {
+    return h('div', { style: { padding: '.85rem 1rem', background: color || '#f8fafc', borderRadius: '12px', border: '1px solid rgba(15,23,42,.07)', minHeight: '84px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' } },
+      h('div', { style: { fontSize: '.66rem', textTransform: 'uppercase', letterSpacing: '.05em', color: '#64748b', fontWeight: '700' } }, label),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: '800', color: '#0f172a', lineHeight: '1.1' } }, value),
+      hint ? h('div', { style: { fontSize: '.71rem', color: '#475569' } }, hint) : null);
   }
 
-  // ---- By package -------------------------------------------------
-  async function loadPackages() {
-    packageCard.innerHTML = '';
-    packageCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'By package'));
-    let d;
-    try { d = await api('api_saas_finance_byPackage'); }
-    catch (e) { packageCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    if (!(d.rows && d.rows.length)) { packageCard.appendChild(h('div', { class: 'muted' }, 'No packages.')); return; }
-    packageCard.appendChild(h('table', { class: 'data-table', style: { width: '100%' } },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Package'), h('th', {}, 'Tenants'),
-        h('th', {}, 'Active'), h('th', {}, 'Trial'),
-        h('th', {}, '₹/mo each'), h('th', {}, 'MRR'),
-        h('th', {}, 'Lifetime ₹'))),
-      h('tbody', {}, ...d.rows.map(r => h('tr', {},
-        h('td', {}, r.name),
-        h('td', {}, r.tenant_count),
-        h('td', {}, r.active_count),
-        h('td', {}, r.trial_count),
-        h('td', {}, fmtRupees(r.monthly_per_tenant)),
-        h('td', { style: { fontWeight: '600' } }, fmtRupees(r.mrr_contribution)),
-        h('td', {}, fmtRupees(r.lifetime_paid))
-      )))
-    ));
+  let _topCustData = [];
+  function renderRecent(invList) {
+    pRecent.innerHTML = '';
+    pRecent.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: '10px' } }, '🧾 Recent Transactions'));
+    const paid = (Array.isArray(invList) ? invList : []).filter(i => i.status === 'paid')
+      .sort((a, b) => new Date(b.paid_at || b.created_at) - new Date(a.paid_at || a.created_at)).slice(0, 12);
+    if (!paid.length) { pRecent.appendChild(h('div', { class: 'muted' }, 'No paid invoices yet.')); return; }
+    const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
+    const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
+    pRecent.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '620px' } },
+      h('thead', {}, h('tr', {}, th('Invoice'), th('Customer'), th('Amount'), th('GST'), th('Date'))),
+      h('tbody', {}, ...paid.map(i => h('tr', {},
+        td(h('code', {}, i.number || '')),
+        td(i.org_name || '—'),
+        td(_inr(i.total_inr), { fontWeight: '700' }),
+        td(_inr(i.tax_inr), { color: '#0891b2' }),
+        td(fmtDate(i.paid_at || i.created_at), { color: '#475569', whiteSpace: 'nowrap' })))))));
   }
-
-  // ---- Expiring soon (next 30 days) -------------------------------
-  async function loadExpiring() {
-    expiringCard.innerHTML = '';
-    expiringCard.appendChild(h('h2', { style: { marginTop: 0 } }, '⚠ Expiring in 30 days'));
-    let d;
-    try { d = await api('api_saas_finance_expiringSoon', { days: 30 }); }
-    catch (e) { expiringCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    if (!(d.rows && d.rows.length)) {
-      expiringCard.appendChild(h('div', { class: 'muted' }, 'No tenants expiring in the next 30 days.'));
-      return;
+  function renderUpcoming(expiring, sales) {
+    pUpcoming.innerHTML = '';
+    pUpcoming.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: '10px' } }, '🔔 Upcoming Renewals'));
+    let rows = (expiring && expiring.rows) ? expiring.rows.slice() : [];
+    if ((!rows.length) && sales && sales.rows) {
+      rows = sales.rows.filter(r => r.days_to_expiry != null && r.days_to_expiry >= -3 && r.days_to_expiry <= 45)
+        .map(r => ({ org_name: r.org_name, package: r.package, current_period_end: r.current_period_end, days_to_expiry: r.days_to_expiry }))
+        .sort((a, b) => a.days_to_expiry - b.days_to_expiry);
     }
-    expiringCard.appendChild(h('table', { class: 'data-table', style: { width: '100%', fontSize: '.84rem' } },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Tenant'),
-        h('th', {}, 'Package'), h('th', {}, 'Expires'), h('th', {}, 'In'), h('th', {}, '₹/mo'))),
-      h('tbody', {}, ...d.rows.map(r => h('tr', {
-          style: r.days_to_expiry <= 7 ? { background: '#fff7ed' } : {}
-        },
-        h('td', {}, h('a', { href: '#/tenants', style: { color: '#4f46e5', fontWeight: '500' } }, r.org_name),
-          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, r.slug)),
-        h('td', {}, r.package || '—'),
-        h('td', {}, fmtDate(r.current_period_end)),
-        h('td', { style: { color: r.days_to_expiry <= 7 ? '#dc2626' : '#92400e', fontWeight: '600' } },
-          r.days_to_expiry + 'd'),
-        h('td', {}, fmtRupees(r.monthly_value))
-      )))
-    ));
+    if (!rows.length) { pUpcoming.appendChild(h('div', { class: 'muted' }, 'No renewals due in the next 45 days.')); return; }
+    const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
+    const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
+    pUpcoming.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '560px' } },
+      h('thead', {}, h('tr', {}, th('Customer'), th('Plan'), th('Renews on'), th('In'))),
+      h('tbody', {}, ...rows.slice(0, 20).map(r => { const d = r.days_to_expiry;
+        return h('tr', {},
+          td(r.org_name || '—'),
+          td(r.package || r.pkg_name || '—', { color: '#475569' }),
+          td(fmtDate(r.current_period_end), { whiteSpace: 'nowrap' }),
+          td((d == null ? '—' : d + 'd'), { fontWeight: '700', color: (d != null && d <= 7) ? '#dc2626' : (d != null && d <= 15) ? '#d97706' : '#0f172a' })); })))));
   }
 
-  // ---- Overdue invoices -------------------------------------------
-  async function loadOverdue() {
-    overdueCard.innerHTML = '';
-    overdueCard.appendChild(h('h2', { style: { marginTop: 0 } }, '🧾 Overdue invoices'));
-    let d;
-    try { d = await api('api_saas_finance_overdueInvoices'); }
-    catch (e) { overdueCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-    if (!(d.rows && d.rows.length)) {
-      overdueCard.appendChild(h('div', { class: 'muted' }, 'No overdue invoices. 🎉'));
-      return;
-    }
-    overdueCard.appendChild(h('table', { class: 'data-table', style: { width: '100%' } },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Invoice #'),
-        h('th', {}, 'Tenant'), h('th', {}, 'Amount'),
-        h('th', {}, 'Period end'), h('th', {}, 'Days overdue'))),
-      h('tbody', {}, ...d.rows.map(r => h('tr', { style: { background: '#fef2f2' } },
-        h('td', {}, r.number),
-        h('td', {}, r.tenant_name || '—',
-          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, r.tenant_slug || '')),
-        h('td', { style: { fontWeight: '600' } }, fmtRupees(r.total_inr)),
-        h('td', {}, fmtDate(r.period_end || r.created_at)),
-        h('td', { style: { color: '#dc2626', fontWeight: '600' } }, r.overdue_days + 'd')
-      )))
-    ));
+  async function loadDash() {
+    _kpiHost.innerHTML = ''; _kpiHost.appendChild(h('div', { class: 'muted', style: { gridColumn: '1/-1' } }, 'Loading…'));
+    let ov, trend, sales, invList, expiring;
+    try {
+      [ov, trend, sales, invList, expiring] = await Promise.all([
+        api('api_saas_finance_overview', _rangePayload()),
+        api('api_saas_finance_revenueByMonth').catch(() => ({ months: [] })),
+        api('api_saas_finance_tenantSales', _rangePayload()).catch(() => ({ rows: [] })),
+        api('api_saas_invoices_list', {}).catch(() => []),
+        api('api_saas_finance_expiringSoon', { days: 45 }).catch(() => ({ rows: [] }))
+      ]);
+    } catch (e) { _kpiHost.innerHTML = ''; _kpiHost.appendChild(h('div', { class: 'error-box', style: { gridColumn: '1/-1' } }, e.message)); return; }
+    const rev = ov.revenue || {}, invx = ov.invoices || {}, gst = ov.gst || {}, tn = ov.tenants || {};
+    const outstanding = (Number(invx.pending_total) || 0) + (Number(invx.overdue_total) || 0);
+    const denom = (Number(rev.period_paid) || 0) + outstanding;
+    const collectionRate = denom > 0 ? Math.round((Number(rev.period_paid) || 0) / denom * 100) : 100;
+    _kpiHost.innerHTML = '';
+    [
+      kpi('Revenue', _inr(rev.period_paid), (ov.period && ov.period.label) || '', '#ecfdf5'),
+      kpi('GST', _inr(gst.period), 'collected in period', '#eff6ff'),
+      kpi('Outstanding', _inr(outstanding), (invx.pending_count || 0) + ' pending', '#fff7ed'),
+      kpi('Paid', String(invx.period_paid_count || 0), 'invoices in period', '#f0fdf4'),
+      kpi('Pending', _inr(invx.pending_total), (invx.pending_count || 0) + ' invoices', '#fffbeb'),
+      kpi('Overdue', _inr(invx.overdue_total), (invx.overdue_count || 0) + ' invoices', '#fef2f2'),
+      kpi('Customers', String(rev.paying_tenants || tn.active || 0), 'paying tenants', '#f8fafc'),
+      kpi('Renewals', String(tn.expiring_in_30 || 0), 'due in 30 days', '#f5f3ff'),
+      kpi('Collection Rate', collectionRate + '%', 'collected vs billed', collectionRate >= 80 ? '#ecfdf5' : '#fff7ed'),
+      kpi('MRR', _inr(rev.mrr), 'ARR ' + _inr(rev.arr), '#eef2ff')
+    ].forEach(k => _kpiHost.appendChild(k));
+    const months = (trend.months || []);
+    pTrend._body.innerHTML = '';
+    pTrend._body.appendChild(months.length ? _bars(months.map(m => ({ label: m.month, value: m.revenue })), { color: '#4f46e5', fmt: _inr }) : h('div', { class: 'muted' }, 'No data'));
+    pCollect._body.innerHTML = '';
+    pCollect._body.appendChild(_donut([
+      { label: 'Collected', value: Number(rev.period_paid) || 0, color: '#16a34a', fmt: _inr },
+      { label: 'Pending', value: Number(invx.pending_total) || 0, color: '#f59e0b', fmt: _inr },
+      { label: 'Overdue', value: Number(invx.overdue_total) || 0, color: '#dc2626', fmt: _inr }
+    ]));
+    pCollect._body.appendChild(h('div', { style: { marginTop: '10px', fontSize: '.85rem' } }, 'Collection rate: ', h('b', {}, collectionRate + '%')));
+    pGst._body.innerHTML = '';
+    pGst._body.appendChild(_bars([
+      { label: 'Net sale', value: Number(gst.period_net) || 0 },
+      { label: 'GST (period)', value: Number(gst.period) || 0 },
+      { label: 'GST (lifetime)', value: Number(gst.lifetime) || 0 }
+    ], { color: '#0891b2', fmt: _inr }));
+    pInvStatus._body.innerHTML = '';
+    pInvStatus._body.appendChild(_donut([
+      { label: 'Paid', value: Number(invx.paid_count) || 0, color: '#16a34a', fmt: v => String(v) },
+      { label: 'Pending', value: Number(invx.pending_count) || 0, color: '#f59e0b', fmt: v => String(v) },
+      { label: 'Overdue', value: Number(invx.overdue_count) || 0, color: '#dc2626', fmt: v => String(v) },
+      { label: 'Failed', value: Number(invx.failed_count) || 0, color: '#6b7280', fmt: v => String(v) }
+    ]));
+    _topCustData = (sales.rows || []).slice();
+    const top = (sales.rows || []).filter(r => Number(r.period_paid) > 0).slice(0, 8);
+    pTopCust._body.innerHTML = '';
+    pTopCust._body.appendChild(top.length ? _bars(top.map(r => ({ label: r.org_name || r.slug, value: Number(r.period_paid) || 0 })), { color: '#7c3aed', fmt: _inr }) : h('div', { class: 'muted' }, 'No paid customers in this period.'));
+    pRenewMonthly._body.innerHTML = '';
+    pRenewMonthly._body.appendChild(months.length ? _bars(months.map(m => ({ label: m.month, value: m.invoices || 0 })), { color: '#0d9488', fmt: v => String(v) }) : h('div', { class: 'muted' }, 'No data'));
+    renderRecent(invList);
+    renderUpcoming(expiring, sales);
   }
 
-  // ---- Tenant-wise sale table -------------------------------------
-  let salesData = null;
-  async function loadSales() {
-    salesCard.innerHTML = '';
-    salesCard.appendChild(h('h2', { style: { marginTop: 0 } }, '🏢 Tenant-wise sale'));
-
-    const statusSel = h('select', {},
-      h('option', { value: '' }, 'All statuses'),
-      ...['active','trial','past_due','suspended','pending_delete','pending_payment','deleted']
-        .map(s => h('option', { value: s }, s))
-    );
-    const qInp = h('input', { type: 'search', placeholder: 'Search org / email / slug…', style: { minWidth: '14rem' } });
-    const applyBtn = h('button', { class: 'btn sm' }, 'Apply');
-    salesCard.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginBottom: '.6rem', flexWrap: 'wrap' } },
-      statusSel, qInp, applyBtn));
-
-    const tblWrap = h('div', { style: { overflowX: 'auto' } });
-    salesCard.appendChild(tblWrap);
-
-    async function reload() {
-      tblWrap.innerHTML = '<div class="muted">Loading…</div>';
-      try {
-        const filt = Object.assign({ status: statusSel.value || null, q: qInp.value.trim() || null }, _rangePayload());
-        const d = await api('api_saas_finance_tenantSales', filt);
-        salesData = d;
-        renderTable(d.rows || []);
-      } catch (e) { tblWrap.innerHTML = ''; tblWrap.appendChild(h('div', { class: 'error-box' }, e.message)); }
-    }
-    function renderTable(rows) {
-      tblWrap.innerHTML = '';
-      if (!rows.length) { tblWrap.appendChild(h('div', { class: 'muted' }, 'No tenants match.')); return; }
-      const tbl = h('table', { class: 'data-table', style: { width: '100%', fontSize: '.85rem' } },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Tenant'), h('th', {}, 'Package'),
-          h('th', {}, 'Status'), h('th', {}, 'Created'),
-          h('th', {}, 'Period end'), h('th', {}, 'Days'),
-          h('th', {}, '₹/mo'), h('th', {}, '₹/yr'),
-          h('th', { style: { background:'#eef2ff', color:'#4338ca' }, title: 'Filtered by selected date range' }, '₹ in period'),
-          h('th', { style: { background:'#eef2ff', color:'#4338ca' }, title: 'Filtered by selected date range' }, '# in period'),
-          h('th', {}, 'Lifetime ₹'), h('th', {}, '# paid'),
-          h('th', {}, 'Pending ₹'), h('th', {}, 'Last paid'))),
-        h('tbody', {}, ...rows.map(r => h('tr', {},
-          h('td', {}, h('a', { href: '#/tenants', style: { color: '#4f46e5', fontWeight: '500' } }, r.org_name),
-            h('div', { class: 'muted', style: { fontSize: '.72rem' } }, r.slug + ' · ' + (r.contact_email || ''))),
-          h('td', {}, r.package || '—'),
-          h('td', {}, h('span', { class: 'pill pill-' + (r.status || ''), style: { fontSize: '.72rem' } }, r.status)),
-          h('td', {}, fmtDate(r.created_at)),
-          h('td', {}, fmtDate(r.current_period_end)),
-          h('td', { style: {
-              color: r.days_to_expiry == null ? '#94a3b8'
-                : r.days_to_expiry < 0 ? '#dc2626'
-                : r.days_to_expiry <= 7 ? '#92400e'
-                : '#0f172a',
-              fontWeight: '500'
-            } },
-            r.days_to_expiry == null ? '—' : r.days_to_expiry + 'd'),
-          h('td', {}, fmtRupees(r.monthly_value)),
-          h('td', {}, fmtRupees(r.annual_value)),
-          h('td', { style: { fontWeight: '700', background: r.period_paid > 0 ? '#eef2ff' : '#f8fafc', color: r.period_paid > 0 ? '#4338ca' : '#94a3b8' } }, fmtRupees(r.period_paid)),
-          h('td', { style: { background: r.period_paid_count > 0 ? '#eef2ff' : '#f8fafc', color: r.period_paid_count > 0 ? '#4338ca' : '#94a3b8' } }, r.period_paid_count || 0),
-          h('td', { style: { fontWeight: '600' } }, fmtRupees(r.lifetime_paid)),
-          h('td', {}, r.paid_count),
-          h('td', { style: { color: r.pending_total > 0 ? '#92400e' : '#94a3b8' } }, fmtRupees(r.pending_total)),
-          h('td', {}, fmtDate(r.last_paid_at))
-        )))
-      );
-      tblWrap.appendChild(tbl);
-      tblWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
-        rows.length + ' tenants'));
-    }
-    applyBtn.onclick = reload;
-    qInp.addEventListener('keydown', ev => { if (ev.key === 'Enter') reload(); });
-    reload();
-  }
-
-  // ---- Export tenants CSV (uses last loaded sales table) -----------
   exportBtn.onclick = () => {
-    if (!salesData || !salesData.rows || !salesData.rows.length) {
-      toast('Load the tenant table first', 'error'); return;
-    }
-    const cols = ['org_name','slug','contact_email','status','package',
-      'created_at','current_period_end','days_to_expiry',
-      'monthly_value','annual_value','lifetime_paid','paid_count',
-      'pending_total','last_paid_at'];
+    if (!_topCustData.length) { toast('Load the dashboard first', 'err'); return; }
+    const cols = ['org_name', 'slug', 'status', 'package', 'period_paid', 'lifetime_paid', 'pending_total', 'current_period_end', 'days_to_expiry'];
     const esc = v => v == null ? '' : ('"' + String(v).replace(/"/g, '""') + '"');
-    const lines = [cols.join(',')];
-    salesData.rows.forEach(r => lines.push(cols.map(c => esc(r[c])).join(',')));
+    const lines = [cols.join(',')].concat(_topCustData.map(r => cols.map(c => esc(r[c])).join(',')));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'tenant-sales-' + new Date().toISOString().slice(0,10) + '.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'finance-customers-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); URL.revokeObjectURL(a.href);
   };
 
   // ---- Refresh everything -----------------------------------------
@@ -4760,10 +4926,9 @@ VIEWS.finance = async (view) => {
     }
   }
 
-  function refreshAll() { try { loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales && loadSales(); loadExpenses(); } catch(_){} }
-  refreshBtn.onclick = () => Promise.all([loadOverview(), loadChart(), loadPackages(), loadExpiring(), loadOverdue(), loadSales(), loadExpenses()]);
-  // Initial parallel load
-  loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales(); loadExpenses();
+  function refreshAll() { try { loadDash(); loadExpenses(); } catch(_){} }
+  refreshBtn.onclick = () => { loadDash(); loadExpenses(); };
+  loadDash(); loadExpenses();
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -5063,4 +5228,464 @@ async function _wlOpenSettingsModal() {
     )
   );
   document.body.appendChild(overlay);
+}
+
+
+/* ==========================================================================
+ * SAAS_WA_EMBEDDED_v1 — super-admin WhatsApp (Embedded Signup + notify tenants)
+ * ========================================================================== */
+function _saasEnsureFbSdk(appId) {
+  return new Promise((resolve, reject) => {
+    if (window.FB && typeof window.FB.login === 'function') return resolve();
+    window.fbAsyncInit = function () {
+      try { FB.init({ appId: String(appId), autoLogAppEvents: true, xfbml: false, version: 'v21.0' }); resolve(); }
+      catch (e) { reject(e); }
+    };
+    if (document.getElementById('facebook-jssdk')) { const iv = setInterval(() => { if (window.FB) { clearInterval(iv); resolve(); } }, 200); setTimeout(() => clearInterval(iv), 8000); return; }
+    const js = document.createElement('script');
+    js.id = 'facebook-jssdk'; js.src = 'https://connect.facebook.net/en_US/sdk.js'; js.async = true; js.defer = true;
+    js.onerror = () => reject(new Error('Failed to load Facebook SDK'));
+    document.head.appendChild(js);
+  });
+}
+
+function _saasStartEmbeddedSignup(appId, configId, onDone) {
+  if (!appId || !configId) { toast('WhatsApp Embedded Signup not configured (missing app/config id)', 'err'); return; }
+  if (!(window.FB && typeof window.FB.login === 'function')) {
+    toast('Loading Facebook… click Connect again in ~2s', 'ok');
+    _saasEnsureFbSdk(appId).then(() => toast('✅ Facebook ready — click Connect again', 'ok')).catch(e => toast(e.message, 'err'));
+    return;
+  }
+  let phoneNumberId = '', wabaId = '';
+  const listener = (event) => {
+    if (event.origin !== 'https://www.facebook.com') return;
+    try {
+      const data = (typeof event.data === 'string') ? JSON.parse(event.data) : event.data;
+      if (data && data.type === 'WA_EMBEDDED_SIGNUP') {
+        const inner = data.data || data.session_info || {};
+        const pid = inner.phone_number_id || inner.phone_id || data.phone_number_id || '';
+        const wid = inner.waba_id || inner.business_id || inner.business_account_id || data.waba_id || '';
+        if (pid) phoneNumberId = String(pid);
+        if (wid) wabaId = String(wid);
+      }
+    } catch (_) {}
+  };
+  window.addEventListener('message', listener);
+  toast('Opening Facebook…');
+  FB.login(function (response) {
+    window.removeEventListener('message', listener);
+    if (!response || !response.authResponse) { toast('Login cancelled or popup blocked. Ensure ' + location.origin + '/ is a Valid OAuth Redirect URI in your Meta app.', 'err'); return; }
+    const code = response.authResponse.code;
+    if (!code) { toast('No authorization code returned by Facebook.', 'err'); return; }
+    if (!phoneNumberId || !wabaId) { toast('Did not receive phone/WABA from the dialog. Check the console for WA_EMBEDDED_SIGNUP messages.', 'err'); return; }
+    (async () => {
+      try {
+        toast('Exchanging credentials with Meta…');
+        const r = await api('api_saas_wa_connect', code, phoneNumberId, wabaId);
+        toast('✅ Connected (WABA ' + r.waba_id + ', Phone ' + r.phone_number_id + ')');
+        if (typeof onDone === 'function') onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    })();
+  }, {
+    config_id: configId, response_type: 'code', override_default_response_type: true,
+    extras: { setup: {}, featureType: '', sessionInfoVersion: '2' }
+  });
+}
+
+VIEWS.whatsapp = async (view) => {
+  view.appendChild(h('h1', {}, '📲 WhatsApp'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } },
+    'Connect a dedicated number, sync & send templates, and chat — the same WhatsApp tools your tenants get, on your platform number.'));
+  const tabbar = h('div', { style: { display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' } });
+  const bodyEl = h('div', {});
+  const TABS = [['connect', '🔌 Connect'], ['templates', '📋 Templates'], ['chat', '💬 Chat']];
+  let _active = 'connect';
+  const _btns = {};
+  TABS.forEach(([k, label]) => { const b = h('button', { class: 'btn', onclick: () => { _active = k; _paint(); _render(); } }, label); _btns[k] = b; tabbar.appendChild(b); });
+  function _paint() { TABS.forEach(([k]) => { _btns[k].className = 'btn ' + (k === _active ? 'primary' : 'ghost'); }); }
+  view.appendChild(tabbar); view.appendChild(bodyEl);
+  async function _render() {
+    bodyEl.innerHTML = '';
+    try {
+      if (_active === 'connect') await _waRenderConnect(bodyEl);
+      else if (_active === 'templates') await _waRenderTemplates(bodyEl);
+      else await _waRenderChat(bodyEl);
+    } catch (e) { bodyEl.innerHTML = ''; bodyEl.appendChild(h('div', { class: 'error-box' }, e.message)); }
+  }
+  _paint(); _render();
+};
+
+async function _waRenderConnect(host) {
+  const statusCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading status…'));
+  host.appendChild(statusCard);
+  async function refresh() {
+    statusCard.innerHTML = ''; statusCard.appendChild(h('div', { class: 'muted' }, 'Loading status…'));
+    let s;
+    try { s = await api('api_saas_wa_status'); } catch (e) { statusCard.innerHTML = ''; statusCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    if (s.fb_app_id) { _saasEnsureFbSdk(s.fb_app_id).catch(() => {}); }
+    statusCard.innerHTML = '';
+    if (s.connected) {
+      statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
+        h('span', { style: { background: '#dcfce7', color: '#166534', padding: '4px 12px', borderRadius: '999px', fontWeight: '700', fontSize: '.85rem' } }, '✓ Connected'),
+        h('div', {}, h('div', { style: { fontWeight: '700' } }, (s.display_phone_number || s.phone_number_id) + (s.verified_name ? ' · ' + s.verified_name : '')),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Phone ID ' + s.phone_number_id + ' · WABA ' + s.waba_id))));
+      statusCard.appendChild(h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn ghost', onclick: () => _saasStartEmbeddedSignup(s.fb_app_id, s.fb_config_id, refresh) }, '🔄 Reconnect / change number'),
+        h('button', { class: 'btn ghost', style: { color: '#b91c1c' }, onclick: async () => { if (!confirm('Disconnect this WhatsApp number? Tenant notifications will stop until you reconnect.')) return; try { await api('api_saas_wa_disconnect'); toast('Disconnected'); refresh(); } catch (e) { toast(e.message, 'err'); } } }, 'Disconnect')));
+      const toInp = h('input', { type: 'text', placeholder: 'Recipient (e.g. 9198xxxxxxx)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '220px' } });
+      const msgInp = h('input', { type: 'text', value: 'Test from Smart CRM Solution', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', flex: '1', minWidth: '220px' } });
+      const sendBtn = h('button', { class: 'btn primary' }, 'Send test');
+      sendBtn.onclick = async () => {
+        if (!toInp.value.trim()) return toast('Enter a recipient number', 'err');
+        sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+        try { const r = await api('api_saas_wa_sendTest', { to: toInp.value.trim(), message: msgInp.value.trim() }); toast('✅ Sent' + (r.message_id ? ' (' + r.message_id + ')' : '')); }
+        catch (e) { toast(e.message, 'err'); }
+        sendBtn.disabled = false; sendBtn.textContent = 'Send test';
+      };
+      statusCard.appendChild(h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' } },
+        h('div', { style: { fontWeight: '600', marginBottom: '6px' } }, 'Send a test message'),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '8px' } }, 'Free-form text only works if the recipient messaged you in the last 24h; otherwise use a template (Templates tab).'),
+        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, toInp, msgInp, sendBtn)));
+    } else {
+      statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+        h('span', { style: { background: '#fee2e2', color: '#991b1b', padding: '4px 12px', borderRadius: '999px', fontWeight: '700', fontSize: '.85rem' } }, 'Not connected')));
+      statusCard.appendChild(h('div', { style: { marginTop: '12px' } },
+        h('button', { class: 'btn primary', onclick: () => _saasStartEmbeddedSignup(s.fb_app_id, s.fb_config_id, refresh) }, '📲 Connect WhatsApp (Embedded Signup)')));
+      statusCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '10px' } },
+        'A Facebook popup will open — log in, pick/create your WhatsApp Business number, and finish. If the popup is blocked, allow popups and click Connect again.'));
+    }
+  }
+  await refresh();
+}
+
+async function _waRenderTemplates(host) {
+  const bar = h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } });
+  const syncBtn = h('button', { class: 'btn' }, '🔄 Sync from Meta');
+  bar.appendChild(syncBtn);
+  bar.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Pull approved templates from your WhatsApp Business account.'));
+  host.appendChild(bar);
+  const listWrap = h('div', {}); host.appendChild(listWrap);
+  const sendCard = h('div', { class: 'card', style: { marginTop: '12px' } }); host.appendChild(sendCard);
+  let templates = [];
+  function renderSendForm() {
+    sendCard.innerHTML = '';
+    sendCard.appendChild(h('h3', { style: { marginTop: 0 } }, 'Send a template'));
+    const approved = templates.filter(t => t.status === 'APPROVED');
+    const toInp = h('input', { type: 'text', placeholder: 'Recipient (e.g. 9198xxxxxxx)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '200px' } });
+    const sel = h('select', { style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— pick template —'), ...approved.map(t => h('option', { value: t.name, 'data-lang': t.language }, t.name + ' (' + t.language + ')')));
+    const varsInp = h('input', { type: 'text', placeholder: 'Variables comma-separated (optional)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', flex: '1', minWidth: '200px' } });
+    const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+    const btn = h('button', { class: 'btn primary' }, 'Send template');
+    btn.onclick = async () => {
+      if (!toInp.value.trim() || !sel.value) { out.innerHTML = '<span style="color:#dc2626">Recipient and template required</span>'; return; }
+      btn.disabled = true; btn.textContent = 'Sending…';
+      const vars = varsInp.value.trim() ? varsInp.value.split(',').map(x => x.trim()) : [];
+      const lang = sel.options[sel.selectedIndex].getAttribute('data-lang') || 'en_US';
+      try { const r = await api('api_saas_wa_sendTemplate', { phone: toInp.value.trim(), template_name: sel.value, template_language: lang, variables: vars }); out.innerHTML = '<span style="color:#15803d">✓ Sent' + (r.wa_message_id ? (' (' + r.wa_message_id + ')') : '') + '</span>'; }
+      catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
+      btn.disabled = false; btn.textContent = 'Send template';
+    };
+    sendCard.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } }, toInp, sel, varsInp, btn));
+    sendCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '6px' } }, 'Templates are required to start a new conversation (outside the 24h window).'));
+    sendCard.appendChild(out);
+  }
+  async function loadList() {
+    listWrap.innerHTML = '<div class="muted">Loading templates…</div>';
+    try { templates = await api('api_saas_wa_templates_list'); } catch (e) { listWrap.innerHTML = ''; listWrap.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    listWrap.innerHTML = '';
+    if (!templates.length) { listWrap.appendChild(h('div', { class: 'muted' }, 'No templates yet — click Sync from Meta.')); }
+    else {
+      listWrap.appendChild(h('table', { class: 'data-table', style: { width: '100%', fontSize: '.85rem' } },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Lang'), h('th', {}, 'Status'), h('th', {}, 'Category'), h('th', {}, 'Body'))),
+        h('tbody', {}, ...templates.map(t => h('tr', {}, h('td', {}, h('code', {}, t.name)), h('td', {}, t.language || ''), h('td', {}, h('span', { class: 'tag ' + (t.status === 'APPROVED' ? 'ok' : 'warn') }, t.status || '')), h('td', { class: 'muted' }, t.category || ''), h('td', { class: 'muted', style: { maxWidth: '320px' } }, (t.body_text || '').slice(0, 120)))))));
+    }
+    renderSendForm();
+  }
+  syncBtn.onclick = async () => { syncBtn.disabled = true; syncBtn.textContent = 'Syncing…'; try { const r = await api('api_saas_wa_templates_sync'); toast('Synced ' + ((r && (r.synced != null ? r.synced : r.count)) || '') + ' templates'); await loadList(); } catch (e) { toast(e.message, 'err'); } syncBtn.disabled = false; syncBtn.textContent = '🔄 Sync from Meta'; };
+  await loadList();
+}
+
+async function _waRenderChat(host) {
+  const wrap = h('div', { style: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: '12px', height: '70vh' } });
+  const left = h('div', { class: 'card', style: { overflowY: 'auto', padding: '6px' } });
+  const right = h('div', { class: 'card', style: { display: 'flex', flexDirection: 'column', padding: '0', overflow: 'hidden' } });
+  wrap.appendChild(left); wrap.appendChild(right); host.appendChild(wrap);
+  let threads = [], activePhone = null;
+  async function loadMessages(phone) {
+    right.innerHTML = '<div class="muted" style="padding:12px">Loading…</div>';
+    let msgs = [];
+    try { const r = await api('api_saas_wa_chat_messages', phone); msgs = Array.isArray(r) ? r : ((r && r.messages) || []); } catch (e) { right.innerHTML = ''; right.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    right.innerHTML = '';
+    const head = h('div', { style: { padding: '10px 12px', borderBottom: '1px solid #e2e8f0', fontWeight: '600' } }, phone);
+    const pane = h('div', { style: { flex: '1', overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '6px', background: '#f8fafc' } });
+    msgs.forEach(m => { const outb = (m.direction === 'out' || m.direction === 'outbound'); pane.appendChild(h('div', { style: { alignSelf: outb ? 'flex-end' : 'flex-start', background: outb ? '#dcf8c6' : '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '6px 10px', maxWidth: '75%', fontSize: '.85rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, m.body || m.text || '[' + (m.message_type || 'media') + ']')); });
+    const inp = h('input', { type: 'text', placeholder: 'Type a message…', style: { flex: '1', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+    const sbtn = h('button', { class: 'btn primary' }, 'Send');
+    const sendIt = async () => { if (!inp.value.trim()) return; const txt = inp.value.trim(); inp.value = ''; try { await api('api_saas_wa_chat_send', { phone: phone, text: txt }); loadMessages(phone); } catch (e) { toast(e.message, 'err'); inp.value = txt; } };
+    sbtn.onclick = sendIt; inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') sendIt(); });
+    right.appendChild(head); right.appendChild(pane);
+    right.appendChild(h('div', { style: { display: 'flex', gap: '8px', padding: '10px 12px', borderTop: '1px solid #e2e8f0' } }, inp, sbtn));
+    pane.scrollTop = pane.scrollHeight;
+  }
+  async function loadThreads() {
+    left.innerHTML = '<div class="muted" style="padding:8px">Loading…</div>';
+    try { const r = await api('api_saas_wa_chat_threads', { limit: 50 }); threads = Array.isArray(r) ? r : ((r && r.threads) || []); } catch (e) { left.innerHTML = ''; left.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    left.innerHTML = '';
+    if (!threads.length) { left.appendChild(h('div', { class: 'muted', style: { padding: '8px' } }, 'No conversations yet.')); return; }
+    threads.forEach(t => {
+      const phone = t.phone || t.from_number || t.number || t.counterpart || '';
+      const row = h('div', { style: { padding: '8px', borderRadius: '8px', cursor: 'pointer', background: activePhone === phone ? '#eef2ff' : 'transparent' }, onclick: () => { activePhone = phone; loadThreads(); loadMessages(phone); } },
+        h('div', { style: { fontWeight: '600', fontSize: '.85rem' } }, t.name || t.lead_name || phone),
+        h('div', { class: 'muted', style: { fontSize: '.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, (t.last_message || t.body || '')));
+      left.appendChild(row);
+    });
+  }
+  right.appendChild(h('div', { class: 'muted', style: { padding: '12px' } }, 'Select a conversation on the left. (Free-text replies work within 24h of the contact\'s last message; otherwise send a template.)'));
+  await loadThreads();
+}
+
+
+/* ==========================================================================
+ * SAAS_EMAIL_v1 — invoice send + free-form tenant email (from Invoices list)
+ * ========================================================================== */
+function _openInvoiceSendModal(inv) {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '460px' } });
+  m.appendChild(card); document.body.appendChild(m);
+  const emailChk = h('input', { type: 'checkbox', checked: 'checked' });
+  const waChk = h('input', { type: 'checkbox' });
+  const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+  const send = h('button', { class: 'btn primary' }, 'Send');
+  send.onclick = async () => {
+    if (!emailChk.checked && !waChk.checked) { out.innerHTML = '<span style="color:#dc2626">Pick at least one channel</span>'; return; }
+    send.disabled = true; send.textContent = 'Sending…';
+    try {
+      const r = await api('api_saas_invoices_send', { id: inv.id, email: emailChk.checked, whatsapp: waChk.checked });
+      out.innerHTML = '<span style="color:#15803d">Sent · email=' + ((r.sent && r.sent.email) || 'skip') + ' · whatsapp=' + ((r.sent && r.sent.whatsapp) || 'skip') + '</span>';
+    } catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
+    send.disabled = false; send.textContent = 'Send';
+  };
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '📧 Send invoice ' + (inv.number || '')));
+  card.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '8px' } },
+    'To ' + (inv.org_name || 'tenant') + (inv.contact_email ? (' · ' + inv.contact_email) : '') + (inv.total_inr != null ? (' · ' + fmtRupees(inv.total_inr)) : '')));
+  card.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '6px 0' } }, emailChk, h('span', {}, 'Email')));
+  card.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '6px 0' } }, waChk, h('span', {}, 'WhatsApp')));
+  card.appendChild(out);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), send));
+}
+
+function _openTenantEmailModal(inv) {
+  inv = inv || {};
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '640px' } });
+  m.appendChild(card); document.body.appendChild(m);
+  const subj = h('input', { type: 'text', value: inv.number ? ('Regarding invoice ' + inv.number) : '', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
+  const fmtSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+    h('option', { value: 'plain' }, 'Plain text'),
+    h('option', { value: 'html' }, 'HTML template (paste HTML)'));
+  const body = h('textarea', { rows: '10', placeholder: 'Type your message…', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontFamily: 'inherit' } });
+  const previewWrap = h('div', { style: { display: 'none', border: '1px solid #e2e8f0', borderRadius: '6px', marginTop: '8px', overflow: 'hidden' } });
+  const previewFrame = h('iframe', { style: { width: '100%', height: '320px', border: 'none', background: '#fff' } });
+  previewWrap.appendChild(previewFrame);
+  const previewBtn = h('button', { class: 'btn ghost', style: { display: 'none', padding: '.3rem .6rem', fontSize: '.8rem' } }, '👁 Preview');
+  let previewing = false;
+  previewBtn.onclick = () => {
+    previewing = !previewing;
+    if (previewing) { try { previewFrame.srcdoc = body.value; } catch (_) {} previewWrap.style.display = 'block'; body.style.display = 'none'; previewBtn.textContent = '✏ Edit'; }
+    else { previewWrap.style.display = 'none'; body.style.display = 'block'; previewBtn.textContent = '👁 Preview'; }
+  };
+  fmtSel.onchange = () => {
+    const isHtml = fmtSel.value === 'html';
+    body.placeholder = isHtml ? 'Paste your HTML template here…' : 'Type your message…';
+    body.style.fontFamily = isHtml ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit';
+    previewBtn.style.display = isHtml ? '' : 'none';
+    if (!isHtml && previewing) { previewing = false; previewWrap.style.display = 'none'; body.style.display = 'block'; previewBtn.textContent = '👁 Preview'; }
+  };
+  const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+  const send = h('button', { class: 'btn primary' }, 'Send email');
+  send.onclick = async () => {
+    if (!subj.value.trim() || !body.value.trim()) { out.innerHTML = '<span style="color:#dc2626">Subject and message required</span>'; return; }
+    send.disabled = true; send.textContent = 'Sending…';
+    try {
+      const r = await api('api_saas_email_send', { tenant_id: inv.tenant_id, to: inv.contact_email || undefined, subject: subj.value.trim(), body: body.value.trim(), is_html: fmtSel.value === 'html' });
+      out.innerHTML = '<span style="color:#15803d">✓ Sent to ' + r.to + (fmtSel.value === 'html' ? ' (HTML)' : '') + '</span>';
+    } catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; }
+    send.disabled = false; send.textContent = 'Send email';
+  };
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '✉ Email ' + (inv.org_name || 'tenant')));
+  card.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '8px' } }, 'Sends from your platform email to the tenant\'s contact email' + (inv.contact_email ? (' (' + inv.contact_email + ')') : '') + '.'));
+  card.appendChild(h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600' } }, 'Subject'));
+  card.appendChild(subj);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', margin: '8px 0 4px' } },
+    h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600' } }, 'Format'), fmtSel,
+    h('span', { style: { flex: '1' } }), previewBtn));
+  card.appendChild(body);
+  card.appendChild(previewWrap);
+  card.appendChild(out);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), send));
+}
+
+
+/* ==========================================================================
+ * SAAS_TXN_v1 — Transactions module + tenant hard-delete button
+ * ========================================================================== */
+function _welcomeBadge(t) {
+  const st = String(t.welcome_email_status || '');
+  if (st === 'sent') return h('span', { style:{ color:'#059669', fontWeight:'700', fontSize:'.72rem', whiteSpace:'nowrap' }, title:'Sent ' + (t.welcome_email_sent_at ? fmtDateTime(t.welcome_email_sent_at) : '') }, '✅ Sent');
+  if (st === 'failed') return h('span', { style:{ color:'#dc2626', fontWeight:'700', fontSize:'.72rem', whiteSpace:'nowrap' }, title:'Failed: ' + (t.welcome_email_error || '') }, '⚠ Failed');
+  return h('span', { style:{ color:'#94a3b8', fontSize:'.72rem', whiteSpace:'nowrap' } }, '✉ Not sent');
+}
+async function _sendWelcomeEmail(t) {
+  const resend = String(t.welcome_email_status || '') === 'sent';
+  if (!confirm((resend ? 'Resend' : 'Send') + ' welcome email to ' + (t.contact_email || 'the tenant admin') + '?')) return;
+  try {
+    const r = await api('api_saas_tenant_sendWelcome', { tenantId: t.id });
+    toast('Welcome email sent to ' + r.sent_to + (r.password_reset ? ' (a new password was generated — no password was on file)' : ''), 'ok');
+    navigate('tenants');
+  } catch (e) { toast(e.message, 'err'); }
+}
+function _welcomeBtn(t) {
+  const st = String(t.welcome_email_status || '');
+  const label = st === 'sent' ? '✉ Resend' : (st === 'failed' ? '✉ Retry' : '✉ Welcome');
+  const style = st === 'failed' ? { background:'#fee2e2', borderColor:'#ef4444', color:'#b91c1c' } : {};
+  return h('button', { class:'btn ghost xs', style, onclick:()=>_sendWelcomeEmail(t), title:'Send / resend welcome email (resets admin password)' }, label);
+}
+function _tenantDeleteBtn(t) {
+  if (!t || t.status === 'deleted') return null;
+  return h('button', { class: 'btn ghost xs', style: { color: '#b91c1c', borderColor: '#fca5a5' }, title: 'Permanently delete + drop database',
+    onclick: async () => {
+      if (!confirm('Permanently DELETE "' + (t.org_name || t.slug) + '" and DROP its database?\n\nThis cannot be undone.')) return;
+      try { const r = await api('api_saas_tenants_delete', t.id); toast(r.db_dropped ? 'Deleted (database dropped)' : ('Deleted' + (r.db_error ? (' — DB drop failed: ' + r.db_error) : '')), 'ok'); navigate('tenants'); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '🗑 Delete');
+}
+
+VIEWS.transactions = async (view) => {
+  view.appendChild(h('h1', {}, '💳 Transactions'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } }, 'All tenant payments — auto-recorded from signups, plus manual entries. Filter by type/GST and search.'));
+  const _inr = v => '₹' + Number(v || 0).toLocaleString('en-IN');
+  const state = { page: 1, pageSize: 25, type: '', gst_mode: '', q: '' };
+  let tenants = [];
+  try { tenants = await api('api_saas_tenants_list', {}); } catch (_) {}
+
+  const sumHost = h('div', {}); view.appendChild(sumHost);
+  const typeSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, 'All types'), h('option', { value: 'auto' }, 'Auto (signup)'), h('option', { value: 'manual' }, 'Manual'));
+  const gstSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, 'GST + No GST'), h('option', { value: 'gst' }, 'With GST'), h('option', { value: 'no_gst' }, 'No GST'));
+  const qInp = h('input', { type: 'search', placeholder: 'Search tenant / txn id…', style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '180px' } });
+  const addBtn = h('button', { class: 'btn primary' }, '+ Manual entry');
+  addBtn.onclick = () => _openTxnCreateModal(tenants, reload);
+  const backfillBtn = h('button', { class: 'btn', title: 'Create transactions from this month\'s PAID invoices (skips ones already recorded)' }, '↺ Backfill this month');
+  backfillBtn.onclick = async () => {
+    if (!confirm('Backfill transactions from this month\'s paid invoices (with GST)? Already-recorded invoices are skipped.')) return;
+    backfillBtn.disabled = true; backfillBtn.textContent = 'Backfilling…';
+    try {
+      const r = await api('api_saas_txn_backfill', {});
+      let msg = 'Inserted ' + r.inserted + ' transaction(s). ';
+      msg += r.tenants_in_range + ' tenant(s) this month';
+      if (r.already_had_txn) msg += ', ' + r.already_had_txn + ' already had one';
+      if (r.demo_skipped) msg += ', ' + r.demo_skipped + ' demo skipped';
+      if (r.deleted_skipped) msg += ', ' + r.deleted_skipped + ' deleted skipped';
+      if (r.failed) msg += '. FAILED ' + r.failed + ': ' + (r.errors || []).join(' | ');
+      toast(msg, r.failed ? 'err' : 'ok');
+      console.log('[txn backfill]', r);
+      reload();
+    }
+    catch (e) { toast(e.message, 'err'); }
+    backfillBtn.disabled = false; backfillBtn.textContent = '↺ Backfill this month';
+  };
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 12px' } }, typeSel, gstSel, qInp, h('span', { style: { flex: '1' } }), backfillBtn, addBtn));
+  const tblHost = h('div', {}); view.appendChild(tblHost);
+  const pager = h('div', {}); view.appendChild(pager);
+  typeSel.onchange = () => { state.type = typeSel.value; state.page = 1; reload(); };
+  gstSel.onchange = () => { state.gst_mode = gstSel.value; state.page = 1; reload(); };
+  qInp.oninput = () => { state.q = qInp.value; state.page = 1; reload(); };
+
+  async function reload() {
+    tblHost.innerHTML = '<div class="muted">Loading…</div>';
+    let d;
+    try { d = await api('api_saas_txn_list', { type: state.type || null, gst_mode: state.gst_mode || null, q: state.q || null, page: state.page, pageSize: state.pageSize }); }
+    catch (e) { tblHost.innerHTML = ''; tblHost.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    const su = d.summary || {};
+    const kpi = (l, v, c) => h('div', { style: { flex: '1', minWidth: '130px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 14px' } }, h('div', { style: { fontSize: '1.3rem', fontWeight: '800', color: c || '#0f172a' } }, v), h('div', { style: { fontSize: '.72rem', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' } }, l));
+    sumHost.innerHTML = '';
+    sumHost.appendChild(h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' } },
+      kpi('Total collected', _inr(su.total), '#16a34a'), kpi('GST', _inr(su.gst), '#0891b2'), kpi('Sale (excl GST)', _inr(su.sale)),
+      kpi('Transactions', String(su.count)), kpi('Auto', String(su.auto), '#4f46e5'), kpi('Manual', String(su.manual), '#7c3aed')));
+    tblHost.innerHTML = '';
+    const rows = d.rows || [];
+    if (!rows.length) { tblHost.appendChild(h('div', { class: 'empty' }, 'No transactions match.')); pager.innerHTML = ''; return; }
+    const th = t => h('th', { style: { textAlign: 'left', padding: '6px 8px', fontSize: '.7rem', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' } }, t);
+    const td = (k, st) => h('td', { style: Object.assign({ padding: '6px 8px', fontSize: '.82rem', borderBottom: '1px solid #f1f5f9' }, st || {}) }, k);
+    tblHost.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: '820px' } },
+      h('thead', {}, h('tr', {}, th('Date'), th('Tenant'), th('Type'), th('Amount'), th('Sale'), th('GST'), th('Mode'), th('Txn ID'), th('Remarks'), th(''))),
+      h('tbody', {}, ...rows.map(r => h('tr', {},
+        td(fmtDate(r.txn_date || r.created_at), { whiteSpace: 'nowrap' }),
+        td(r.org_name || ('#' + (r.tenant_id || '—'))),
+        td(h('span', { class: 'tag ' + (r.type === 'auto' ? 'ok' : 'warn') }, r.type)),
+        td(_inr(r.amount_inr), { fontWeight: '700' }),
+        td(_inr(r.sale_amount_inr)),
+        td(_inr(r.gst_amount_inr), { color: '#0891b2' }),
+        td(r.transaction_mode || '—'),
+        td(r.transaction_id || '—'),
+        td(r.notes || '—', { color: '#475569', maxWidth: '220px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+        td(h('div', { style: { display: 'flex', gap: '10px' } },
+          h('span', { style: { cursor: 'pointer', color: '#4f46e5' }, title: 'Edit / add remarks', onclick: () => _openTxnCreateModal(tenants, reload, r) }, '✏️'),
+          r.type === 'manual' ? h('span', { style: { cursor: 'pointer', color: '#dc2626' }, title: 'Delete', onclick: async () => { if (!confirm('Delete this manual transaction?')) return; await api('api_saas_txn_delete', r.id); reload(); } }, '🗑') : null))
+      )))
+    )));
+    pager.innerHTML = '';
+    const totalPages = Math.max(1, Math.ceil((d.total || 0) / state.pageSize));
+    pager.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '10px' } },
+      h('button', { class: 'btn ghost xs', onclick: () => { if (state.page > 1) { state.page--; reload(); } } }, '‹ Prev'),
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Page ' + state.page + ' of ' + totalPages + ' · ' + (d.total || 0) + ' total'),
+      h('button', { class: 'btn ghost xs', onclick: () => { if (state.page < totalPages) { state.page++; reload(); } } }, 'Next ›')));
+  }
+  reload();
+};
+
+function _openTxnCreateModal(tenants, onDone, existing) {
+  existing = existing || null;
+  const m = h('div', { class: 'modal-bd' }); const card = h('div', { class: 'modal', style: { maxWidth: '480px' } }); m.appendChild(card); document.body.appendChild(m);
+  const _inr = v => '₹' + Number(v || 0).toLocaleString('en-IN');
+  const tenSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— choose tenant —'), ...(tenants || []).map(t => h('option', { value: String(t.id) }, (t.org_name || t.slug))));
+  const gstSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: 'no_gst' }, 'No GST'), h('option', { value: 'gst' }, 'With GST (18% included)'));
+  const amtInp = h('input', { type: 'number', min: '0', step: '0.01', placeholder: 'Amount ₹', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const modeSel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— mode —'), ...['UPI', 'Bank transfer', 'Card', 'Cash', 'Cheque', 'Gateway', 'Other'].map(x => h('option', { value: x.toLowerCase().replace(' ', '_') }, x)));
+  const idInp = h('input', { type: 'text', placeholder: 'Transaction ID / ref (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const dateInp = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10), style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const notesInp = h('textarea', { rows: '2', placeholder: 'Remarks / notes (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontFamily: 'inherit' } });
+  const split = h('div', { style: { fontSize: '.82rem', color: '#334155', marginTop: '4px' } });
+  const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
+  function calc() { const t = Number(amtInp.value); if (!isFinite(t) || t <= 0) { split.textContent = ''; return; } if (gstSel.value === 'gst') { const s = Math.round((t / 1.18) * 100) / 100, g = Math.round((t - s) * 100) / 100; split.innerHTML = 'Sale: <b>' + _inr(s) + '</b> · GST 18%: <b style="color:#0891b2">' + _inr(g) + '</b>'; } else split.innerHTML = 'No GST — full ' + _inr(t) + ' is the sale amount.'; }
+  gstSel.onchange = calc; amtInp.oninput = calc;
+  if (existing) {
+    tenSel.value = String(existing.tenant_id || '');
+    gstSel.value = (existing.gst_mode === 'gst' || existing.gst_mode === 'with_gst') ? 'gst' : 'no_gst';
+    amtInp.value = existing.amount_inr != null ? existing.amount_inr : '';
+    modeSel.value = existing.transaction_mode || '';
+    idInp.value = existing.transaction_id || '';
+    if (existing.txn_date) { try { dateInp.value = String(existing.txn_date).slice(0, 10); } catch (_) {} }
+    notesInp.value = existing.notes || '';
+  }
+  calc();
+  const save = h('button', { class: 'btn primary' }, existing ? 'Update transaction' : 'Save transaction');
+  save.onclick = async () => {
+    if (!tenSel.value) { out.innerHTML = '<span style="color:#dc2626">Choose a tenant</span>'; return; }
+    if (!(Number(amtInp.value) > 0)) { out.innerHTML = '<span style="color:#dc2626">Enter a valid amount</span>'; return; }
+    save.disabled = true; save.textContent = 'Saving…';
+    const body = { tenant_id: Number(tenSel.value), gst_mode: gstSel.value, amount_inr: Number(amtInp.value), transaction_mode: modeSel.value || null, transaction_id: idInp.value.trim() || null, txn_date: dateInp.value || null, notes: notesInp.value.trim() || null };
+    try {
+      if (existing) { body.id = existing.id; await api('api_saas_txn_update', body); }
+      else { await api('api_saas_txn_create', body); }
+      m.remove(); if (onDone) onDone();
+    }
+    catch (e) { out.innerHTML = '<span style="color:#dc2626">' + e.message + '</span>'; save.disabled = false; save.textContent = existing ? 'Update transaction' : 'Save transaction'; }
+  };
+  const fl = (lbl, el) => h('div', { style: { marginBottom: '8px' } }, h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600', display: 'block', marginBottom: '2px' } }, lbl), el);
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, existing ? '✏️ Edit transaction' : '+ Manual transaction'));
+  card.appendChild(fl('Tenant *', tenSel)); card.appendChild(fl('GST', gstSel)); card.appendChild(fl('Amount (₹) *', amtInp)); card.appendChild(split);
+  card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(fl('Remarks', notesInp)); card.appendChild(out);
+  card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), save));
 }
