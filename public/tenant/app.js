@@ -29806,7 +29806,7 @@ async function adminIntegrations() {
           class: 'btn',
           style: { marginLeft: '.3rem', background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
           title: 'Map incoming JSON keys to CRM lead columns / custom fields',
-          onclick: () => openSourceMappingModal(s.id, s.label)
+          onclick: () => openSourceMappingModal(s.id, s.label, apiKey)
         }, '🗺 Map fields')
       ));
     });
@@ -29894,7 +29894,7 @@ async function adminIntegrations() {
         class: 'btn',
         style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
         title: 'Map incoming JSON keys to CRM lead columns / custom fields',
-        onclick: () => openSourceMappingModal('make', 'Make.com')
+        onclick: () => openSourceMappingModal('make', 'Make.com', apiKey)
       }, '🗺 Map fields'),
       testStatus
     ));
@@ -45464,7 +45464,7 @@ async function _renderTourStep() {
 // ============================================================
 // 🗺 Source field mapping modal — per-source JSON-key -> CRM-field
 // ============================================================
-async function openSourceMappingModal(sourceId, sourceLabel) {
+async function openSourceMappingModal(sourceId, sourceLabel, apiKey) {
   // WMS_v1 — Webhook Mapping Studio. 3 tabs: Field Mapping, Value Rules,
   // Live Payloads. Plus a 🧪 Test button that runs the saved config
   // against a real recent webhook payload.
@@ -45487,7 +45487,7 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   // Tab strip
   const tabs = h('div', { style: { display: 'flex', gap: '.4rem', borderBottom: '1px solid #e2e8f0',
     marginBottom: '.75rem', flexWrap: 'wrap' } });
-  const panes = { map: h('div', {}), rules: h('div', {}), payloads: h('div', {}) };
+  const panes = { settings: h('div', {}), map: h('div', {}), rules: h('div', {}), payloads: h('div', {}) };
   Object.values(panes).forEach(p => { p.style.display = 'none'; });
   const _tabBtn = (id, label) => {
     const b = h('button', { type: 'button', style: {
@@ -45498,6 +45498,7 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
     b.dataset.tab = id;
     return b;
   };
+  tabs.appendChild(_tabBtn('settings', '⚙️ Settings'));
   tabs.appendChild(_tabBtn('map', '📥 Field Mapping'));
   tabs.appendChild(_tabBtn('rules', '🔀 Value Rules'));
   tabs.appendChild(_tabBtn('payloads', '👁 Live Payloads'));
@@ -45511,6 +45512,53 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
       b.style.color = active ? '#4f46e5' : '#64748b';
     });
   }
+
+  // ============================================================
+  // TAB 0: ⚙️ Settings — webhook URL + API key the external service
+  // (Housing.com, TradeIndia, Make, website form, etc.) posts to. This is
+  // the "link + api key update from <source>" screen: paste this URL + key
+  // into the partner portal. Auth works EITHER as the /.../<key> path segment
+  // OR as an `X-API-Key: <key>` request header (Housing.com uses the header).
+  // ============================================================
+  (function buildSettingsPane() {
+    const key = String(apiKey || (window.CRM && CRM.brand && CRM.brand.WEBSITE_API_KEY) || data.api_key || '').trim();
+    const base = location.origin + '/hook/leadsource/' + encodeURIComponent(sourceId);
+    const fullUrl = key ? (base + '/' + encodeURIComponent(key)) : base;
+    const pane = panes.settings;
+    pane.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+      'Give this endpoint to ' + sourceLabel + '. Leads posted here land straight in this CRM. ' +
+      'Authenticate with the key in the URL path (shown) OR an ' ,
+      h('code', {}, 'X-API-Key'), ' request header — either works.'));
+
+    const _row = (label, value, hint) => {
+      const inp = h('input', { readonly: 'readonly', value: value,
+        style: { width: '100%', fontFamily: 'monospace', fontSize: '.82rem', background: '#f8fafc' },
+        onclick: (e) => e.target.select() });
+      const copyBtn = h('button', { class: 'btn sm', type: 'button', onclick: () => {
+        navigator.clipboard.writeText(value).then(() => toast('Copied ' + label, 'ok'),
+          () => { inp.select(); document.execCommand('copy'); toast('Copied ' + label, 'ok'); });
+      } }, '📋 Copy');
+      return h('div', { style: { marginBottom: '.8rem' } },
+        h('label', { style: { display: 'block', fontWeight: '600', fontSize: '.82rem', marginBottom: '.25rem', color: '#334155' } }, label),
+        h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } }, inp, copyBtn),
+        hint ? h('div', { class: 'muted', style: { fontSize: '.76rem', marginTop: '.2rem' } }, hint) : null
+      );
+    };
+
+    pane.appendChild(_row('Webhook URL (POST)', fullUrl,
+      'HTTP POST a JSON body of leads to this URL. Batch payloads like {"leads":[ {…}, {…} ]} are supported.'));
+    pane.appendChild(_row('API Key', key || '(no key set — save one in Website API settings first)',
+      'Send as header  X-API-Key: <key>  if your partner cannot put the key in the URL.'));
+
+    const curl = 'curl -X POST \'' + base + '\' \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-Key: ' + (key || 'YOUR_API_KEY') + '" \\\n  -d \'{"leads":[{"name":"Test Lead","phone":"9876543210","email":"test@example.com"}]}\'';
+    const det = h('details', { style: { marginTop: '.4rem' } });
+    det.appendChild(h('summary', { class: 'muted', style: { cursor: 'pointer', fontSize: '.82rem' } }, '🧪 Sample cURL (header auth)'));
+    det.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.6rem', borderRadius: '6px', fontSize: '.76rem', overflow: 'auto', whiteSpace: 'pre-wrap' } }, curl));
+    pane.appendChild(det);
+
+    pane.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.7rem', paddingTop: '.6rem', borderTop: '1px dashed #e2e8f0' } },
+      'Next: use the 📥 Field Mapping tab to map the partner\'s JSON keys to CRM fields, and the 👁 Live Payloads tab to inspect exactly what they sent.'));
+  })();
 
   // ============================================================
   // TAB 1: 📥 Field Mapping (existing behaviour, refactored)
@@ -45910,7 +45958,7 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   ));
 
   // Default to first tab
-  _showTab('map');
+  _showTab('settings');
 }
 
 // Push diagnostic — paste 'await window.checkPushDiag()' in the Chrome

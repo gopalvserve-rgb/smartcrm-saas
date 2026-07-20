@@ -1268,16 +1268,45 @@ function _adaptLeadSourcePayload(source, body) {
 
   // Ã¢ÂÂÃ¢ÂÂ Housing.com Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'housing' || norm === 'housing.com') {
-    const r = body.lead || body;
-    return [{
-      name:       pick(r, ['name', 'fullName', 'contactName']),
-      phone:      pick(r, ['phone', 'mobile', 'contactNumber']),
-      email:      pick(r, ['email']),
-      city:       pick(r, ['city', 'location']),
-      notes:      pick(r, ['message', 'requirement']),
-      source:     'Housing.com',
-      source_ref: pick(r, ['id', 'leadId'])
-    }];
+    // HOUSING_BATCH_v1 — Housing.com posts a BATCH: { leads: [ {...}, ... ] }.
+    // The old adapter read body.lead (singular) so a batch produced one empty
+    // lead. Unwrap leads[] (also tolerate a bare array or a single object) and
+    // map every documented field: name, phone, email, property, propertyType,
+    // budget, location, requirements, message. Extras that have no dedicated
+    // lead column are folded into notes + saved as custom fields so nothing is
+    // lost (the tenant can refine precise mapping in the Mapping tab).
+    const arr = Array.isArray(body.leads) ? body.leads
+              : Array.isArray(body)       ? body
+              : (body.lead ? [body.lead] : [body]);
+    return arr.map(r => {
+      const property     = pick(r, ['property', 'projectName', 'project']);
+      const propertyType = pick(r, ['propertyType', 'property_type', 'type']);
+      const budget       = pick(r, ['budget']);
+      const requirements = pick(r, ['requirements', 'requirement']);
+      const message      = pick(r, ['message', 'enquiry']);
+      const noteParts = [];
+      if (property)     noteParts.push('Property: ' + property);
+      if (propertyType) noteParts.push('Type: ' + propertyType);
+      if (budget)       noteParts.push('Budget: ' + budget);
+      if (requirements) noteParts.push(requirements);
+      if (message)      noteParts.push(message);
+      const custom = {};
+      if (property)     custom.property = property;
+      if (propertyType) custom.property_type = propertyType;
+      if (budget)       custom.budget = budget;
+      if (requirements) custom.requirements = requirements;
+      return {
+        name:       pick(r, ['name', 'fullName', 'contactName']),
+        phone:      pick(r, ['phone', 'mobile', 'contactNumber']),
+        email:      pick(r, ['email']),
+        city:       pick(r, ['location', 'city']),
+        company:    property,
+        notes:      noteParts.join('\n'),
+        source:     'Housing.com',
+        source_ref: pick(r, ['id', 'leadId', 'lead_id', 'queryId']),
+        custom_fields: Object.keys(custom).length ? custom : undefined
+      };
+    });
   }
 
   // Ã¢ÂÂÃ¢ÂÂ NoBroker Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
