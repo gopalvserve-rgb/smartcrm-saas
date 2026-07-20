@@ -31,9 +31,13 @@ async function api_automations_save(token, payload) {
     subject: a.subject || '',
     template: a.template || '',
     header_media_url: a.header_media_url || '',   // AUTOMATION_MEDIA_HEADER_v1
+    // AUTOMATION_REASSIGN_ANY_v1 — optional reassign target ('users:1,2,3'),
+    // independent of channel, so an email/whatsapp rule can ALSO auto-assign.
+    reassign_to: String(a.reassign_to || '').trim(),
     is_active: a.is_active == null ? 1 : (a.is_active ? 1 : 0)
   };
   try { await db.query(`ALTER TABLE automations ADD COLUMN IF NOT EXISTS header_media_url TEXT`); } catch (_) {}
+  try { await db.query(`ALTER TABLE automations ADD COLUMN IF NOT EXISTS reassign_to TEXT`); } catch (_) {}
   if (a.id) { await db.update('automations', a.id, row); return { id: Number(a.id) }; }
   row.created_at = db.nowIso();
   const id = await db.insert('automations', row);

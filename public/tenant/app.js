@@ -31936,13 +31936,16 @@ function openAutomationModal(existing) {
         // the automation row, formatted as 'users:1,2,3' (or 'user:1' for
         // single). The backend _reassignLead() parses that format.
         h('div', { class: 'f-row full', id: 'auto-reassign-row', hidden: true },
-          h('label', {}, 'Reassign to (tick everyone — round-robin cycles through them in order, one lead each turn)'),
+          h('label', {}, 'Also reassign lead to (optional — works with any channel; round-robin cycles through those ticked, one lead each turn)'),
           h('div', { id: 'auto-reassign-picker', class: 'card',
             style: { padding: '.5rem .75rem', maxHeight: '220px', overflowY: 'auto',
                      display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.25rem' }
           }, ...(CRM.cache.users || []).map(u => {
             const preselected = (function () {
-              const raw = String(a.recipient || '').trim();
+              // AUTOMATION_REASSIGN_ANY_v1 — prefer the dedicated reassign_to
+              // field; fall back to recipient for legacy reassign_lead rows.
+              let raw = String(a.reassign_to || '').trim();
+              if (!raw) { const rc = String(a.recipient || '').trim(); if (rc.startsWith('user:') || rc.startsWith('users:')) raw = rc; }
               if (raw.startsWith('users:')) {
                 return raw.slice(6).split(',').map(x => Number(x.trim())).includes(Number(u.id));
               }
@@ -32043,11 +32046,15 @@ function openAutomationModal(existing) {
           // AUTOMATION_REASSIGN_v1 — collect ticked target users and stuff them
           // into the recipient field as 'users:1,2,3'. The backend
           // _reassignLead() parses this exact format.
+          // AUTOMATION_REASSIGN_ANY_v1 — the ticked users are stored in a
+          // dedicated `reassign_to` field so they persist and apply on ANY
+          // channel (email/whatsapp rules can also auto-assign the owner).
           let recipientFinal = recipient;
+          const reassignIds = [...document.querySelectorAll('.reassign-target:checked')].map(c => c.value);
+          const reassignTo = reassignIds.length ? ((reassignIds.length === 1 ? 'user:' : 'users:') + reassignIds.join(',')) : '';
           if (channel === 'reassign_lead') {
-            const ids = [...document.querySelectorAll('.reassign-target:checked')].map(c => c.value);
-            if (!ids.length) { toast('Pick at least one user to reassign to', 'err'); return; }
-            recipientFinal = (ids.length === 1 ? 'user:' : 'users:') + ids.join(',');
+            if (!reassignIds.length) { toast('Pick at least one user to reassign to', 'err'); return; }
+            recipientFinal = reassignTo;
           }
           // Friendlier client-side validation
           const missing = [];
@@ -32078,7 +32085,7 @@ function openAutomationModal(existing) {
             return;
           }
           const payload = { id: a.id, name, event: eventKey, channel,
-            recipient: recipientFinal, condition, subject, template,
+            recipient: recipientFinal, reassign_to: reassignTo, condition, subject, template,
             header_media_url: headerMediaUrl, is_active: 1 };
           try { await api('api_automations_save', payload); toast('Saved'); modal.remove(); showAdminTab('automations'); }
           catch (e) { toast(e.message, 'err'); }
@@ -32131,7 +32138,9 @@ function toggleChannelUI(channel) {
   // Email channel uses the free-form body textarea; WhatsApp doesn't.
   // Reassign channel doesn't need a message body either.
   if (tplBody) tplBody.hidden = (channel === 'whatsapp' || channel === 'reassign_lead');
-  if (reass)   reass.hidden   = channel !== 'reassign_lead';
+  // AUTOMATION_REASSIGN_ANY_v1 — the reassign picker is an optional add-on on
+  // every channel now (email/whatsapp can also auto-assign), so keep it visible.
+  if (reass)   reass.hidden   = false;
   // Hide the "Send to" select for the reassign channel — the target is
   // picked from the multi-user list below instead.
   if (sendTo && sendTo.closest('.f-row')) sendTo.closest('.f-row').hidden = (channel === 'reassign_lead');

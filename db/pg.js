@@ -277,7 +277,7 @@ const SCHEMA = {
   automations: {
     columns: ['name', 'event', 'condition', 'channel', 'recipient',
               'subject', 'template', 'is_active', 'created_at',
-              'header_media_url', 'last_picked_user_id'],
+              'header_media_url', 'last_picked_user_id', 'reassign_to'],
     json: []
   },
   automation_log: {

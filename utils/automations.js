@@ -70,6 +70,16 @@ async function fire(event, ctx) {
         else                               result = { ok: false, error: 'unknown channel: ' + a.channel };
 
         await _log(a, ctx, result.ok ? 'sent' : 'failed', result.detail || result.error || '');
+
+        // AUTOMATION_REASSIGN_ANY_v1 — if a reassign target is set AND this
+        // wasn't already the dedicated reassign channel, ALSO reassign the lead
+        // (so one email/whatsapp rule can notify AND auto-assign the owner).
+        if (a.channel !== 'reassign_lead' && String(a.reassign_to || '').trim()) {
+          try {
+            const rr = await _reassignLead(a, ctx, a.reassign_to);
+            await _log(a, ctx, rr.ok ? 'sent' : 'failed', 'reassign → ' + (rr.detail || rr.error || ''));
+          } catch (e) { await _log(a, ctx, 'failed', 'reassign → ' + e.message); }
+        }
       } catch (e) {
         await _log(a, ctx, 'failed', e.message);
       }
@@ -603,7 +613,7 @@ async function _log(a, ctx, status, detail) {
  * Returns { ok, detail } so the existing _log() path works unchanged.
  * ============================================================ */
 const _reassignDebounce = new Map();
-async function _reassignLead(a, ctx) {
+async function _reassignLead(a, ctx, targetOverride) {
   const leadId = ctx && ctx.lead && Number(ctx.lead.id);
   if (!leadId) return { ok: false, error: 'reassign skipped: no lead in event ctx' };
 
@@ -614,8 +624,10 @@ async function _reassignLead(a, ctx) {
     return { ok: false, error: 'reassign skipped: debounced (fired <60s ago)' };
   }
 
-  // Parse the target user-id list off the automation's recipient field.
-  const raw = String(a.recipient || '').trim();
+  // Parse the target user-id list. Prefer an explicit override / the dedicated
+  // reassign_to field (so email/whatsapp rules can also assign); fall back to
+  // recipient for the legacy 'reassign_lead' channel.
+  const raw = String(targetOverride || a.reassign_to || a.recipient || '').trim();
   let ids = [];
   if (raw.startsWith('users:')) {
     ids = raw.slice('users:'.length).split(',').map(x => Number(x.trim())).filter(x => x > 0);
