@@ -52,7 +52,10 @@ async function fire(event, ctx) {
         // channel send) so the lead is owned before we notify, and an email to
         // "assigned user" reaches the NEW owner. Runs on any channel except the
         // dedicated reassign channel (which reassigns as its main action below).
-        if (a.channel !== 'reassign_lead' && String(a.reassign_to || '').trim()) {
+        // A manual "Test" must never silently change a real lead's owner —
+        // skip the ownership write on test fires (the send still happens so
+        // the admin can verify delivery).
+        if (a.channel !== 'reassign_lead' && String(a.reassign_to || '').trim() && !(ctx && ctx._isTest)) {
           try {
             const rr = await _reassignLead(a, ctx, a.reassign_to);
             await _log(a, ctx, rr.ok ? 'sent' : 'failed', 'reassign → ' + (rr.detail || rr.error || ''));

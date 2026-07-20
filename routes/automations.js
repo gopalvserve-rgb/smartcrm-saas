@@ -82,13 +82,15 @@ async function api_automations_test(token, id) {
   }
   const matched = !!lead;
   if (!lead) lead = all[0];
-  auto.fire(a.event, { lead, user: me, event: a.event });
+  // _isTest → fire() sends the message so delivery can be verified, but skips
+  // the reassign so a Test click never rewrites a live lead's owner.
+  auto.fire(a.event, { lead, user: me, event: a.event, _isTest: true });
   return {
     ok: true,
     matched,
     lead_id: lead.id,
     note: matched
-      ? ('Fired against lead #' + lead.id + ' — it matches this rule\'s condition. Check the Automation log for the send result.')
+      ? ('Fired against lead #' + lead.id + ' — it matches this rule\'s condition. NOTE: this sends a REAL ' + (a.channel === 'email' ? 'email' : a.channel) + '. Lead ownership is NOT changed by a test. Check the Automation log for the result.')
       : ('No existing lead matches this rule\'s condition, so the log will show "condition did not match" (that is expected, not an error). Fired against your newest lead #' + lead.id + '.')
   };
 }
