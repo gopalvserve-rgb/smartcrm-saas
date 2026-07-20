@@ -63,10 +63,34 @@ async function api_automations_test(token, id) {
   if (me.role !== 'admin') throw new Error('Admin only');
   const a = await db.findById('automations', id);
   if (!a) throw new Error('Automation not found');
-  const lead = (await db.getAll('leads'))[0];
-  if (!lead) throw new Error('Need at least one lead in the system to run a test');
-  require('../utils/automations').fire(a.event, { lead, user: me, event: a.event });
-  return { ok: true, note: 'Fired — check Automation log in a few seconds' };
+  const auto = require('../utils/automations');
+  // AUTOMATION_TEST_PICK_v1 — the old code always fired against leads[0] (the
+  // OLDEST lead), which almost never matches the rule's condition, so every
+  // test looked like a failure. Pick the most RECENT lead that actually
+  // matches the condition so the test exercises the real send path.
+  const all = (await db.getAll('leads')).sort((x, y) => Number(y.id) - Number(x.id));
+  if (!all.length) throw new Error('Need at least one lead in the system to run a test');
+  let lead = null;
+  if (a.condition && typeof auto._matchesCondition === 'function') {
+    for (const cand of all.slice(0, 300)) {
+      let enriched = cand;
+      try { enriched = await auto._enrichLead(cand); } catch (_) {}
+      try {
+        if (auto._matchesCondition(a.condition, { lead: enriched, user: me, event: a.event })) { lead = enriched; break; }
+      } catch (_) {}
+    }
+  }
+  const matched = !!lead;
+  if (!lead) lead = all[0];
+  auto.fire(a.event, { lead, user: me, event: a.event });
+  return {
+    ok: true,
+    matched,
+    lead_id: lead.id,
+    note: matched
+      ? ('Fired against lead #' + lead.id + ' — it matches this rule\'s condition. Check the Automation log for the send result.')
+      : ('No existing lead matches this rule\'s condition, so the log will show "condition did not match" (that is expected, not an error). Fired against your newest lead #' + lead.id + '.')
+  };
 }
 
 async function api_automations_log(token, limit) {

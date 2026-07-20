@@ -43,7 +43,9 @@ async function fire(event, ctx) {
       try {
         if (!_matchesCondition(a.condition, ctx)) {
           const _why = _whyNotMatched(a.condition, ctx);
-          await _log(a, ctx, 'skipped', _why ? ('rule failed: ' + _why) : 'condition not met');
+          // Wording: "rule failed" read like a system error to admins. It only
+          // means this lead didn't match the condition — say that plainly.
+          await _log(a, ctx, 'skipped', _why ? ('condition did not match — ' + _why) : 'condition not met');
           continue;
         }
         // AUTOMATION_REASSIGN_ANY_v1 — apply the reassign FIRST (before the
@@ -743,4 +745,4 @@ async function _reassignLead(a, ctx, targetOverride) {
 }
 
 
-module.exports = { fire };
+module.exports = { fire, _matchesCondition, _enrichLead };
