@@ -511,17 +511,25 @@ async function websiteHook(req, res) {
     try {
       const customFields = (await db.getAll('custom_fields'))
         .filter(f => Number(f.is_active) !== 0);
+      // CF_FUZZY_KEY_v1 — Meta/Pabbly/Zapier often send a field under its LABEL
+      // ("Page Name") or a differently-cased/spaced key ("pageName", "page name"),
+      // not the exact CRM key ("page_name"). Build a normalized index of every
+      // incoming body key so those still map into extra_json. Without this, FB
+      // lead-form fields silently dropped and page_name conditions never matched.
+      const _norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const _has = v => (v !== undefined && v !== null && v !== '');
+      const bodyIdx = {};
+      for (const bk of Object.keys(b || {})) { const nk = _norm(bk); if (nk && bodyIdx[nk] === undefined) bodyIdx[nk] = b[bk]; }
+      if (b.extra && typeof b.extra === 'object') { for (const bk of Object.keys(b.extra)) { const nk = _norm(bk); if (nk && bodyIdx[nk] === undefined) bodyIdx[nk] = b.extra[bk]; } }
       for (const f of customFields) {
         const k = String(f.key || '').trim();
         if (!k) continue;
         let v = b[k];
-        if (v === undefined || v === null || v === '') v = b['cf_' + k];
-        if ((v === undefined || v === null || v === '') && b.extra && typeof b.extra === 'object') {
-          v = b.extra[k];
-        }
-        if (v !== undefined && v !== null && v !== '') {
-          extraJson[k] = (typeof v === 'object') ? v : String(v);
-        }
+        if (!_has(v)) v = b['cf_' + k];
+        if (!_has(v) && b.extra && typeof b.extra === 'object') v = b.extra[k];
+        if (!_has(v)) v = bodyIdx[_norm(k)];                       // fuzzy: normalized key
+        if (!_has(v) && (f.label || f.name)) v = bodyIdx[_norm(f.label || f.name)]; // fuzzy: display label
+        if (_has(v)) extraJson[k] = (typeof v === 'object') ? v : String(v);
       }
     } catch (e) {
       console.warn('[website] custom-field merge failed:', e.message);
