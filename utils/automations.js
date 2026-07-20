@@ -46,17 +46,29 @@ async function fire(event, ctx) {
           await _log(a, ctx, 'skipped', _why ? ('rule failed: ' + _why) : 'condition not met');
           continue;
         }
+        // AUTOMATION_REASSIGN_ANY_v1 — apply the reassign FIRST (before the
+        // channel send) so the lead is owned before we notify, and an email to
+        // "assigned user" reaches the NEW owner. Runs on any channel except the
+        // dedicated reassign channel (which reassigns as its main action below).
+        if (a.channel !== 'reassign_lead' && String(a.reassign_to || '').trim()) {
+          try {
+            const rr = await _reassignLead(a, ctx, a.reassign_to);
+            await _log(a, ctx, rr.ok ? 'sent' : 'failed', 'reassign → ' + (rr.detail || rr.error || ''));
+            if (rr.ok && rr.assignedTo && ctx.lead) { ctx.lead.assigned_to = rr.assignedTo; ctx.lead.assigned_name = null; ctx.lead.assigned_email = null; }
+          } catch (e) { await _log(a, ctx, 'failed', 'reassign → ' + e.message); }
+        }
+
         let recipient;
         if (a.channel === 'reassign_lead') {
-          // AUTOMATION_REASSIGN_v1 — recipient is not an email/phone.
-          // The picked-agent list lives on the automation row (recipient
-          // field stores 'user:123' or 'users:1,2,3'). Validation deferred
-          // to _reassignLead which produces a clear error if mis-configured.
-          recipient = String(a.recipient || '').trim() || '_default';
+          // AUTOMATION_REASSIGN_v1 — recipient is not an email/phone. The
+          // picked-agent list lives on the row (reassign_to, or legacy
+          // recipient 'user:123'/'users:1,2,3'). Validation deferred to
+          // _reassignLead which produces a clear error if mis-configured.
+          recipient = String(a.reassign_to || a.recipient || '').trim() || '_default';
         } else {
           recipient = await _resolveRecipient(a, ctx);
           if (!recipient) {
-            await _log(a, ctx, 'skipped', 'no recipient');
+            await _log(a, ctx, 'skipped', 'no recipient (lead reassigned' + (String(a.reassign_to || '').trim() ? '' : '; set a "reassign to" agent or a valid recipient') + ')');
             continue;
           }
         }
@@ -70,16 +82,6 @@ async function fire(event, ctx) {
         else                               result = { ok: false, error: 'unknown channel: ' + a.channel };
 
         await _log(a, ctx, result.ok ? 'sent' : 'failed', result.detail || result.error || '');
-
-        // AUTOMATION_REASSIGN_ANY_v1 — if a reassign target is set AND this
-        // wasn't already the dedicated reassign channel, ALSO reassign the lead
-        // (so one email/whatsapp rule can notify AND auto-assign the owner).
-        if (a.channel !== 'reassign_lead' && String(a.reassign_to || '').trim()) {
-          try {
-            const rr = await _reassignLead(a, ctx, a.reassign_to);
-            await _log(a, ctx, rr.ok ? 'sent' : 'failed', 'reassign → ' + (rr.detail || rr.error || ''));
-          } catch (e) { await _log(a, ctx, 'failed', 'reassign → ' + e.message); }
-        }
       } catch (e) {
         await _log(a, ctx, 'failed', e.message);
       }
@@ -683,7 +685,7 @@ async function _reassignLead(a, ctx, targetOverride) {
   const lead = await db.findById('leads', leadId);
   if (!lead) return { ok: false, error: 'reassign skipped: lead ' + leadId + ' not found' };
   if (Number(lead.assigned_to) === Number(pickedId)) {
-    return { ok: true, detail: 'no-op: lead is already owned by user ' + pickedId };
+    return { ok: true, assignedTo: pickedId, detail: 'no-op: lead is already owned by user ' + pickedId };
   }
 
   const newOwner  = await db.findById('users', pickedId).catch(() => null);
@@ -733,6 +735,7 @@ async function _reassignLead(a, ctx, targetOverride) {
 
   return {
     ok: true,
+    assignedTo: pickedId,
     detail: 'reassigned lead ' + leadId + ' from ' +
             (prevOwner ? prevOwner.name : '(unassigned)') +
             ' to ' + (newOwner ? newOwner.name : ('user ' + pickedId))
