@@ -531,6 +531,14 @@ async function websiteHook(req, res) {
         if (!_has(v) && (f.label || f.name)) v = bodyIdx[_norm(f.label || f.name)]; // fuzzy: display label
         if (_has(v)) extraJson[k] = (typeof v === 'object') ? v : String(v);
       }
+      // CF_FUZZY_KEY_v1b — ALSO capture well-known lead-attribution fields even
+      // when NO custom field is registered, so automation conditions like
+      // `page_name contains X` work out of the box (Meta/Pabbly send these as
+      // labels: "Page Name", "Form Name", "Campaign Name", etc.).
+      const KNOWN_ATTR = ['page_name', 'form_name', 'ad_name', 'adset_name', 'campaign_name', 'platform', 'ad_id', 'adset_id', 'campaign_id', 'form_id', 'page_id'];
+      for (const kk of KNOWN_ATTR) {
+        if (!_has(extraJson[kk])) { const v = bodyIdx[_norm(kk)]; if (_has(v)) extraJson[kk] = (typeof v === 'object') ? v : String(v); }
+      }
     } catch (e) {
       console.warn('[website] custom-field merge failed:', e.message);
     }
