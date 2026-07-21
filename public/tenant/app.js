@@ -5430,6 +5430,21 @@ VIEWS.leads = async (view) => {
     }).catch(() => { CRM.cache.tags = CRM.cache.tags || []; });
   }
 
+  // WA_NUMBER_FILTER_v1 — warm the WhatsApp-number filter options (numbers that
+  // actually have leads). Async so it never blocks first paint; the dropdown
+  // re-reads CRM.cache.waPhoneOpts once it lands.
+  const _waOptAge = Date.now() - (CRM.cache._waPhoneOptsAt || 0);
+  if (!CRM.cache.waPhoneOpts || _waOptAge > 5 * 60 * 1000) {
+    CRM.cache.waPhoneOpts = CRM.cache.waPhoneOpts || [];
+    api('api_leads_waPhoneOptions').then(o => {
+      CRM.cache.waPhoneOpts = o || [];
+      CRM.cache._waPhoneOptsAt = Date.now();
+      // If more than one number has leads and the dropdown isn't shown yet,
+      // refresh the filter bar so it appears.
+      try { if ((o || []).length > 1 && !document.getElementById('f-wa-phone')) loadLeads({ page: CRM._leadsPage || 1 }); } catch (_) {}
+    }).catch(() => { CRM.cache.waPhoneOpts = CRM.cache.waPhoneOpts || []; });
+  }
+
   view.innerHTML = '';
   // Show a skeleton loader IMMEDIATELY so the user sees the page render
   // instead of feeling like the app is hung while warmCache + leads list
@@ -5644,6 +5659,21 @@ VIEWS.leads = async (view) => {
         CRM._leadsPage = 1; loadLeads({ page: 1 });
       }
     }),
+    // WA_NUMBER_FILTER_v1 — filter leads by the WhatsApp business number they
+    // came in / conversed on (for ads running on 2+ different numbers). Only
+    // rendered when the tenant actually has >1 number with leads.
+    ((CRM.cache.waPhoneOpts && CRM.cache.waPhoneOpts.length > 1)
+      ? multiSelectDropdown({
+          id: 'f-wa-phone', label: '📱 WA number',
+          options: CRM.cache.waPhoneOpts,
+          values: CRM.prefs.filters.wa_phone_ids || [],
+          allLabel: 'Any WA number',
+          onApply: (vals) => {
+            CRM.prefs.filters.wa_phone_ids = vals.map(v => String(v));
+            CRM._leadsPage = 1; loadLeads({ page: 1 });
+          }
+        })
+      : null),
     // Tag filter — multi-select sourced from api_leads_distinctTags.
     // leads.tags is a free-form CSV column so the dropdown shows every
     // unique tag in use; selecting one or more filters to leads whose
@@ -6627,6 +6657,9 @@ async function loadLeads(opts) {
        backend (which already honours filters.campaign_ids) — the list showed
        ALL campaigns regardless of the picker. */
     campaign_ids: cids || undefined,
+    /* WA_NUMBER_FILTER_v1 — picked WhatsApp business number(s). */
+    wa_phone_ids: (CRM.prefs.filters.wa_phone_ids && CRM.prefs.filters.wa_phone_ids.length)
+                  ? CRM.prefs.filters.wa_phone_ids : undefined,
     followup:    $('#f-followup')?.value || undefined,
     qualified:   $('#f-qualified')?.value || undefined,
     duplicate:   $('#f-duplicate')?.value || undefined,

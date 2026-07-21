@@ -431,6 +431,26 @@ async function api_leads_list(token, filters) {
   } else if (filters.source) {
     rows = rows.filter(l => l.source === filters.source);
   }
+  /* WA_NUMBER_FILTER_v1 — filter leads by which WhatsApp business number they
+   * came in / conversed on. Click-to-WhatsApp ads on different numbers all land
+   * in one list; this segments them. The link is whatsapp_messages.phone_number_id
+   * (one indexed query → Set of lead_ids), so it works for existing leads with
+   * no backfill. Empty array = no filter. */
+  if (Array.isArray(filters.wa_phone_ids) && filters.wa_phone_ids.length) {
+    const ids = filters.wa_phone_ids.map(x => String(x)).filter(Boolean);
+    if (ids.length) {
+      let leadIdSet = new Set();
+      try {
+        const wr = await db.query(
+          `SELECT DISTINCT lead_id FROM whatsapp_messages
+            WHERE phone_number_id = ANY($1::text[]) AND lead_id IS NOT NULL`,
+          [ids]
+        );
+        leadIdSet = new Set(wr.rows.map(r => Number(r.lead_id)));
+      } catch (e) { /* table missing on un-migrated tenant → no matches */ }
+      rows = rows.filter(l => leadIdSet.has(Number(l.id)));
+    }
+  }
   // Tags filter — leads.tags is a free-form CSV string. Match if the
   // lead's tags column contains ANY of the requested tags (case-insens.
   // substring). Empty array = no filter.
@@ -3702,8 +3722,49 @@ async function api_leads_bulkShare(token, leadIds, userId) {
 
 
 
+/* WA_NUMBER_FILTER_v1 — options for the leads "WhatsApp number" filter.
+ * Returns every business number that has at least one lead-linked message,
+ * labelled from wa_phones where available (display number + verified name),
+ * else the raw to_number seen in whatsapp_messages. No Meta Graph call. */
+async function api_leads_waPhoneOptions(token) {
+  await authUser(token);
+  let msgRows = [];
+  try {
+    const r = await db.query(`
+      SELECT phone_number_id,
+             MAX(to_number)          AS to_number,
+             COUNT(*)::int           AS msg_count,
+             COUNT(DISTINCT lead_id) AS lead_count
+        FROM whatsapp_messages
+       WHERE phone_number_id IS NOT NULL AND phone_number_id <> ''
+       GROUP BY phone_number_id
+       ORDER BY lead_count DESC`);
+    msgRows = r.rows;
+  } catch (_) { return []; }
+
+  // Friendly labels from wa_phones (local table, no Graph call)
+  const labelById = {};
+  try {
+    const wr = await db.query(
+      `SELECT phone_number_id, display_phone_number, verified_name, label FROM wa_phones`);
+    wr.rows.forEach(w => {
+      labelById[String(w.phone_number_id)] =
+        (w.label || w.verified_name || '') +
+        (w.display_phone_number ? (w.verified_name || w.label ? ' · ' : '') + w.display_phone_number : '');
+    });
+  } catch (_) {}
+
+  return msgRows.map(m => {
+    const pid = String(m.phone_number_id);
+    let name = labelById[pid] || (m.to_number ? ('+' + String(m.to_number).replace(/\D/g, '')) : ('Number …' + pid.slice(-4)));
+    name = name.trim() || ('Number …' + pid.slice(-4));
+    return { id: pid, name: name + '  (' + m.lead_count + ' leads)' };
+  });
+}
+
 module.exports = {
-  api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
+  api_leads_list,
+  api_leads_waPhoneOptions,   /* WA_NUMBER_FILTER_v1 */ api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_recoverFromArchive, api_leads_reassignByActivity, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
   api_leads_trash_list, api_leads_trash_recover,  /* TRASH_v1 */
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
