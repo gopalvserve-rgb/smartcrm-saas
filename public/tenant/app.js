@@ -48015,6 +48015,26 @@ async function openCloseSaleModal(leadId, onDone) {
     h('label', { style:{ gridColumn:'span 2' } }, 'Branch (optional)', fBranch)
   ));
 
+  // Discount & fee (EDU_DISCOUNT_v1) — capture the course/list fee, an optional
+  // discount (₹ or %), and show the net payable. Token + installments are
+  // expected to sum to the net; a mismatch is flagged (not blocked) so the rep
+  // can still close atypical deals.
+  body.appendChild(h('h4', { style:{ margin:'1rem 0 .3rem 0', color:'#0c4a6e' } }, '💸 Fee & discount'));
+  const fGrossFee   = h('input', { type:'number', placeholder:'Course fee ₹', style:{ width:'100%' } });
+  const fDiscType   = h('select', {}, h('option', { value:'amount' }, '₹ Fixed'), h('option', { value:'pct' }, '% Percent'));
+  const fDiscVal    = h('input', { type:'number', placeholder:'0', style:{ width:'100%' } });
+  const fDiscReason = h('input', { type:'text', placeholder:'Reason / approved by (optional)', style:{ width:'100%' } });
+  const netEl = h('div', { style:{ marginTop:'.4rem', padding:'.5rem .7rem', background:'#ecfdf5', border:'1px solid #a7f3d0', borderRadius:'6px', fontSize:'.85em' } }, 'Enter a course fee to see the net payable.');
+  body.appendChild(h('div', { class:'card', style:{ padding:'.6rem .8rem', background:'#fffbeb' } },
+    h('div', { style:{ display:'grid', gridTemplateColumns:'1.4fr .8fr 1fr', gap:'.4rem' } },
+      h('label', {}, 'Course / list fee ₹', fGrossFee),
+      h('label', {}, 'Discount type', fDiscType),
+      h('label', {}, 'Discount value', fDiscVal)
+    ),
+    h('label', { style:{ display:'block', marginTop:'.3rem' } }, 'Discount reason', fDiscReason),
+    netEl
+  ));
+
   // Token row
   body.appendChild(h('h4', { style:{ margin:'1rem 0 .3rem 0', color:'#0c4a6e' } }, '🪙 Token amount (paid at sale closure)'));
   const fTokenAmt    = h('input', { type:'number', placeholder:'5000', style:{ width:'100%' } });
@@ -48086,10 +48106,44 @@ async function openCloseSaleModal(leadId, onDone) {
   // Live total
   const totalEl = h('div', { style:{ marginTop:'.8rem', padding:'.6rem', background:'#fef3c7', borderRadius:'6px', fontWeight:600 } }, 'Total: ₹0');
   body.appendChild(totalEl);
+  function _discountAmount() {
+    const gross = Number(fGrossFee.value || 0);
+    const val   = Number(fDiscVal.value || 0);
+    if (!val) return 0;
+    const d = (fDiscType.value === 'pct') ? (gross * val / 100) : val;
+    return Math.max(0, Math.min(d, gross || d));   // never negative, never exceed gross
+  }
   function _recalc() {
     const tok = Number(fTokenAmt.value || 0);
     const ins = [...insWrap.children].reduce((s, row) => s + (row._getRow ? Number(row._getRow().amount || 0) : 0), 0);
-    totalEl.textContent = 'Total: ₹' + (tok + ins).toLocaleString('en-IN') + ' (Token ₹' + tok.toLocaleString('en-IN') + ' + Installments ₹' + ins.toLocaleString('en-IN') + ')';
+    const collected = tok + ins;
+    totalEl.textContent = 'Total: ₹' + collected.toLocaleString('en-IN') + ' (Token ₹' + tok.toLocaleString('en-IN') + ' + Installments ₹' + ins.toLocaleString('en-IN') + ')';
+    // Net payable panel
+    const gross = Number(fGrossFee.value || 0);
+    const disc  = _discountAmount();
+    if (!gross && !disc) {
+      netEl.textContent = 'Enter a course fee to see the net payable.';
+      netEl.style.background = '#ecfdf5'; netEl.style.borderColor = '#a7f3d0';
+      return;
+    }
+    const net = Math.max(0, gross - disc);
+    let txt = 'List ₹' + gross.toLocaleString('en-IN')
+            + '  −  Discount ₹' + disc.toLocaleString('en-IN')
+            + (fDiscType.value === 'pct' && Number(fDiscVal.value) ? ' (' + Number(fDiscVal.value) + '%)' : '')
+            + '  =  Net payable ₹' + net.toLocaleString('en-IN');
+    // Reconcile against token+installments
+    if (gross) {
+      const diff = collected - net;
+      if (Math.abs(diff) > 1) {
+        txt += '  ·  ⚠ Token+installments (₹' + collected.toLocaleString('en-IN') + ') '
+             + (diff > 0 ? 'exceed' : 'fall short of') + ' net by ₹' + Math.abs(diff).toLocaleString('en-IN');
+        netEl.style.background = '#fef2f2'; netEl.style.borderColor = '#fecaca';
+      } else {
+        txt += '  ·  ✓ matches schedule';
+        netEl.style.background = '#ecfdf5'; netEl.style.borderColor = '#a7f3d0';
+      }
+    }
+    netEl.textContent = txt;
   }
   body.addEventListener('input', _recalc);
   setTimeout(_recalc, 100);
@@ -48108,6 +48162,11 @@ async function openCloseSaleModal(leadId, onDone) {
           course_name: fCourse.value || '',
           batch_name: fBatch.value || '',
           branch_id: fBranch.value ? Number(fBranch.value) : null,
+          gross_fee: Number(fGrossFee.value || 0),
+          discount_type: fDiscType.value,
+          discount_value: Number(fDiscVal.value || 0),
+          discount_amount: _discountAmount(),
+          discount_reason: fDiscReason.value || '',
           token_amount: Number(fTokenAmt.value),
           token_due_date: fTokenDate.value,
           token_paid: fTokenPaid.checked ? 1 : 0,
@@ -48115,7 +48174,9 @@ async function openCloseSaleModal(leadId, onDone) {
           token_reference: fTokenRef.value || '',
           installments
         });
-        toast('✓ Sale closed · ₹' + Number(r.total_amount).toLocaleString('en-IN') + ' total, ' + r.installments_added + ' installments');
+        toast('✓ Sale closed · ₹' + Number(r.total_amount).toLocaleString('en-IN') + ' total'
+          + (Number(r.discount_amount) ? ' (after ₹' + Number(r.discount_amount).toLocaleString('en-IN') + ' discount)' : '')
+          + ', ' + r.installments_added + ' installments');
         m.remove();
         if (onDone) onDone();
       } catch (e) { toast(e.message, 'err'); }
@@ -48623,10 +48684,18 @@ try { window.openCourseEditModal = openCourseEditModal; } catch (_) {}
         const courseLabel = fCourse.closest('label');
         if (courseLabel) courseLabel.parentNode.insertBefore(wrap, courseLabel);
 
+        // EDU_DISCOUNT_v1 — the modal now has a 'Course fee' input; auto-fill it
+        // from the picked catalog course price so the discount computes against it.
+        const fGross = inputs.find(i => (i.placeholder || '') === 'Course fee ₹');
         courseSel.addEventListener('change', () => {
           const opt = courseSel.selectedOptions[0];
           if (!opt || !opt.value) return;
           fCourse.value = opt.dataset.name || '';
+          const picked = (courses || []).find(c => String(c.id) === String(opt.value));
+          if (fGross && picked && Number(picked.price)) {
+            fGross.value = Number(picked.price);
+            fGross.dispatchEvent(new Event('input', { bubbles:true }));
+          }
           const ex = extras[opt.value] || {};
           if (fTokAmt && ex.token) { fTokAmt.value = ex.token; fTokAmt.dispatchEvent(new Event('input', { bubbles:true })); }
           // Auto-build installment rows

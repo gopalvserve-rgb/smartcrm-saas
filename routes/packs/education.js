@@ -671,6 +671,15 @@ async function api_edu_enrollment_createCustom(token, payload) {
     console.warn('[edu_enrollment_createCustom] ALTER paid_at failed:', alterErr.message);
   }
   try { await db.query(`ALTER TABLE edu_installments ALTER COLUMN due_date DROP NOT NULL`); } catch (_) {}
+  // EDU_DISCOUNT_v1 — persist an optional discount on the enrollment. Columns
+  // are self-healing here so existing tenants get them without a schema re-apply.
+  try {
+    await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS gross_amount NUMERIC`);
+    await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS discount_amount NUMERIC DEFAULT 0`);
+    await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS discount_type TEXT`);
+    await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS discount_value NUMERIC`);
+    await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS discount_reason TEXT`);
+  } catch (discErr) { console.warn('[edu_enrollment_createCustom] discount ALTER failed:', discErr.message); }
   const p = payload || {};
   if (!p.lead_id) throw new Error('lead_id required');
   if (!Number(p.token_amount)) throw new Error('Token amount required');
@@ -682,15 +691,34 @@ async function api_edu_enrollment_createCustom(token, payload) {
 
   const totalAmount = tokenAmt + installments.reduce((s, r) => s + Number(r.amount || 0), 0);
 
+  // EDU_DISCOUNT_v1 — recompute the discount server-side so a tampered client
+  // can't inflate it. gross_amount defaults to what is actually being collected
+  // when no list fee was entered (i.e. no discount given).
+  const grossFee     = Number(p.gross_fee || 0);
+  const discType     = (p.discount_type === 'pct') ? 'pct' : 'amount';
+  const discValue    = Number(p.discount_value || 0);
+  let   discountAmount = 0;
+  if (grossFee > 0 && discValue > 0) {
+    discountAmount = (discType === 'pct') ? (grossFee * discValue / 100) : discValue;
+    discountAmount = Math.max(0, Math.min(discountAmount, grossFee));
+    discountAmount = Math.round(discountAmount * 100) / 100;
+  }
+  const grossAmount  = grossFee > 0 ? grossFee : totalAmount;
+  const discReason   = String(p.discount_reason || '').slice(0, 500);
+
   // 1) Insert enrollment
   const eR = await db.query(
-    `INSERT INTO edu_enrollments (lead_id, fee_plan_id, plan_snapshot, course_name, batch_name, start_date, total_amount, status, branch_id)
-     VALUES ($1, NULL, $2, $3, $4, $5, $6, 'active', $7) RETURNING id`,
+    `INSERT INTO edu_enrollments (lead_id, fee_plan_id, plan_snapshot, course_name, batch_name, start_date, total_amount, status, branch_id,
+                                  gross_amount, discount_amount, discount_type, discount_value, discount_reason)
+     VALUES ($1, NULL, $2, $3, $4, $5, $6, 'active', $7, $8, $9, $10, $11, $12) RETURNING id`,
     [Number(p.lead_id),
-     JSON.stringify({ mode: 'custom', token_amount: tokenAmt, installment_count: installments.length }),
+     JSON.stringify({ mode: 'custom', token_amount: tokenAmt, installment_count: installments.length,
+                      gross_amount: grossAmount, discount_amount: discountAmount, discount_type: discType,
+                      discount_value: discValue, discount_reason: discReason }),
      p.course_name || '', p.batch_name || '',
      tokenDue, totalAmount,
-     p.branch_id ? Number(p.branch_id) : null]
+     p.branch_id ? Number(p.branch_id) : null,
+     grossAmount, discountAmount, discType, discValue, discReason]
   );
   const enrollmentId = eR.rows[0].id;
 
@@ -724,6 +752,8 @@ async function api_edu_enrollment_createCustom(token, payload) {
     ok: true,
     enrollment_id: enrollmentId,
     total_amount: totalAmount,
+    gross_amount: grossAmount,
+    discount_amount: discountAmount,
     token_paid: !!tokenPaid,
     installments_added: installments.length
   };
