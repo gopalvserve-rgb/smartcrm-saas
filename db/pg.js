@@ -108,6 +108,15 @@ const SCHEMA = {
               'working_hours_start', 'working_hours_end', 'eod_prompt_time', 'timezone'],
     json: []
   },
+  /* PASSWORD_RESET_SCHEMA_FIX_v1 — forgot-password wrote via db.insert() but the
+   * table was never registered here, so _schema() threw "Unknown table:
+   * password_resets" and the reset email never sent. The raw db.query() calls
+   * around it (CREATE TABLE / UPDATE / SELECT) bypass this whitelist, which is
+   * why the table itself was fine and only the INSERT failed. */
+  password_resets: {
+    columns: ['user_id', 'token_hash', 'expires_at', 'consumed_at', 'created_at', 'created_ip'],
+    json: []
+  },
   leads: {
     columns: ['gclid', 'gad_campaignid', 'utm_source', 'utm_medium',
               'utm_campaign', 'utm_term', 'utm_content',
