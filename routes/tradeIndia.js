@@ -138,7 +138,7 @@ function _pick(row, keys) {
   return '';
 }
 
-function _buildUrl(cfg, fromStr, toStr, page) {
+function _buildUrl(cfg, fromStr, toStr, page, limit) {
   const base = (cfg.api_url || DEFAULT_API_URL).trim();
   const qs = new URLSearchParams({
     userid:     cfg.api_user_id || '',
@@ -146,7 +146,7 @@ function _buildUrl(cfg, fromStr, toStr, page) {
     key:        cfg.api_key || '',
     from_date:  fromStr,
     to_date:    toStr,
-    limit:      String(PAGE_LIMIT),
+    limit:      String(limit || PAGE_LIMIT),
     page_no:    String(page),
   });
   return base + (base.includes('?') ? '&' : '?') + qs.toString();
@@ -552,8 +552,46 @@ async function api_tradeindia_logs_list(token, limit) {
   return { logs: r.rows };
 }
 
+/* TRADEINDIA_API_v1 — build the exact per-tenant URL from saved credentials and
+ * do ONE live fetch so the tenant can eyeball the response before enabling the
+ * cron. Returns the full openable URL (the admin's own key, their own screen)
+ * plus a redacted copy and a 3-record sample. No leads are imported here. */
+async function api_tradeindia_preview(token, payload) {
+  await _requireAdmin(token);
+  const cfg = await _getSettings();
+  if (!cfg.api_key || !cfg.api_user_id || !cfg.api_profile_id) {
+    throw new Error('Enter and Save your User ID, Profile ID and API Key first.');
+  }
+  const p = payload || {};
+  const today = _ymd(new Date());
+  const from  = p.from_date || today;
+  const to    = p.to_date   || today;
+  const page  = Math.max(1, Number(p.page_no) || 1);
+  const limit = Math.min(100, Math.max(1, Number(p.limit) || 10));
+  const url   = _buildUrl(cfg, from, to, page, limit);
+  const t0 = Date.now();
+  let rows = [], err = null, rawFirst = null;
+  try {
+    const parsed = await _fetchJson(url);
+    rows = _asArray(parsed);
+    rawFirst = Array.isArray(parsed) ? parsed.slice(0, 3) : parsed;
+  } catch (e) { err = e.message; }
+  return {
+    ok: !err,
+    url,                       // full, openable (tenant admin's own credentials)
+    url_redacted: _redactUrl(url),
+    from_date: from, to_date: to, limit, page_no: page,
+    count: rows.length,
+    response_ms: Date.now() - t0,
+    sample: rows.slice(0, 3),
+    raw: err ? null : rawFirst,
+    error: err,
+  };
+}
+
 module.exports = {
   api_tradeindia_settings_get,
+  api_tradeindia_preview,
   api_tradeindia_settings_save,
   api_tradeindia_sync_now,
   api_tradeindia_logs_list,

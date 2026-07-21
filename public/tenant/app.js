@@ -29865,6 +29865,45 @@ async function _renderTradeIndiaPanel(box, apiKey) {
       onclick: () => openSourceMappingModal('tradeindia_api', 'TradeIndia API', apiKey)
     }, '🗺 Map fields'),
     msg));
+  // --- Test connection / preview response (TRADEINDIA_API_v1) ---
+  // Point 2+3 of the spec: build the URL from the saved credentials and let the
+  // tenant see TradeIndia's actual response before enabling the 15-min cron.
+  const today = new Date().toISOString().slice(0, 10);
+  const pvFrom = h('input', { type: 'date', value: today });
+  const pvTo   = h('input', { type: 'date', value: today });
+  const pvLim  = h('input', { type: 'number', value: '10', min: '1', max: '100', style: { width: '80px' } });
+  const pvOut  = h('div', {});
+  const pvBtn  = h('button', { class: 'btn', onclick: async (ev) => {
+    ev.target.disabled = true; pvOut.innerHTML = ''; pvOut.appendChild(h('div', { class: 'muted' }, 'Calling TradeIndia…'));
+    try {
+      const r = await api('api_tradeindia_preview', { from_date: pvFrom.value, to_date: pvTo.value, limit: Number(pvLim.value) });
+      pvOut.innerHTML = '';
+      pvOut.appendChild(h('div', { style: { fontSize: '.8rem', margin: '.3rem 0' } },
+        h('b', {}, 'Request URL: '),
+        h('a', { href: r.url, target: '_blank', rel: 'noopener', style: { wordBreak: 'break-all' } }, r.url)));
+      pvOut.appendChild(h('div', { style: { fontSize: '.82rem', margin: '.2rem 0' } },
+        r.ok ? ('✅ ' + r.count + ' record(s) · ' + r.response_ms + 'ms') : ('❌ ' + (r.error || 'failed')),
+        ));
+      if (r.ok) {
+        pvOut.appendChild(h('div', { style: { fontSize: '.78rem', color: '#475569', marginBottom: '.2rem' } }, 'Response sample (first 3):'));
+        pvOut.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.6rem', borderRadius: '6px', fontSize: '.74rem', maxHeight: '220px', overflow: 'auto' } },
+          JSON.stringify(r.sample && r.sample.length ? r.sample : r.raw, null, 2)));
+      }
+    } catch (e) { pvOut.innerHTML = ''; pvOut.appendChild(h('div', { class: 'error-box', style: { fontSize: '.8rem' } }, '❌ ' + e.message)); }
+    ev.target.disabled = false;
+  } }, '🔗 Test connection / preview response');
+
+  box.appendChild(h('div', { style: { marginTop: '1rem', paddingTop: '.7rem', borderTop: '1px dashed #e2e8f0' } },
+    h('div', { style: { fontWeight: '600', fontSize: '.85rem', marginBottom: '.4rem' } }, '🧪 Test connection'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } },
+      'Save your credentials above, then pull a date range to confirm TradeIndia returns your inquiries. Nothing is imported by this test.'),
+    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '.5rem' } },
+      h('label', { style: { fontSize: '.8rem' } }, 'From', pvFrom),
+      h('label', { style: { fontSize: '.8rem' } }, 'To', pvTo),
+      h('label', { style: { fontSize: '.8rem' } }, 'Limit', pvLim),
+      pvBtn),
+    pvOut));
+
   box.appendChild(logBox);
   loadLogs();
 }
