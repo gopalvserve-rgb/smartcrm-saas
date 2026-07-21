@@ -699,6 +699,13 @@ const KNOWN_KEYS_BY_SOURCE = {
   magicbricks:   ['contact_person', 'mobile', 'email', 'city', 'message', 'remarks', 'requirement', 'lead_id', 'leadId', 'projectName', 'budget'],
   justdial:      ['prefix', 'name', 'mobile', 'email', 'city', 'category', 'service', 'enquiry', 'leadid', 'area'],
   tradeindia:    ['GLUSR_USR_FNAME', 'GLUSR_USR_PHONE', 'GLUSR_USR_EMAIL', 'GLUSR_USR_COMPANY', 'GLUSR_USR_CITY', 'MESSAGE', 'QUERY_ID', 'GLUSR_USR_INTRESTED_PRODUCTS'],
+  /* TRADEINDIA_API_v1 — the PULL integration (routes/tradeIndia.js) uses the
+   * my_inquiry.html field names, which differ from the webhook's GLUSR_* set. */
+  tradeindia_api: ['sender_name', 'sender_mobile', 'sender_other_mobiles', 'sender_email',
+                   'sender_co', 'sender_city', 'sender_state', 'sender_country',
+                   'product_name', 'subject', 'message', 'inquiry_type', 'source',
+                   'generated_date', 'generated_time', 'generated', 'sender_uid',
+                   'rfi_id', 'month_slot', 'ago_time', 'view_status'],
   '99acres':     ['name', 'mobile', 'email', 'city', 'message', 'lead_id', 'projectName', 'budget'],
   housing:       ['name', 'phone', 'email', 'city', 'message', 'project', 'budget', 'lead_id'],
   nobroker:      ['name', 'phone', 'email', 'city', 'message', 'lead_id', 'project'],
@@ -2079,6 +2086,10 @@ module.exports = {
   sheetPushWebhook,
   // Native pull integrations
   runDueNativePulls,
+  /* TRADEINDIA_API_v1 — routes/tradeIndia.js reuses the shared lead-creation
+   * path (assignment rules, campaign auto-attach, auto-share, outbound
+   * webhooks, custom_fields -> extra_json) instead of duplicating it. */
+  _internalCreateLead,
   api_integration_list,
   api_integration_save,
   api_integration_delete,

@@ -117,6 +117,23 @@ const SCHEMA = {
     columns: ['user_id', 'token_hash', 'expires_at', 'consumed_at', 'created_at', 'created_ip'],
     json: []
   },
+  /* TRADEINDIA_API_v1 — marketplace inquiry pull (TradeIndia today; provider
+   * column so IndiaMART/JustDial/ExportersIndia can reuse the same engine).
+   * MUST stay registered here or every db.insert/getAll/update on these
+   * tables throws "Unknown table: <name>". */
+  marketplace_integrations: {
+    columns: ['provider', 'api_url', 'api_user_id', 'api_profile_id', 'api_key',
+              'sync_interval_min', 'auto_import', 'duplicate_rule', 'enable_logs',
+              'lookback_days', 'last_sync_at', 'sync_status', 'last_error',
+              'created_at', 'updated_at'],
+    json: []
+  },
+  marketplace_sync_logs: {
+    columns: ['provider', 'started_at', 'api_url', 'records_received',
+              'imported_count', 'updated_count', 'skipped_count', 'error_count',
+              'response_ms', 'status', 'message', 'trigger_type'],
+    json: []
+  },
   leads: {
     columns: ['gclid', 'gad_campaignid', 'utm_source', 'utm_medium',
               'utm_campaign', 'utm_term', 'utm_content',

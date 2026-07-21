@@ -3272,6 +3272,52 @@ setInterval(() => {
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started (restored)');
 
+/* ── TRADEINDIA_API_v1 — marketplace inquiry pull ──────────────────────────
+ * Polls TradeIndia every 5 minutes; each tenant's own sync_interval_min
+ * (default 15) decides whether it is actually due, so the spec's 15-minute
+ * cadence holds without a per-tenant timer.
+ *
+ * Only tenants that have configured + enabled the integration are visited:
+ * routes/tradeIndia.js upserts the tenant slug into the control-DB table
+ * marketplace_sync_registry on settings save. That keeps this sweep from
+ * opening ~95 tenant databases every 5 minutes just to discover config.
+ *
+ * NOTE: the older integrations.runDueNativePulls() (IndiaMART/JustDial) is
+ * invoked WITHOUT a tenant AsyncLocalStorage scope and its integration_configs
+ * table is neither in db/schema.sql nor registered in db/pg.js SCHEMA, so it
+ * has never actually run. This worker deliberately does not depend on it.
+ */
+async function _runTradeIndiaForAllTenants() {
+  let slugs = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM marketplace_sync_registry
+        WHERE provider = 'tradeindia' AND enabled = 1 ORDER BY slug ASC LIMIT 500`);
+    slugs = r.rows.map(x => x.slug);
+  } catch (_) { return; }   // registry table not created yet — nobody configured it
+  if (!slugs.length) return;
+
+  let ti;
+  try { ti = require('./routes/tradeIndia'); } catch (_) { return; }
+
+  for (const slug of slugs) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug },
+        () => ti.runDueForCurrentTenant()
+      );
+    } catch (e) { console.warn(`[tradeindia] ${slug} sync failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runTradeIndiaForAllTenants().catch(e => console.error('[tradeindia] cycle failed:', e.message));
+}, 5 * 60_000);
+setTimeout(() => _runTradeIndiaForAllTenants().catch(() => {}), 90_000);
+console.log('[tradeindia] marketplace inquiry pull worker started');
+
 /* Public per-tenant CSV endpoints — the URL shown in the tenant's export settings.
  * Also lost in the 27-June gutting, so the "Public download URL" in the UI was dead. */
 try {

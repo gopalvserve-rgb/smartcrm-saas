@@ -29747,6 +29747,128 @@ function _openWebhookLogDetails(row) {
   }).catch(e => { loadingDiv.textContent = 'Error: ' + e.message; });
 }
 
+/* TRADEINDIA_API_v1 — Settings + Sync Now + sync logs for the TradeIndia
+ * inquiry pull. Field mapping reuses the shared Webhook Mapping Studio
+ * (source id 'tradeindia_api') so any TradeIndia key can be mapped to any
+ * CRM field / custom field, per the spec's mapping-engine requirement. */
+async function _renderTradeIndiaPanel(box, apiKey) {
+  let data;
+  try { data = await api('api_tradeindia_settings_get'); }
+  catch (e) { box.innerHTML = ''; box.appendChild(h('div', { class: 'error-box' }, '❌ ' + e.message)); return; }
+  const st = (data && data.settings) || {};
+  box.innerHTML = '';
+
+  const row = (label, node, hint) => h('div', { style: { marginBottom: '.7rem' } },
+    h('label', { style: { display: 'block', fontWeight: '600', fontSize: '.82rem', marginBottom: '.25rem' } }, label),
+    node,
+    hint ? h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, hint) : null);
+
+  const inpUrl  = h('input', { value: st.api_url || '', style: { width: '100%' } });
+  const inpUser = h('input', { value: st.api_user_id || '', placeholder: 'e.g. 36854', style: { width: '100%' } });
+  const inpProf = h('input', { value: st.api_profile_id || '', placeholder: 'e.g. 338095', style: { width: '100%' } });
+  const inpKey  = h('input', { type: 'password', placeholder: st.api_key_set ? ('Saved ' + st.api_key_hint + ' — leave blank to keep') : 'Paste your TradeIndia API key', style: { width: '100%' } });
+  const inpInt  = h('input', { type: 'number', min: '5', value: String(st.sync_interval_min || 15), style: { width: '100%' } });
+  const inpBack = h('input', { type: 'number', min: '1', max: '90', value: String(st.lookback_days || 7), style: { width: '100%' } });
+  const selDup  = h('select', { style: { width: '100%' } },
+    h('option', { value: 'skip',   selected: st.duplicate_rule !== 'update' ? 'selected' : null }, 'Skip duplicates (keep existing lead)'),
+    h('option', { value: 'update', selected: st.duplicate_rule === 'update' ? 'selected' : null }, 'Update existing lead'));
+  const chkAuto = h('input', { type: 'checkbox', checked: Number(st.auto_import) ? 'checked' : null });
+  const chkLogs = h('input', { type: 'checkbox', checked: Number(st.enable_logs) !== 0 ? 'checked' : null });
+
+  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: '0 1rem' } },
+    row('API URL', inpUrl, 'Default: https://www.tradeindia.com/utils/my_inquiry.html'),
+    row('User ID', inpUser),
+    row('Profile ID', inpProf),
+    row('API Key', inpKey, 'Stored encrypted-at-rest in your tenant DB; never shown again.'),
+    row('Sync interval (minutes)', inpInt, 'Minimum 5. Spec default is 15.'),
+    row('First-run lookback (days)', inpBack, 'How far back to pull on the very first sync.'),
+    row('Duplicate rule', selDup, 'Matched on rfi_id.'));
+  box.appendChild(grid);
+  box.appendChild(h('div', { style: { display: 'flex', gap: '1.2rem', flexWrap: 'wrap', margin: '.2rem 0 .8rem' } },
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, chkAuto, 'Auto import (run on schedule)'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, chkLogs, 'Enable sync logs')));
+
+  // Status strip
+  const statusPill = (txt, bg, fg) => h('span', { class: 'tag', style: { background: bg, color: fg } }, txt);
+  const statusRow = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap', margin: '.2rem 0 .8rem', fontSize: '.82rem' } },
+    h('span', { class: 'muted' }, 'Last sync: '),
+    h('b', {}, st.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : 'never'),
+    st.sync_status === 'success' ? statusPill('✅ success', '#dcfce7', '#166534')
+      : st.sync_status === 'failed' ? statusPill('❌ failed', '#fee2e2', '#991b1b')
+      : statusPill('— not run', '#e2e8f0', '#475569'));
+  box.appendChild(statusRow);
+  if (st.last_error) box.appendChild(h('div', { class: 'error-box', style: { fontSize: '.8rem' } }, '⚠ ' + st.last_error));
+
+  const msg = h('span', { style: { fontSize: '.85rem', marginLeft: '.5rem' } });
+  const logBox = h('div', { style: { marginTop: '.8rem' } });
+
+  async function loadLogs() {
+    logBox.innerHTML = '';
+    let r;
+    try { r = await api('api_tradeindia_logs_list', 20); }
+    catch (e) { logBox.appendChild(h('div', { class: 'muted' }, 'Logs unavailable: ' + e.message)); return; }
+    const logs = (r && r.logs) || [];
+    if (!logs.length) { logBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'No syncs yet.')); return; }
+    const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.8rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'When'), h('th', {}, 'Trigger'), h('th', {}, 'Received'), h('th', {}, 'Imported'),
+      h('th', {}, 'Updated'), h('th', {}, 'Skipped'), h('th', {}, 'Errors'), h('th', {}, 'Time'), h('th', {}, 'Status'))));
+    const tb = h('tbody', {});
+    logs.forEach(l => {
+      tb.appendChild(h('tr', { title: (l.message || '') + ' — ' + (l.api_url || '') },
+        h('td', {}, l.started_at ? new Date(l.started_at).toLocaleString() : ''),
+        h('td', {}, l.trigger_type || ''),
+        h('td', {}, String(l.records_received || 0)),
+        h('td', {}, String(l.imported_count || 0)),
+        h('td', {}, String(l.updated_count || 0)),
+        h('td', {}, String(l.skipped_count || 0)),
+        h('td', { style: { color: Number(l.error_count) ? '#dc2626' : '' } }, String(l.error_count || 0)),
+        h('td', {}, (l.response_ms || 0) + 'ms'),
+        h('td', { style: { color: l.status === 'success' ? '#16a34a' : '#dc2626' } }, l.status || '')));
+    });
+    tbl.appendChild(tb);
+    logBox.appendChild(h('div', { style: { fontWeight: '600', fontSize: '.85rem', margin: '.6rem 0 .3rem' } }, '📜 Sync logs'));
+    logBox.appendChild(tbl);
+  }
+
+  box.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' } },
+    h('button', { class: 'btn primary', onclick: async (ev) => {
+      ev.target.disabled = true; msg.textContent = 'Saving…'; msg.style.color = '';
+      try {
+        await api('api_tradeindia_settings_save', {
+          api_url: inpUrl.value, api_user_id: inpUser.value, api_profile_id: inpProf.value,
+          api_key: inpKey.value, sync_interval_min: Number(inpInt.value),
+          lookback_days: Number(inpBack.value), duplicate_rule: selDup.value,
+          auto_import: chkAuto.checked ? 1 : 0, enable_logs: chkLogs.checked ? 1 : 0
+        });
+        msg.textContent = '✅ Saved'; msg.style.color = '#16a34a';
+        inpKey.value = '';
+      } catch (e) { msg.textContent = '❌ ' + e.message; msg.style.color = '#dc2626'; }
+      ev.target.disabled = false;
+    } }, '💾 Save settings'),
+    h('button', { class: 'btn', onclick: async (ev) => {
+      ev.target.disabled = true; msg.textContent = 'Syncing…'; msg.style.color = '';
+      try {
+        const r = await api('api_tradeindia_sync_now');
+        msg.textContent = r.ok
+          ? ('✅ ' + r.imported_count + ' imported, ' + r.updated_count + ' updated, ' + r.skipped_count + ' skipped (' + r.records_received + ' received)')
+          : ('❌ ' + (r.message || 'Sync failed'));
+        msg.style.color = r.ok ? '#16a34a' : '#dc2626';
+        await loadLogs();
+      } catch (e) { msg.textContent = '❌ ' + e.message; msg.style.color = '#dc2626'; }
+      ev.target.disabled = false;
+    } }, '🔄 Sync now'),
+    h('button', {
+      class: 'btn',
+      style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
+      title: 'Map TradeIndia fields to CRM lead columns / custom fields',
+      onclick: () => openSourceMappingModal('tradeindia_api', 'TradeIndia API', apiKey)
+    }, '🗺 Map fields'),
+    msg));
+  box.appendChild(logBox);
+  loadLogs();
+}
+
 async function adminIntegrations() {
   const cfg = await api('api_admin_getConfig').catch(() => ({}));
   const apiKey = cfg.WEBSITE_API_KEY || '';
@@ -29900,6 +30022,16 @@ async function adminIntegrations() {
     ));
     wrap.appendChild(makeCard);
   }
+
+  // --- Section 1b: TradeIndia API (TRADEINDIA_API_v1) ---
+  wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '🏭 TradeIndia API (auto-import)'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Pulls your TradeIndia inquiries into Leads automatically. Unlike the webhook above, this ' +
+    'polls TradeIndia on a schedule — no setup needed in their panel beyond an API key. ' +
+    'Duplicates are matched on rfi_id.'));
+  const tiBox = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading TradeIndia settings…'));
+  wrap.appendChild(tiBox);
+  _renderTradeIndiaPanel(tiBox, apiKey);
 
   // --- Section 2: Google Sheet sync ---
   wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📊 Google Sheet sync'));
