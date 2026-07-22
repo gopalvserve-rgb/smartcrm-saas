@@ -800,14 +800,57 @@
     await new Promise(function (r) { setTimeout(r, 120); });   // let fonts/layout settle
 
     try {
-      await window.html2pdf().set({
+      /* STU360_RECEIPT_PDF_v5 (2026-07-22) — BLANK-PDF GUARD.
+       * A silent blank download is the worst outcome: the user thinks they
+       * have a receipt and only finds out later. Render to canvas FIRST,
+       * verify it actually contains ink, and only then write the PDF. If the
+       * capture came out empty (stale lib, zero-height layout, renderer
+       * quirk) fall back to the print view — which uses the browser's own
+       * engine and can't be blank. */
+      const worker = window.html2pdf().set({
         margin: [8, 8, 8, 8],
         filename: 'Receipt-' + (rc.receipt_no || rc.id) + '.pdf',
         image: { type: 'jpeg', quality: 0.95 },
         html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak: { mode: ['css', 'legacy'] }
-      }).from(holder).save();
+      }).from(holder);
+
+      await worker.toCanvas();
+      let looksBlank = false;
+      try {
+        const cv = await worker.get('canvas');
+        if (!cv || cv.width < 50 || cv.height < 50) {
+          looksBlank = true;
+        } else {
+          // Sample a horizontal band; count non-white pixels.
+          const ctx = cv.getContext('2d');
+          const bandH = Math.min(cv.height, 1500);
+          const px = ctx.getImageData(0, 0, cv.width, bandH).data;
+          let ink = 0, seen = 0;
+          for (let i = 0; i < px.length; i += 4 * 13) {   // stride for speed
+            seen++;
+            if (!(px[i] > 245 && px[i + 1] > 245 && px[i + 2] > 245)) ink++;
+          }
+          looksBlank = !seen || (ink / seen) < 0.004;      // <0.4% ink = empty
+        }
+      } catch (_) {
+        /* getImageData throws on a CORS-tainted canvas (external logo).
+         * That means pixels EXIST, we just can't read them — treat as fine. */
+        looksBlank = false;
+      }
+
+      if (looksBlank) {
+        const w = window.open('', '_blank', 'width=820,height=920');
+        if (w) {
+          w.document.write(html); w.document.close();
+          setTimeout(function () { try { w.focus(); w.print(); } catch (_) {} }, 500);
+          throw new Error('PDF capture came out empty — opened the printable receipt instead (use "Save as PDF").');
+        }
+        throw new Error('PDF capture came out empty and the popup was blocked. Allow popups, or use 🗄️ Preview / Print on the receipt row.');
+      }
+
+      await worker.toPdf().save();
     } finally {
       holder.remove();
       styleEl.remove();
