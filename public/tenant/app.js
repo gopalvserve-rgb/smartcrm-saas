@@ -29969,7 +29969,7 @@ async function adminIntegrations() {
       { id: 'nobroker',      label: '🏢 NoBroker',          guide: 'NoBroker Builder dashboard → Lead Settings → External Integration → paste URL' },
       // ---- Forms & landing-page builders ----
       { id: 'wordpress',     label: '📝 WordPress (Contact Form 7 / WPForms / Gravity)', guide: 'In WordPress, install WP Webhooks (or use Pabbly/Zapier) → set destination URL = below' },
-      { id: 'googleforms',   label: '📋 Google Forms',      guide: 'In Google Forms → Apps Script → onSubmit → fetch(URL, {method:\'POST\', body: JSON.stringify(...)})' },
+      { id: 'googleforms',   label: '📋 Google Forms',      guide: 'Needs a small Apps Script — full step-by-step guide + ready-to-paste code is in the Google Forms card below ↓' },
       { id: 'googleads',     label: '📣 Google Ads Lead Form', guide: 'Google Ads → Audiences & Tools → Lead Form Webhook → paste URL + your secret key' },
       // ---- Generic automation hubs ----
       { id: 'pabbly',        label: '🔁 Pabbly Connect',    guide: 'Pabbly → New Workflow → Action → Webhook → method POST → URL = below' },
@@ -30093,6 +30093,94 @@ async function adminIntegrations() {
       testStatus
     ));
     wrap.appendChild(makeCard);
+  }
+
+  // --- Google Forms featured card (GFORM_GUIDE_v1) ---
+  // Google Forms has NO native webhook — it needs a bound Apps Script with an
+  // onFormSubmit trigger. The old one-line hint was unusable, so give the full
+  // step-by-step plus a ready-to-paste script with the URL already injected.
+  if (apiKey) {
+    const gfUrl = location.origin + (window.HOOK_URL || '/hook') + '/leadsource/googleforms/' + apiKey;
+    const gfScript = [
+      "/** SmartCRM - Google Forms -> CRM lead push */",
+      "var CRM_WEBHOOK_URL = '" + gfUrl + "';",
+      "",
+      "function onFormSubmit(e) {",
+      "  var payload = {};",
+      "  var answers = e.response.getItemResponses();",
+      "",
+      "  for (var i = 0; i < answers.length; i++) {",
+      "    var question = answers[i].getItem().getTitle();",
+      "    var answer   = answers[i].getResponse();",
+      "    if (Object.prototype.toString.call(answer) === '[object Array]') {",
+      "      answer = answer.join(', ');",
+      "    }",
+      "    payload[question] = answer;",
+      "",
+      "    // Best-effort auto-detect of the common fields.",
+      "    var q = question.toLowerCase();",
+      "    if (!payload.name && q.indexOf('name') >= 0 && q.indexOf('company') < 0) payload.name = answer;",
+      "    if (!payload.phone && (q.indexOf('phone') >= 0 || q.indexOf('mobile') >= 0 || q.indexOf('whatsapp') >= 0 || q.indexOf('contact') >= 0)) payload.phone = answer;",
+      "    if (!payload.email && q.indexOf('mail') >= 0) payload.email = answer;",
+      "    if (!payload.city && (q.indexOf('city') >= 0 || q.indexOf('location') >= 0)) payload.city = answer;",
+      "    if (!payload.company && (q.indexOf('company') >= 0 || q.indexOf('business') >= 0 || q.indexOf('organi') >= 0)) payload.company = answer;",
+      "  }",
+      "",
+      "  payload.source = 'Google Forms';",
+      "  payload.form_title = e.source.getTitle();",
+      "",
+      "  UrlFetchApp.fetch(CRM_WEBHOOK_URL, {",
+      "    method: 'post',",
+      "    contentType: 'application/json',",
+      "    payload: JSON.stringify(payload),",
+      "    muteHttpExceptions: true",
+      "  });",
+      "}"
+    ].join('\n');
+
+    const gfCard = h('div', { class: 'card', style: { padding: '.9rem 1rem', marginTop: '1rem', border: '1px solid #c7d2fe', background: '#f5f3ff' } });
+    gfCard.appendChild(h('h4', { style: { margin: '0 0 .3rem' } }, '📋 Google Forms — step-by-step setup'));
+    gfCard.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: 0 } },
+      'Google Forms cannot call a webhook on its own — it needs a small Apps Script that runs on every submission. ' +
+      'Follow these steps once per form (takes about 2 minutes).'));
+
+    // Step 1: the URL
+    const gfInp = h('input', { type: 'text', readonly: 'readonly', value: gfUrl,
+      style: { flex: '1 1 320px', fontFamily: 'monospace', fontSize: '.78rem' }, onclick: e => e.target.select() });
+    gfCard.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap', margin: '.2rem 0 .7rem' } },
+      h('span', { style: { fontSize: '.8rem', fontWeight: 600 } }, 'Your webhook URL:'),
+      gfInp,
+      h('button', { class: 'btn sm', onclick: () => {
+        navigator.clipboard.writeText(gfUrl).then(() => toast('URL copied', 'ok'), () => { gfInp.select(); document.execCommand('copy'); toast('URL copied', 'ok'); });
+      } }, '📋 Copy')));
+
+    const steps = [
+      ['Open your Google Form', 'Click the ⋮ (three dots) at the top-right → Apps Script. A code editor opens in a new tab.'],
+      ['Paste the script', 'Delete anything already in the editor, paste the script below, then click 💾 Save. Your webhook URL is already filled in — nothing to edit.'],
+      ['Add the trigger', 'In the left sidebar click ⏰ Triggers → + Add Trigger. Set: function = onFormSubmit, event source = From form, event type = On form submit. Click Save.'],
+      ['Authorise it', 'Google will ask for permission — pick your Google account → Advanced → Go to project (unsafe) → Allow. This is normal for your own scripts.'],
+      ['Send a test response', 'Open the live form and submit one entry with a real phone number.'],
+      ['Check it landed', 'Come back here, click 🗺 Map fields on the Google Forms row → 👁 Live Payloads. You will see the submission exactly as it arrived.'],
+      ['Map your questions', 'In the 📥 Field Mapping tab, point each form question at a CRM field (name, phone, email, city, or any custom field). Name / phone / email are auto-detected, so usually only extra questions need mapping.']
+    ];
+    const ol = h('ol', { style: { margin: '0 0 .7rem', paddingLeft: '1.1rem', fontSize: '.84rem', lineHeight: '1.5' } });
+    steps.forEach(st => ol.appendChild(h('li', { style: { marginBottom: '.3rem' } },
+      h('b', {}, st[0]), h('span', { style: { color: '#475569' } }, ' — ' + st[1]))));
+    gfCard.appendChild(ol);
+
+    // The script itself
+    const gfPre = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.7rem', borderRadius: '6px',
+      fontSize: '.74rem', maxHeight: '260px', overflow: 'auto', whiteSpace: 'pre', margin: '0 0 .4rem' } }, gfScript);
+    gfCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.25rem' } },
+      h('span', { style: { fontSize: '.8rem', fontWeight: 600 } }, 'Apps Script — copy this into the editor'),
+      h('button', { class: 'btn sm', onclick: () => {
+        navigator.clipboard.writeText(gfScript).then(() => toast('Script copied', 'ok'), () => toast('Select the code and copy manually', 'err'));
+      } }, '📋 Copy script')));
+    gfCard.appendChild(gfPre);
+    gfCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem' } },
+      'ℹ️ The script sends every question and its answer, so nothing is lost even before you map fields. ' +
+      'A lead needs a phone number — make sure your form has a phone/mobile question and mark it required.'));
+    wrap.appendChild(gfCard);
   }
 
   // --- Section 1b: TradeIndia API (TRADEINDIA_API_v1) ---
