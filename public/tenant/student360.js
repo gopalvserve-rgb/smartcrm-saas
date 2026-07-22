@@ -752,47 +752,65 @@
     if (!html || typeof html !== 'string') throw new Error('Empty receipt HTML');
     await _ensureHtml2Pdf();
 
-    /* STU360_RECEIPT_PDF_v3 (2026-07-06) — the previous version injected the
-     * full HTML doc into a hidden <div>, which stripped <html>/<body> and
-     * left the body{max-width; margin:auto} rule targeting nothing. html2pdf
-     * then captured a blank container (also position:fixed; left:-9999px
-     * misleads html2canvas). Fix: render inside an <iframe srcdoc="…"> so
-     * the receipt lives in a real document with proper <html>/<body> scope.
-     * Iframe is visible on-screen but offscreen (top:-20000px) so html2canvas
-     * still gets a real bounding rect. */
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;left:0;top:-20000px;width:794px;height:1123px;border:0;background:#fff;';
-    document.body.appendChild(iframe);
-    await new Promise(function (resolve) {
-      iframe.onload = function () { setTimeout(resolve, 250); };
-      iframe.srcdoc = html;
-    });
-    const doc = iframe.contentDocument;
-    const target = doc && doc.body;
-    if (!target) { iframe.remove(); throw new Error('Iframe failed to load receipt HTML'); }
-    /* Force a solid white background so html2canvas doesn't produce a
-     * transparent (browser-default) canvas. */
-    target.style.background = '#ffffff';
-    target.style.margin = '0';
-    target.style.padding = '20px';
+    /* STU360_RECEIPT_PDF_v4 (2026-07-20) — ROOT CAUSE of the blank PDF.
+     * v2 injected the doc into a hidden <div> (lost <html>/<body> scope);
+     * v3 moved it into an <iframe srcdoc>. Both stayed blank because
+     * html2canvas CLONES ONLY THE TARGET ELEMENT into the parent document —
+     * the receipt's <style> block lives in the source <head>, so the clone
+     * rendered with ZERO css → an empty white capture.
+     * Fix: render the receipt in THIS document with its own CSS injected
+     * (selector-scoped to .stu360-rcpt so it can never leak into the CRM
+     * page), wait for the logo <img> to finish, then capture. Single
+     * template — whatever Preview/Print shows is exactly what downloads. */
+    const bodyInner = (html.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || [null, html])[1] || html;
+    const rawCss    = (html.match(/<style[^>]*>([\s\S]*?)<\/style>/i) || [null, ''])[1] || '';
+    const SCOPE     = '.stu360-rcpt';
+    // Scope every selector so the receipt CSS cannot restyle the CRM.
+    // (@media blocks are dropped — print rules are irrelevant to a canvas.)
+    const scopedCss = rawCss
+      .replace(/@media[^{]+\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '')
+      .replace(/(^|\})\s*([^{}@]+)\{/g, function (m, close, sel) {
+        const s = sel.split(',').map(function (one) {
+          one = one.trim();
+          if (!one) return one;
+          return (one === 'body' || one === 'html') ? SCOPE : SCOPE + ' ' + one;
+        }).join(',');
+        return (close || '') + s + '{';
+      });
+
+    const styleEl = document.createElement('style');
+    styleEl.textContent = scopedCss;
+    document.head.appendChild(styleEl);
+
+    const holder = document.createElement('div');
+    holder.className = 'stu360-rcpt';
+    // Laid out for real (so it has true dimensions) but tucked behind the
+    // app. No opacity/visibility tricks — html2canvas honours those and
+    // would capture a faded/blank image.
+    holder.style.cssText = 'position:fixed;left:0;top:0;width:800px;background:#ffffff;z-index:-1;';
+    holder.innerHTML = bodyInner;
+    document.body.appendChild(holder);
+
+    // The institute logo is an <img>; capturing before it loads yields a
+    // receipt with a blank logo box. Wait for every image to settle.
+    await Promise.all(Array.prototype.slice.call(holder.querySelectorAll('img')).map(function (img) {
+      if (img.complete) return Promise.resolve();
+      return new Promise(function (res) { img.onload = img.onerror = res; setTimeout(res, 3000); });
+    }));
+    await new Promise(function (r) { setTimeout(r, 120); });   // let fonts/layout settle
 
     try {
       await window.html2pdf().set({
-        margin: [10, 10, 10, 10],
+        margin: [8, 8, 8, 8],
         filename: 'Receipt-' + (rc.receipt_no || rc.id) + '.pdf',
         image: { type: 'jpeg', quality: 0.95 },
-        html2canvas: {
-          scale: 2, useCORS: true, backgroundColor: '#ffffff',
-          /* Point html2canvas at the iframe's own window/document so it
-           * resolves dimensions + fonts + stylesheets from the receipt
-           * doc, not the CRM SPA. */
-          windowWidth: 794, windowHeight: 1123,
-          allowTaint: false, foreignObjectRendering: false
-        },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-      }).from(target).save();
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }).from(holder).save();
     } finally {
-      iframe.remove();
+      holder.remove();
+      styleEl.remove();
     }
   }
 
