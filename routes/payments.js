@@ -22,7 +22,8 @@ const { authUser } = require('../utils/auth');
 
 const CF_URLS  = { live: 'https://api.cashfree.com/pg',   test: 'https://sandbox.cashfree.com/pg' };
 const RZ_URL   = 'https://api.razorpay.com/v1';
-const CF_API_VERSION = '2023-08-01';
+/* CF_LINKS_FIX_v1 — current Cashfree PG API version (was 2023-08-01). */
+const CF_API_VERSION = '2025-01-01';
 
 function _mask(s) {
   if (!s) return '';
@@ -213,51 +214,158 @@ async function api_payments_test_connection(token, gateway) {
 }
 
 // ═══════════════ Gateway clients (create link) ═══════════════
+/* ── Cashfree helpers (CF_LINKS_FIX_v1, 2026-07-20) ────────────────────────
+ * Spec: https://www.cashfree.com/docs/api-reference/payments/latest/payment-links
+ * Required on create: link_amount, link_currency, customer_details
+ * (customer_phone), link_purpose. link_notes = max 5 STRING values.
+ * link_expiry_time must be full ISO-8601 WITH offset.
+ */
+async function _cfCreds() {
+  const [id, sec, mode] = await Promise.all([
+    _cfg('CASHFREE_APP_ID'), _cfg('CASHFREE_SECRET_KEY'), _cfg('CASHFREE_MODE')
+  ]);
+  if (!id || !sec) throw new Error('Cashfree not configured. Go to Payments → Settings.');
+  return { id, sec, mode: (mode || 'live').toLowerCase() };
+}
+function _cfHeaders(id, sec) {
+  return {
+    'x-client-id': id, 'x-client-secret': sec,
+    'x-api-version': CF_API_VERSION, 'Content-Type': 'application/json',
+    'x-request-id': 'smartcrm-' + Date.now()
+  };
+}
+/* Cashfree returns {message, code, type, help}. Surface ALL of it — the old
+ * code showed a bare "API error" which told the user nothing. */
+function _cfErr(j, status, requestId) {
+  const bits = [];
+  if (j && j.message) bits.push(j.message);
+  if (j && j.code)    bits.push('[' + j.code + ']');
+  if (j && j.type)    bits.push('(' + j.type + ')');
+  if (!bits.length)   bits.push('HTTP ' + status);
+  if (requestId)      bits.push('· req ' + requestId);
+  return 'Cashfree: ' + bits.join(' ');
+}
+/* link_id: merchant reference used by GET/cancel/orders. Alphanumeric plus
+ * - and _ only, max 50. We ALWAYS send one — without it we could not call the
+ * other link APIs later (cf_link_id is NOT accepted there). */
+function _cfLinkId(custom) {
+  const raw = String(custom || '').trim();
+  if (raw) return raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 50);
+  return ('scrm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)).slice(0, 50);
+}
+/* Cashfree needs ISO-8601 WITH a timezone offset. A datetime-local input gives
+ * "2026-07-25T15:04" which Cashfree rejects — normalise to +05:30. */
+function _cfExpiry(v) {
+  if (!v) return undefined;
+  const str = String(v).trim();
+  if (/[+-]\d{2}:\d{2}$|Z$/.test(str)) return str;      // already has offset
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return undefined;
+  const pad = n => String(n).padStart(2, '0');
+  // Render in IST (+05:30) — Cashfree accounts here are India-based.
+  const ist = new Date(d.getTime() + (5 * 60 + 30) * 60000);
+  return ist.getUTCFullYear() + '-' + pad(ist.getUTCMonth() + 1) + '-' + pad(ist.getUTCDate())
+       + 'T' + pad(ist.getUTCHours()) + ':' + pad(ist.getUTCMinutes()) + ':' + pad(ist.getUTCSeconds())
+       + '+05:30';
+}
+/* link_notes: max 5 pairs, values MUST be non-empty strings. The old code
+ * always sent {thank_you:'', terms:''} — empty values get rejected. */
+function _cfNotes(opts) {
+  const notes = {};
+  const add = (k, v) => {
+    const val = String(v == null ? '' : v).trim();
+    if (val && Object.keys(notes).length < 5) notes[k] = val.slice(0, 200);
+  };
+  add('thank_you', opts.thank_you_message);
+  add('terms', opts.terms_conditions);
+  if (opts.lead_id) add('lead_id', opts.lead_id);
+  return Object.keys(notes).length ? notes : undefined;
+}
+
 async function _cashfreeCreateLink(opts) {
   const fetch = await _fetch();
-  const [id, sec, mode] = await Promise.all([_cfg('CASHFREE_APP_ID'), _cfg('CASHFREE_SECRET_KEY'), _cfg('CASHFREE_MODE')]);
-  if (!id || !sec) throw new Error('Cashfree not configured. Go to Payments → Settings.');
-  const linkMode = (mode || 'live').toLowerCase();
+  const { id, sec, mode } = await _cfCreds();
+  const linkId = _cfLinkId(opts.link_id_custom);
+
+  const customer = { customer_phone: String(opts.customer_phone || '').replace(/\D/g, '') };
+  if (opts.customer_email) customer.customer_email = String(opts.customer_email).trim();
+  if (opts.customer_name)  customer.customer_name  = String(opts.customer_name).trim();
+  if (!customer.customer_phone) throw new Error('Cashfree requires a customer phone number.');
+
+  const meta = {};
+  if (opts.redirect_url) meta.return_url = String(opts.redirect_url).trim();
+  if (opts.notify_url)   meta.notify_url = String(opts.notify_url).trim();
+  if (opts.link_type === 'one_time_upi') { meta.payment_methods = 'upi'; meta.upi_intent = 'true'; }
+
   const body = {
+    link_id: linkId,
     link_amount: Number(opts.amount_inr),
     link_currency: 'INR',
     link_purpose: String(opts.description || 'Payment').slice(0, 500),
-    customer_details: {
-      customer_phone: String(opts.customer_phone || '').replace(/\D/g, ''),
-      customer_email: opts.customer_email || undefined,
-      customer_name: opts.customer_name || undefined
-    },
-    link_partial_payments: opts.allow_partial ? true : false,
-    link_minimum_partial_amount: opts.allow_partial && opts.min_partial_inr ? Number(opts.min_partial_inr) : undefined,
-    link_notify: {
-      send_sms: !!opts.send_sms,
-      send_email: !!opts.send_email
-    },
-    link_meta: {
-      return_url: opts.redirect_url || undefined,
-      payment_methods: opts.link_type === 'one_time_upi' ? 'upi' : undefined
-    },
-    link_expiry_time: opts.expire_at || undefined,
-    link_id: opts.link_id_custom || undefined,
-    link_auto_reminders: false,
-    link_notes: { thank_you: opts.thank_you_message || '', terms: opts.terms_conditions || '' }
+    customer_details: customer,
+    link_partial_payments: !!opts.allow_partial,
+    link_notify: { send_sms: !!opts.send_sms, send_email: !!(opts.send_email && customer.customer_email) },
+    link_auto_reminders: false
   };
-  const r = await fetch(CF_URLS[linkMode] + '/links', {
-    method: 'POST',
-    headers: { 'x-client-id': id, 'x-client-secret': sec, 'x-api-version': CF_API_VERSION, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+  if (opts.allow_partial && opts.min_partial_inr) body.link_minimum_partial_amount = Number(opts.min_partial_inr);
+  const exp = _cfExpiry(opts.expire_at); if (exp) body.link_expiry_time = exp;
+  const notes = _cfNotes(opts);          if (notes) body.link_notes = notes;
+  if (Object.keys(meta).length) body.link_meta = meta;
+
+  const headers = _cfHeaders(id, sec);
+  const r = await fetch(CF_URLS[mode] + '/links', {
+    method: 'POST', headers, body: JSON.stringify(body)
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const msg = (j && (j.message || j.error_description || j.code)) || ('Cashfree HTTP ' + r.status);
-    throw new Error('Cashfree: ' + msg);
+    const e = new Error(_cfErr(j, r.status, r.headers && r.headers.get && r.headers.get('x-request-id')));
+    e.cf_request = body; e.cf_response = j; e.cf_status = r.status;
+    throw e;
   }
   return {
     gateway_link_id: j.cf_link_id || j.link_id,
+    merchant_link_id: j.link_id || linkId,
     gateway_short_url: j.link_url,
-    gateway_mode: linkMode,
+    gateway_mode: mode,
+    request: body,
     raw: j
   };
+}
+
+/* Fetch Payment Link details — GET /links/{link_id} (merchant link_id). */
+async function _cashfreeGetLink(linkId) {
+  const fetch = await _fetch();
+  const { id, sec, mode } = await _cfCreds();
+  const r = await fetch(CF_URLS[mode] + '/links/' + encodeURIComponent(linkId), {
+    method: 'GET', headers: _cfHeaders(id, sec)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(_cfErr(j, r.status));
+  return j;
+}
+
+/* Cancel Payment Link — POST /links/{link_id}/cancel. */
+async function _cashfreeCancelLink(linkId) {
+  const fetch = await _fetch();
+  const { id, sec, mode } = await _cfCreds();
+  const r = await fetch(CF_URLS[mode] + '/links/' + encodeURIComponent(linkId) + '/cancel', {
+    method: 'POST', headers: _cfHeaders(id, sec)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(_cfErr(j, r.status));
+  return j;
+}
+
+/* Orders created against a link — GET /links/{link_id}/orders. */
+async function _cashfreeLinkOrders(linkId) {
+  const fetch = await _fetch();
+  const { id, sec, mode } = await _cfCreds();
+  const r = await fetch(CF_URLS[mode] + '/links/' + encodeURIComponent(linkId) + '/orders', {
+    method: 'GET', headers: _cfHeaders(id, sec)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(_cfErr(j, r.status));
+  return Array.isArray(j) ? j : (j.orders || j.data || []);
 }
 async function _razorpayCreateLink(opts) {
   const fetch = await _fetch();
@@ -310,6 +418,17 @@ async function api_payments_link_create(token, payload) {
   const gateway = String(p.gateway || (await _cfg('PAYMENTS_ACTIVE_GATEWAY'))).toLowerCase();
   if (!gateway) throw new Error('No payment gateway active. Go to Payments → Settings.');
 
+  /* CF_LINKS_FIX_v1 — auto-point Cashfree at this tenant's webhook so paid /
+   * partially-paid / expired / cancelled events update the row automatically. */
+  if (!p.notify_url) {
+    try {
+      const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+      const slug = store && store.slug;
+      const base = String(process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+      if (slug) p.notify_url = base + '/hook/cashfree-link/' + slug;
+    } catch (_) {}
+  }
+
   let r;
   if (gateway === 'cashfree') r = await _cashfreeCreateLink(p);
   else if (gateway === 'razorpay') r = await _razorpayCreateLink(p);
@@ -321,7 +440,7 @@ async function api_payments_link_create(token, payload) {
     gateway_mode: r.gateway_mode,
     gateway_link_id: r.gateway_link_id || '',
     gateway_short_url: r.gateway_short_url || '',
-    link_id_custom: p.link_id_custom || null,
+    link_id_custom: r.merchant_link_id || p.link_id_custom || null,   /* CF_LINKS_FIX_v1 — merchant link_id drives GET/cancel/orders */
     link_type: p.link_type || 'one_time_all',
     description: p.description || '',
     amount_inr: Number(p.amount_inr),
@@ -399,14 +518,63 @@ async function api_payments_link_list(token, filters) {
 async function api_payments_link_get(token, id) {
   await _ensureSchema();
   await _requireAdmin(token);
-  return await db.findById('payment_links', id);
+  const row = await db.findById('payment_links', id);
+  if (!row) throw new Error('Link not found');
+  /* CF_LINKS_FIX_v1 — this used to return only our local row, so the status
+   * never reflected reality. Now refresh from Cashfree on read. */
+  if (row.gateway === 'cashfree' && row.link_id_custom) {
+    try {
+      const live = await _cashfreeGetLink(row.link_id_custom);
+      const status = _cfStatusToLocal(live.link_status);
+      const paid = Number(live.link_amount_paid || 0);
+      const patch = { updated_at: db.nowIso() };
+      if (status && status !== row.status) patch.status = status;
+      if (paid !== Number(row.amount_paid_inr || 0)) patch.amount_paid_inr = paid;
+      if (live.link_url && !row.gateway_short_url) patch.gateway_short_url = live.link_url;
+      if (Object.keys(patch).length > 1) { await db.update('payment_links', id, patch); Object.assign(row, patch); }
+      row.live = live;
+    } catch (e) { row.live_error = e.message; }
+  }
+  return row;
+}
+
+/* Cashfree link_status -> our local status vocabulary. */
+function _cfStatusToLocal(st) {
+  switch (String(st || '').toUpperCase()) {
+    case 'PAID':           return 'paid';
+    case 'PARTIALLY_PAID': return 'partial';
+    case 'EXPIRED':        return 'expired';
+    case 'CANCELLED':      return 'cancelled';
+    case 'ACTIVE':         return 'created';
+    default:               return '';
+  }
+}
+
+/* Orders raised against a payment link (docs: get-orders-for-link). */
+async function api_payments_link_orders(token, id) {
+  await _ensureSchema();
+  await _requireAdmin(token);
+  const row = await db.findById('payment_links', id);
+  if (!row) throw new Error('Link not found');
+  if (row.gateway !== 'cashfree') return { orders: [], note: 'Only supported for Cashfree links' };
+  if (!row.link_id_custom) return { orders: [], note: 'This link was created before link_id tracking — recreate it to use this.' };
+  const orders = await _cashfreeLinkOrders(row.link_id_custom);
+  return { orders };
 }
 async function api_payments_link_cancel(token, id) {
   await _ensureSchema();
   await _requireAdmin(token);
   if (!id) throw new Error('id required');
+  const row = await db.findById('payment_links', id);
+  if (!row) throw new Error('Link not found');
+  /* CF_LINKS_FIX_v1 — previously this only flipped OUR row to 'cancelled' and
+   * never told Cashfree, so the link stayed live and payable. */
+  let cfResult = null;
+  if (row.gateway === 'cashfree' && row.link_id_custom) {
+    cfResult = await _cashfreeCancelLink(row.link_id_custom);   // throws on failure — do not lie to the user
+  }
   await db.update('payment_links', id, { status: 'cancelled', updated_at: db.nowIso() });
-  return { ok: true };
+  return { ok: true, cashfree: cfResult };
 }
 
 // Re-share the same payment link via WA / SMS / email
@@ -486,5 +654,7 @@ module.exports = {
   api_payments_settings_get, api_payments_settings_save, api_payments_test_connection,
   api_payments_link_create, api_payments_link_list, api_payments_link_get,
   api_payments_link_cancel, api_payments_link_send,
+  api_payments_link_orders,          /* CF_LINKS_FIX_v1 */
+  _cfStatusToLocal,                 /* used by the webhook */
   api_payments_customers_list
 };

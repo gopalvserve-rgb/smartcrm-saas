@@ -171,6 +171,40 @@ app.post('/hook/cashfree',
   cashfreeWebhook.expressWebhook
 );
 
+/* CF_LINK_WEBHOOK_v1 — TENANT payment-link events (PAYMENT_LINK_EVENT).
+ * Distinct from /hook/cashfree above, which handles SaaS signup/subscription
+ * orders against the CONTROL db. Payment links live in the tenant db, so we
+ * resolve the tenant from the :slug (set automatically as link_meta.notify_url
+ * when the link is created) and run inside that tenant's pool.
+ * Mounted here — BEFORE bodyParser.json — because HMAC verification needs the
+ * exact raw bytes Cashfree signed. */
+app.post('/hook/cashfree-link/:slug',
+  bodyParser.raw({ type: '*/*', limit: '1mb' }),
+  async (req, res) => {
+    const slug = String(req.params.slug || '').trim();
+    if (!slug) return res.status(400).json({ ok: false, error: 'tenant slug required' });
+    /* Required inline: this route is mounted above the module-level
+     * `const tenantPoolMod` declaration (it must sit before bodyParser.json),
+     * so referencing that binding here would rely on TDZ timing. */
+    const _pools = require('./utils/tenantPool');
+    const _tdb   = require('./db/pg');
+    let t;
+    try { t = await _pools.findActiveTenant(slug); }
+    catch (_) { t = null; }
+    if (!t) return res.status(404).json({ ok: false, error: 'Unknown workspace: ' + slug });
+    const pool = _pools.poolFor(t);
+    if (!pool) return res.status(503).json({ ok: false, error: 'workspace unavailable' });
+    try {
+      const handler = require('./routes/paymentLinkWebhook');
+      return await _tdb.tenantStorage.run({ pool, tenant: t, slug },
+        () => handler.expressWebhook(req, res));
+    } catch (e) {
+      console.error('[cf-link-hook]', slug, e.message);
+      if (!res.headersSent) return res.status(200).json({ ok: false, error: e.message });
+    }
+  }
+);
+
 // QUOTE_MANY_ITEMS_v1 (2026-05-25) — bumped from 4mb to 25mb. Reason:
 // quotation_items.product_image_url stores data:image URIs that can be
 // hundreds of KB each. A quote with 15-20 products hit 413 PayloadTooLarge.
