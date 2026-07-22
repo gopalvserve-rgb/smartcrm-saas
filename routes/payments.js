@@ -103,6 +103,34 @@ async function _ensureSchema() {
     )`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_txns_link ON payment_link_txns(link_id)`);
     await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_txns_gtxn ON payment_link_txns(gateway_txn_id)`);
+
+    /* CF_LINK_LOG_v1 (2026-07-20) — every Cashfree webhook hit for a payment
+     * link, stored verbatim. Keeps the raw signed body + headers + what we did
+     * with it, so a "customer paid but the CRM says unpaid" dispute is
+     * answerable from data. Rows are written even when signature verification
+     * FAILS or no link matches — those are exactly the cases worth seeing. */
+    await db.query(`CREATE TABLE IF NOT EXISTS payment_link_logs (
+      id              SERIAL PRIMARY KEY,
+      link_row_id     INTEGER,
+      gateway         TEXT DEFAULT 'cashfree',
+      event_type      TEXT,
+      link_id         TEXT,
+      cf_link_id      TEXT,
+      link_status     TEXT,
+      amount_inr      NUMERIC,
+      amount_paid_inr NUMERIC,
+      order_id        TEXT,
+      txn_id          TEXT,
+      signature_ok    INTEGER,
+      http_status     INTEGER,
+      outcome         TEXT,
+      error_text      TEXT,
+      headers_json    TEXT,
+      payload_json    TEXT,
+      received_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_pl_logs_link ON payment_link_logs(link_row_id, received_at DESC)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_pl_logs_time ON payment_link_logs(received_at DESC)`);
     if (pool) _schemaEnsured.add(pool);
   } catch (e) {
     console.warn('[payments] _ensureSchema failed:', e.message);
@@ -650,11 +678,30 @@ async function api_payments_customers_list(token, filters) {
   return r.rows;
 }
 
+/* CF_LINK_LOG_v1 — webhook activity log. {link_id} for one link's history,
+ * omit it for the newest events across all links, {only_failed:1} to triage. */
+async function api_payments_link_logs(token, payload) {
+  await _ensureSchema();
+  await _requireAdmin(token);
+  const p = payload || {};
+  const lim = Math.min(200, Math.max(1, Number(p.limit) || 50));
+  const where = []; const params = [];
+  if (p.link_id)    { params.push(Number(p.link_id)); where.push('link_row_id = $' + params.length); }
+  if (p.only_failed) where.push('(signature_ok = 0 OR error_text IS NOT NULL)');
+  const r = await db.query(
+    `SELECT * FROM payment_link_logs
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY received_at DESC LIMIT ${lim}`, params);
+  return { logs: r.rows };
+}
+
 module.exports = {
   api_payments_settings_get, api_payments_settings_save, api_payments_test_connection,
   api_payments_link_create, api_payments_link_list, api_payments_link_get,
   api_payments_link_cancel, api_payments_link_send,
   api_payments_link_orders,          /* CF_LINKS_FIX_v1 */
+  api_payments_link_logs,            /* CF_LINK_LOG_v1 */
+  _ensureSchema,                     /* webhook calls this so the log table exists on a cold tenant */
   _cfStatusToLocal,                 /* used by the webhook */
   api_payments_customers_list
 };

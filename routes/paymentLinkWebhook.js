@@ -75,52 +75,131 @@ async function applyLinkEvent(data) {
   }
   await db.update('payment_links', row.id, patch);
 
-  // Record the individual transaction when present (link_payments table).
+  /* Record the individual transaction. Table is payment_link_txns (an earlier
+   * draft wrote to a non-existent 'link_payments'). gateway_txn_id has a UNIQUE
+   * index, so a Cashfree retry of the same event must not blow up — hence
+   * ON CONFLICT DO NOTHING. */
   if (order.order_id) {
     try {
       await db.query(
-        `INSERT INTO link_payments (link_id, gateway_txn_id, amount_inr, status, payment_mode, paid_at, raw_json)
-         VALUES ($1,$2,$3,$4,$5,NOW(),$6)`,
+        `INSERT INTO payment_link_txns (link_id, gateway_txn_id, amount_inr, status, payment_mode, paid_at, raw_json)
+         VALUES ($1,$2,$3,$4,$5,NOW(),$6)
+         ON CONFLICT (gateway_txn_id) DO NOTHING`,
         [row.id, String(order.transaction_id || order.order_id),
          Number(order.order_amount || 0), String(order.transaction_status || ''),
          '', JSON.stringify(data)]
       );
-    } catch (_) { /* table may not exist on older tenants — never fail the webhook */ }
+    } catch (e) { console.warn('[cf-link-hook] txn insert skipped:', e.message); }
   }
   return { ok: true, link_row_id: row.id, status: patch.status };
 }
 
+/* CF_LINK_LOG_v1 — persist EVERY webhook hit, including ones we reject.
+ * A rejected/unmatched event is precisely what you need when a customer says
+ * they paid, so this must never be gated behind a successful match. Sensitive
+ * headers are redacted; the raw body is kept verbatim for signature re-checks. */
+async function _logHit(fields) {
+  try {
+    await db.query(
+      `INSERT INTO payment_link_logs
+        (link_row_id, gateway, event_type, link_id, cf_link_id, link_status,
+         amount_inr, amount_paid_inr, order_id, txn_id, signature_ok,
+         http_status, outcome, error_text, headers_json, payload_json)
+       VALUES ($1,'cashfree',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [fields.link_row_id || null, fields.event_type || null,
+       fields.link_id || null, fields.cf_link_id || null, fields.link_status || null,
+       fields.amount_inr == null ? null : Number(fields.amount_inr),
+       fields.amount_paid_inr == null ? null : Number(fields.amount_paid_inr),
+       fields.order_id || null, fields.txn_id || null,
+       fields.signature_ok ? 1 : 0, fields.http_status || null,
+       fields.outcome || null, fields.error_text || null,
+       fields.headers_json || null, fields.payload_json || null]
+    );
+  } catch (e) { console.warn('[cf-link-hook] log write failed:', e.message); }
+}
+
+function _safeHeaders(h) {
+  const out = {};
+  Object.keys(h || {}).forEach(k => {
+    const lk = String(k).toLowerCase();
+    // Keep the signature/timestamp (needed to re-verify) but never store auth secrets.
+    if (lk === 'authorization' || lk === 'cookie' || lk === 'x-client-secret') out[lk] = '***redacted***';
+    else out[lk] = h[k];
+  });
+  return out;
+}
+
 /** Express handler — mounted at /hook/cashfree-link/:slug with a RAW body. */
 async function expressWebhook(req, res) {
+  /* Make sure payment_link_logs / payment_link_txns exist — a tenant may
+   * receive a webhook before anyone has opened the Payments page, and
+   * _ensureSchema is otherwise only triggered by the API handlers. */
+  try { await require('./payments')._ensureSchema(); } catch (_) {}
+
   const raw = _rawBody(req);
   let payload = {};
   try { payload = JSON.parse(raw || '{}'); } catch (_) { payload = {}; }
 
   const ts  = req.headers['x-webhook-timestamp'];
   const sig = req.headers['x-webhook-signature'];
+  const d   = payload.data || {};
+  const ord = d.order || {};
 
-  // Signature is verified against the TENANT's own Cashfree secret, so this
-  // must already be running inside the tenant's storage scope.
+  const base = {
+    event_type: payload.type || null,
+    link_id: d.link_id || null,
+    cf_link_id: d.cf_link_id == null ? null : String(d.cf_link_id),
+    link_status: d.link_status || null,
+    amount_inr: d.link_amount == null ? null : d.link_amount,
+    amount_paid_inr: d.link_amount_paid == null ? null : d.link_amount_paid,
+    order_id: ord.order_id || null,
+    txn_id: ord.transaction_id == null ? null : String(ord.transaction_id),
+    headers_json: JSON.stringify(_safeHeaders(req.headers)),
+    payload_json: raw ? String(raw).slice(0, 20000) : null
+  };
+
   let secret = '';
   try { secret = String((await db.getConfig('CASHFREE_SECRET_KEY', '')) || ''); } catch (_) {}
 
-  if (secret && !verifySignature(raw, ts, sig, secret)) {
+  const sigOk = secret ? verifySignature(raw, ts, sig, secret) : false;
+
+  if (secret && !sigOk) {
     console.warn('[cf-link-hook] signature mismatch — rejected');
+    await _logHit(Object.assign({}, base, {
+      signature_ok: 0, http_status: 401, outcome: 'rejected',
+      error_text: 'signature verification failed'
+    }));
     return res.status(401).json({ ok: false, error: 'signature verification failed' });
   }
   if (!secret) console.warn('[cf-link-hook] no CASHFREE_SECRET_KEY for tenant — processing UNVERIFIED');
 
   if (String(payload.type || '') !== 'PAYMENT_LINK_EVENT') {
+    await _logHit(Object.assign({}, base, {
+      signature_ok: sigOk || !secret ? 1 : 0, http_status: 200, outcome: 'ignored',
+      error_text: 'not a PAYMENT_LINK_EVENT'
+    }));
     return res.json({ ok: true, ignored: 'not a PAYMENT_LINK_EVENT' });
   }
 
   let result;
-  try { result = await applyLinkEvent(payload.data || {}); }
-  catch (e) {
+  try {
+    result = await applyLinkEvent(d);
+  } catch (e) {
     console.error('[cf-link-hook] apply failed:', e.message);
-    return res.status(200).json({ ok: false, error: e.message });  // 200 so Cashfree stops retrying a permanent error
+    await _logHit(Object.assign({}, base, {
+      signature_ok: sigOk ? 1 : 0, http_status: 200, outcome: 'error', error_text: e.message
+    }));
+    return res.status(200).json({ ok: false, error: e.message });
   }
+
+  await _logHit(Object.assign({}, base, {
+    link_row_id: result.link_row_id || null,
+    signature_ok: sigOk ? 1 : 0,
+    http_status: 200,
+    outcome: result.ok ? ('applied:' + (result.status || '')) : 'unmatched',
+    error_text: result.ok ? null : (result.reason || null)
+  }));
   return res.json(result);
 }
 
-module.exports = { expressWebhook, applyLinkEvent, verifySignature };
+module.exports = { expressWebhook, applyLinkEvent, verifySignature, _safeHeaders };

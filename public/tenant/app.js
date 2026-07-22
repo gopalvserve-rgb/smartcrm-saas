@@ -15692,6 +15692,76 @@ VIEWS.paymentSettings = async (view) => {
   view.appendChild(w);
 };
 
+/* CF_LINK_LOG_v1 — webhook/event log viewer. Shows exactly what Cashfree sent
+ * (raw signed body + headers) and what we did with it, including REJECTED and
+ * UNMATCHED events — those are the ones that matter when a customer insists
+ * they paid but the CRM disagrees. */
+async function openPaymentLinkLogs(linkRow) {
+  const ov = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 99999, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '2rem 0' }, onclick: (e) => { if (e.target === ov) ov.remove(); } });
+  const card = h('div', { style: { background: 'white', borderRadius: '12px', width: '980px', maxWidth: '96vw', boxShadow: '0 25px 60px rgba(0,0,0,.3)' } });
+  const title = linkRow ? ('Payment link log — ' + (linkRow.link_id_custom || linkRow.gateway_link_id || ('#' + linkRow.id))) : 'Payment webhook log — all links';
+  card.appendChild(h('div', { style: { padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+    h('h3', { style: { margin: 0, fontSize: '16px' } }, '📜 ' + title),
+    h('button', { style: { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px' }, onclick: () => ov.remove() }, '×')));
+  const body = h('div', { style: { padding: '14px 18px', maxHeight: '74vh', overflowY: 'auto' } });
+  card.appendChild(body);
+  ov.appendChild(card); document.body.appendChild(ov);
+
+  body.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+  let logs = [];
+  try {
+    const r = await api('api_payments_link_logs', linkRow ? { link_id: linkRow.id, limit: 100 } : { limit: 100 });
+    logs = (r && r.logs) || [];
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { style: { color: '#dc2626' } }, '⚠ ' + e.message));
+    return;
+  }
+  body.innerHTML = '';
+  if (!logs.length) {
+    body.appendChild(h('div', { style: { padding: '1rem', color: '#64748b', fontSize: '13px' } },
+      'No webhook events received yet. Cashfree calls the webhook when a link is paid, partially paid, expired or cancelled.'));
+    body.appendChild(h('div', { style: { marginTop: '.6rem', fontSize: '12px', color: '#475569' } },
+      'Webhook URL: ', h('code', {}, location.origin + '/hook/cashfree-link/' + (window.CRM && CRM.slug ? CRM.slug : '<slug>'))));
+    return;
+  }
+
+  const pill = (txt, bg, fg) => h('span', { style: { background: bg, color: fg, padding: '2px 7px', borderRadius: '999px', fontSize: '11px', fontWeight: 600 } }, txt);
+  logs.forEach(l => {
+    const ok = Number(l.signature_ok) === 1;
+    const outcome = String(l.outcome || '');
+    const bad = !ok || /rejected|error|unmatched/.test(outcome);
+    const row = h('div', { style: { border: '1px solid ' + (bad ? '#fecaca' : '#e2e8f0'), background: bad ? '#fef2f2' : '#fff', borderRadius: '8px', padding: '.55rem .7rem', marginBottom: '.5rem' } });
+    row.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '12.5px' } },
+      h('b', {}, new Date(l.received_at).toLocaleString()),
+      pill(l.link_status || l.event_type || '—', '#eef2ff', '#3730a3'),
+      ok ? pill('✔ signature', '#dcfce7', '#166534') : pill('✖ signature', '#fee2e2', '#991b1b'),
+      pill('HTTP ' + (l.http_status || '—'), '#e2e8f0', '#475569'),
+      outcome ? pill(outcome, bad ? '#fee2e2' : '#dcfce7', bad ? '#991b1b' : '#166534') : null,
+      l.amount_paid_inr != null ? h('span', { style: { fontSize: '12px', color: '#0f172a' } }, 'paid ₹' + Number(l.amount_paid_inr).toLocaleString('en-IN')) : null
+    ));
+    if (l.error_text) row.appendChild(h('div', { style: { color: '#b91c1c', fontSize: '12px', marginTop: '.25rem' } }, '⚠ ' + l.error_text));
+    const meta = [];
+    if (l.link_id)   meta.push('link_id=' + l.link_id);
+    if (l.order_id)  meta.push('order=' + l.order_id);
+    if (l.txn_id)    meta.push('txn=' + l.txn_id);
+    if (meta.length) row.appendChild(h('div', { style: { fontSize: '11.5px', color: '#64748b', fontFamily: 'monospace', marginTop: '.2rem' } }, meta.join('  ·  ')));
+
+    const det = h('details', { style: { marginTop: '.35rem' } });
+    det.appendChild(h('summary', { style: { cursor: 'pointer', fontSize: '12px', color: '#4338ca' } }, 'View raw payload + headers'));
+    const pre = (label, txt) => {
+      det.appendChild(h('div', { style: { fontSize: '11.5px', fontWeight: 600, marginTop: '.35rem' } }, label));
+      let pretty = txt || '';
+      try { pretty = JSON.stringify(JSON.parse(txt), null, 2); } catch (_) {}
+      det.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.55rem', borderRadius: '6px', fontSize: '11.5px', maxHeight: '240px', overflow: 'auto', whiteSpace: 'pre-wrap' } }, pretty));
+    };
+    if (l.payload_json) pre('Payload received from Cashfree', l.payload_json);
+    if (l.headers_json) pre('Headers (secrets redacted)', l.headers_json);
+    row.appendChild(det);
+    body.appendChild(row);
+  });
+}
+
 VIEWS.paymentLinks = async (view) => {
   view.innerHTML = '';
   const wrap = h('div', { style: { padding: '1.5rem' } });
@@ -15708,6 +15778,10 @@ VIEWS.paymentLinks = async (view) => {
   wrap.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.75rem' } },
     rangeSel, statusSel, phoneInp, qInp,
     h('button', { class: 'btn', style: { padding: '6px 14px', cursor: 'pointer' }, onclick: () => loadList() }, '🔄 Refresh'),
+    /* CF_LINK_LOG_v1 — all webhook events across every link */
+    h('button', { class: 'btn', style: { padding: '6px 14px', cursor: 'pointer' },
+      title: 'Every Cashfree webhook received, including rejected ones',
+      onclick: () => openPaymentLinkLogs(null) }, '📜 Webhook log'),
     h('div', { style: { marginLeft: 'auto' } },
       h('button', { class: 'btn primary', style: { padding: '8px 18px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 },
         onclick: () => openCreateLinkModal(view) }, '+ Create Payment Link'))
@@ -15755,7 +15829,10 @@ VIEWS.paymentLinks = async (view) => {
             h('button', { title: 'Send via Email', style: _iconBtn('#1e40af'),
               onclick: async () => { try { await api('api_payments_link_send', { id: r.id, channel: 'email' }); toast('Email sent', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, '✉️'),
             h('button', { title: 'Copy link', style: _iconBtn('#475569'),
-              onclick: () => { try { navigator.clipboard.writeText(r.gateway_short_url || ''); toast('Copied', 'ok'); } catch (_) {} } }, '📋')),
+              onclick: () => { try { navigator.clipboard.writeText(r.gateway_short_url || ''); toast('Copied', 'ok'); } catch (_) {} } }, '📋'),
+            /* CF_LINK_LOG_v1 — per-link webhook history */
+            h('button', { class: 'btn xs', title: 'Webhook + payment log for this link',
+              onclick: () => openPaymentLinkLogs(r) }, '📜')),
           h('td', { style: { padding: '10px' } },
             h('a', { href: r.gateway_short_url, target: '_blank', style: { color: '#4338ca', textDecoration: 'none', fontSize: '12px' } }, 'Open ↗'))
         ))));
