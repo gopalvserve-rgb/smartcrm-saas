@@ -73,6 +73,17 @@ const _DEFAULT_SETTINGS = {
   quick_reply_filter_tapped: 1,
   quick_reply_mode: 'static',
   quick_reply_pool: '',
+  /* AIBOT_CONCLUSION_PERSIST_FIX_v1 (2026-07-20) — MUST be listed here.
+   * _coerceSettings() copies ONLY keys that exist in _DEFAULT_SETTINGS, so a
+   * column missing from this object is silently dropped from the settings GET
+   * even though the save path writes it. That is why ticking "A human agent
+   * has replied on this thread" never stuck: it saved fine, but the reload
+   * never returned conclusion_signals, so the UI fell back to its hardcoded
+   * default preset list (demo_booked/callback_requested/appointment_fixed/
+   * quote_accepted/not_interested) every single time.
+   * bot_label + additional_phone_ids dodge this only because api_aibot_settings_get
+   * re-attaches them by hand after the coerce. */
+  conclusion_signals: {},
 };
 
 function _coerceSettings(row) {
@@ -81,7 +92,7 @@ function _coerceSettings(row) {
   Object.keys(out).forEach(k => { if (row[k] !== undefined && row[k] !== null) out[k] = row[k]; });
   // JSONB coercions — pg returns these as objects, but if a row was
   // saved by a path that stringified them, parse defensively.
-  for (const key of ['reply_modes', 'business_hours', 'active_phone_number_ids', 'heat_keywords', 'quick_reply_buttons']) {
+  for (const key of ['reply_modes', 'business_hours', 'active_phone_number_ids', 'heat_keywords', 'quick_reply_buttons', 'conclusion_signals']) {
     if (typeof out[key] === 'string') {
       try { out[key] = JSON.parse(out[key]); } catch (_) { out[key] = _DEFAULT_SETTINGS[key]; }
     }
