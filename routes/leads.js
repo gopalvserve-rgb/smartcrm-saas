@@ -791,6 +791,17 @@ async function api_leads_statusCounts(token) {
 
 async function api_leads_get(token, id) {
   const me = await authUser(token);
+  /* LEADS_VIEW_PERM_GATE_v1 (2026-07-20) — enforce the 'Leads — View'
+   * permission grant, not just visibility SCOPE. Previously api_leads_get only
+   * checked _isVisibleOrShared (whose leads), so a role whose leads.view was
+   * set to "no" could still open the lead detail/edit modal — the assign rule
+   * was silently ignored. The leads LIST is governed separately (by hierarchy
+   * in getVisibleUserIds), so blocking here does not empty the list. */
+  if (me.role !== 'admin') {
+    let canView = false;
+    try { canView = !!await require('./permissions').can(me, 'leads.view'); } catch (_) { canView = true; }
+    if (!canView) throw new Error('You do not have permission to view lead details.');
+  }
   const visible = await getVisibleUserIds(me);
   const lead = await db.findById('leads', id);
   if (!lead) throw new Error('Not found');
@@ -1506,6 +1517,14 @@ async function _reminderFlowAutoCancel(leadId, newStatusId) {
 
 async function api_leads_update(token, id, patch) {
   const me = await authUser(token);
+  /* LEADS_EDIT_PERM_GATE_v1 (2026-07-20) — enforce the 'Leads — Edit' grant.
+   * Without this, a role with leads.edit set to "no" could still PATCH a lead
+   * (the modal saved fine) because only visibility scope was checked. */
+  if (me.role !== 'admin') {
+    let canEdit = false;
+    try { canEdit = !!await require('./permissions').can(me, 'leads.edit'); } catch (_) { canEdit = true; }
+    if (!canEdit) throw new Error('You do not have permission to edit leads.');
+  }
   const visible = await getVisibleUserIds(me);
   const lead = await db.findById('leads', id);
   if (!lead) throw new Error('Not found');

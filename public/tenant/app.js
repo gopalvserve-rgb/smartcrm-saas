@@ -9708,6 +9708,15 @@ async function whitelistLeadPhone(lead, opts) {
 }
 
 async function openLeadModal(id) {
+  /* LEADS_VIEW_PERM_GATE_v1 (2026-07-20) — a role whose 'Leads — View' is set
+   * to "no" may still SEE the list (governed by hierarchy), but must not be
+   * able to open a lead's detail/edit modal. Creating a NEW lead (no id) is
+   * governed by 'Leads — Create', so only gate the existing-lead path. */
+  if (id && CRM.user && CRM.user.role !== 'admin' && CRM.can && !CRM.can('leads.view')) {
+    toast('You do not have permission to view lead details.', 'err');
+    return;
+  }
+  const _leadEditAllowed = !!(CRM.user && (CRM.user.role === 'admin' || !CRM.can || CRM.can('leads.edit')));
   const { statuses, sources, products, users, customFields } = CRM.cache;
   // Lazy-load the admin-managed tag library; cached for the session.
   if (!CRM.cache.tagLibrary) {
@@ -10310,8 +10319,25 @@ async function openLeadModal(id) {
   if (id && ['admin', 'manager', 'team_leader'].includes(CRM.user.role)) {
     actionsRow.appendChild(h('button', { type: 'button', class: 'btn', onclick: () => openDuplicateAndReassignModal(id, lead, () => { modal.remove(); loadLeads && loadLeads(); }) }, '📋 Duplicate & reassign'));
   }
-  actionsRow.appendChild(h('button', { type: 'submit', form: 'lead-form', class: 'btn primary' }, id ? 'Save changes' : 'Create lead'));
+  if (id && !_leadEditAllowed) {
+    /* View-only: no Save button; a clear read-only note instead. */
+    actionsRow.appendChild(h('span', { class: 'muted', style: { fontSize: '.82rem' } }, '🔒 View only — you do not have edit permission'));
+  } else {
+    actionsRow.appendChild(h('button', { type: 'submit', form: 'lead-form', class: 'btn primary' }, id ? 'Save changes' : 'Create lead'));
+  }
   body.appendChild(actionsRow);
+  /* LEADS_EDIT_PERM_GATE_v1 — lock every field for a view-only opener. Done
+   * after the form is built so it covers inputs added by later sections too.
+   * The backend also 403s api_leads_update, so this is UX, not the gate. */
+  if (id && !_leadEditAllowed) {
+    setTimeout(() => {
+      try {
+        body.querySelectorAll('#lead-form input, #lead-form select, #lead-form textarea, #lead-form button[type="submit"]').forEach(el => {
+          el.disabled = true;
+        });
+      } catch (_) {}
+    }, 0);
+  }
   document.body.appendChild(modal);
 
   // Status → Follow-up enforcement: when the user picks a status whose
