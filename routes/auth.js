@@ -243,11 +243,19 @@ async function api_password_forgot(_token, email) {
   const resetPath = tenantSlug ? `/t/${tenantSlug}/reset-password.html?token=${rawToken}` : `/reset-password.html?token=${rawToken}`;
   const resetUrl = baseUrl + resetPath;
 
-  // Send via super-admin global SMTP via utils/mailer.
-  try {
-    const mailer = require('../utils/mailer');
-    const brand = await db.getConfig('COMPANY_NAME', '').catch(() => '') || 'SmartCRM';
-    const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1f2937">
+  /* FORGOT_PW_MAILER_FIX_v1 (2026-07-20) — the reset email was sent ONLY via
+   * utils/mailer._sendRaw, which reads SMTP from the TENANT config table. Most
+   * tenants (incl. vserve) never fill in tenant-level SMTP, so _transporter()
+   * threw 'SMTP not configured', the error was swallowed, and the API still
+   * returned ok — user got no email. (The comment even claimed 'super-admin
+   * global SMTP' but that is NOT what utils/mailer reads.)
+   *
+   * Fix: send via the PLATFORM mailer (routes/saas/saasMailer, control-DB SMTP)
+   * that already delivers welcome emails reliably, and fall back to the tenant
+   * mailer only if the platform one is unavailable. Also record the real
+   * outcome on the tenants row / logs instead of silently discarding it. */
+  const brand = await db.getConfig('COMPANY_NAME', '').catch(() => '') || 'SmartCRM';
+  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1f2937">
       <h2 style="color:#4f46e5;margin:0 0 16px">Reset your password</h2>
       <p>Hi ${user.name || ''},</p>
       <p>We received a request to reset the password for your ${brand} account (${user.email}). Click the button below to set a new password. This link expires in 60 minutes.</p>
@@ -257,10 +265,32 @@ async function api_password_forgot(_token, email) {
       <p style="color:#6b7280;font-size:13px">Or paste this URL into your browser:<br><span style="word-break:break-all">${resetUrl}</span></p>
       <p style="color:#6b7280;font-size:13px;margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb">If you didn't request this, you can safely ignore this email — your password won't change.</p>
     </div>`;
-    await mailer._sendRaw(user.email, `Reset your ${brand} password`, html);
-  } catch (e) { console.warn('[forgot] email send failed:', e.message); }
+  const subject = `Reset your ${brand} password`;
 
-  return { ok: true };
+  let sent = false, lastErr = '';
+  // 1) Platform SMTP (same channel as the working welcome email).
+  try {
+    const saasMailer = require('./saas/saasMailer');
+    await saasMailer.sendMail({ to: user.email, subject, html });
+    sent = true;
+  } catch (e) { lastErr = 'platform: ' + e.message; }
+  // 2) Fall back to tenant SMTP if the platform mailer isn't configured.
+  if (!sent) {
+    try {
+      const mailer = require('../utils/mailer');
+      await mailer._sendRaw(user.email, subject, html);
+      sent = true;
+    } catch (e) { lastErr += ' | tenant: ' + e.message; }
+  }
+  if (!sent) {
+    console.error('[forgot] RESET EMAIL FAILED for ' + user.email + ' — ' + lastErr);
+  } else {
+    console.log('[forgot] reset email sent to ' + user.email);
+  }
+
+  /* Return delivery status so an ADMIN-initiated reset can see failures. The
+   * self-service endpoint stays anti-enumeration (always ok) — see caller. */
+  return { ok: true, email_sent: sent, email_error: sent ? undefined : lastErr };
 }
 
 /**
