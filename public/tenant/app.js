@@ -29921,8 +29921,8 @@ async function _renderTradeIndiaPanel(box, apiKey) {
     row('Duplicate rule', selDup, 'Matched on rfi_id.'));
   box.appendChild(grid);
   box.appendChild(h('div', { style: { display: 'flex', gap: '1.2rem', flexWrap: 'wrap', margin: '.2rem 0 .8rem' } },
-    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, chkAuto, 'Auto import (run on schedule)'),
-    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, chkLogs, 'Enable sync logs')));
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.9rem', fontWeight: '600' } }, chkAuto, '🟢 Auto-pull ON — pull leads automatically every ' + (Number(st.sync_interval_min) || 15) + ' min (uncheck = OFF)'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, chkLogs, 'Keep sync logs')));
 
   // Status strip
   const statusPill = (txt, bg, fg) => h('span', { class: 'tag', style: { background: bg, color: fg } }, txt);
@@ -29993,7 +29993,7 @@ async function _renderTradeIndiaPanel(box, apiKey) {
         await loadLogs();
       } catch (e) { msg.textContent = '❌ ' + e.message; msg.style.color = '#dc2626'; }
       ev.target.disabled = false;
-    } }, '🔄 Sync now'),
+    } }, '⬇️ Pull leads now'),
     h('button', {
       class: 'btn',
       style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
