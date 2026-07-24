@@ -328,6 +328,8 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
+// R2_STORE_v1 — one-time secret-gated backfill (see tickets.expressR2BackfillAttachments)
+app.get('/api/saas/_r2_backfill_attachments', tickets.expressR2BackfillAttachments);
 
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //
