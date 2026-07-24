@@ -271,7 +271,9 @@ async function api_password_forgot(_token, email) {
   // 1) Platform SMTP (same channel as the working welcome email).
   try {
     const saasMailer = require('./saas/saasMailer');
-    await saasMailer.sendMail({ to: user.email, subject, html });
+    let _slug = '';
+    try { const st = require('../db/pg').tenantStorage; _slug = (st && st.getStore && st.getStore() || {}).slug || ''; } catch (_) {}
+    await saasMailer.sendMail({ to: user.email, subject, html, context: 'password_reset', tenant_slug: _slug });
     sent = true;
   } catch (e) { lastErr = 'platform: ' + e.message; }
   // 2) Fall back to tenant SMTP if the platform mailer isn't configured.

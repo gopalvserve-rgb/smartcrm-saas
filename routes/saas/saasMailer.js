@@ -123,23 +123,82 @@ async function _getTransporter() {
   return { transporter: _transporter, cfg: c };
 }
 
-async function sendMail({ to, subject, html, text, bcc }) {
-  const { transporter, cfg } = await _getTransporter();
-  const finalBcc = (bcc || cfg.bcc || '').toString().split(',').map(s => s.trim()).filter(Boolean);
-  const finalHtml = html
-    ? (cfg.signature ? html + '<hr style="border:none;border-top:1px solid #e5e7eb;margin:1.5rem 0"/>' + cfg.signature : html)
-    : undefined;
-  return transporter.sendMail({
-    from: cfg.from,
-    to,
-    subject,
-    bcc: finalBcc.length ? finalBcc : undefined,
-    html: finalHtml,
-    text: text || (finalHtml ? finalHtml.replace(/<[^>]+>/g, '') : ''),
-    encoding: cfg.charset
-  });
+/* EMAIL_LOG_v1 (2026-07-20) — records EVERY platform email send (welcome,
+ * invoice, password reset, test) with the REAL SMTP outcome, so super-admin
+ * can see delivery instead of trusting a bare "email_sent:true". nodemailer's
+ * info carries accepted[] / rejected[] / response / messageId — a recipient in
+ * rejected[] (or an empty accepted[]) means the SMTP server did NOT accept the
+ * address even though sendMail didn't throw. That distinction is invisible
+ * today; the log makes it visible. */
+async function _logEmail(rec) {
+  try {
+    const control = require('../../control/db');
+    await control.query(`CREATE TABLE IF NOT EXISTS email_logs (
+      id SERIAL PRIMARY KEY,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      context       TEXT,
+      tenant_slug   TEXT,
+      to_email      TEXT,
+      from_email    TEXT,
+      subject       TEXT,
+      success       INTEGER,
+      accepted_json TEXT,
+      rejected_json TEXT,
+      message_id    TEXT,
+      smtp_response TEXT,
+      error_text    TEXT
+    )`);
+    await control.query(`CREATE INDEX IF NOT EXISTS idx_email_logs_time ON email_logs(created_at DESC)`);
+    await control.query(
+      `INSERT INTO email_logs (context, tenant_slug, to_email, from_email, subject, success,
+                               accepted_json, rejected_json, message_id, smtp_response, error_text)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [rec.context || null, rec.tenant_slug || null, rec.to || null, rec.from || null,
+       rec.subject || null, rec.success ? 1 : 0,
+       rec.accepted ? JSON.stringify(rec.accepted) : null,
+       rec.rejected ? JSON.stringify(rec.rejected) : null,
+       rec.message_id || null, rec.response || null, rec.error || null]
+    );
+  } catch (e) { console.warn('[emailLog] write failed:', e.message); }
+}
+
+async function sendMail({ to, subject, html, text, bcc, context, tenant_slug }) {
+  let cfg;
+  try {
+    const t = await _getTransporter();
+    cfg = t.cfg;
+    const finalBcc = (bcc || cfg.bcc || '').toString().split(',').map(s => s.trim()).filter(Boolean);
+    const finalHtml = html
+      ? (cfg.signature ? html + '<hr style="border:none;border-top:1px solid #e5e7eb;margin:1.5rem 0"/>' + cfg.signature : html)
+      : undefined;
+    const info = await t.transporter.sendMail({
+      from: cfg.from,
+      to,
+      subject,
+      bcc: finalBcc.length ? finalBcc : undefined,
+      html: finalHtml,
+      text: text || (finalHtml ? finalHtml.replace(/<[^>]+>/g, '') : ''),
+      encoding: cfg.charset
+    });
+    /* A send can "succeed" yet have the recipient in rejected[] — treat an
+     * empty accepted list OR a non-empty rejected list as a real failure. */
+    const accepted = (info && info.accepted) || [];
+    const rejected = (info && info.rejected) || [];
+    const reallyOk = accepted.length > 0 && rejected.length === 0;
+    await _logEmail({
+      context, tenant_slug, to, from: cfg.from, subject,
+      success: reallyOk, accepted, rejected,
+      message_id: info && info.messageId, response: info && info.response,
+      error: reallyOk ? null : ('SMTP accepted=' + JSON.stringify(accepted) + ' rejected=' + JSON.stringify(rejected))
+    });
+    if (!reallyOk) throw new Error('SMTP did not accept the recipient (' + (info && info.response || 'no response') + ')');
+    return info;
+  } catch (e) {
+    await _logEmail({ context, tenant_slug, to, from: cfg && cfg.from, subject, success: false, error: e.message });
+    throw e;
+  }
 }
 
 function invalidate() { _transporter = null; _key = null; }
 
-module.exports = { sendMail, invalidate };
+module.exports = { sendMail, invalidate, _logEmail };

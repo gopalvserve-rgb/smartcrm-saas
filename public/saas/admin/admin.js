@@ -172,7 +172,8 @@ const NAV = [
   { id: 'admins',        label: '👥 Roles & Permissions', requiresPerm: 'admins.view' },
   { id: 'device_health', label: '📱 Device Health',      requiresPerm: 'device_health.view' },
   { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' },
-  { id: 'email_template', label: '✉️ Welcome Email',      requiresPerm: 'settings.edit' }   /* WELCOME_EMAIL_v4 */
+  { id: 'email_template', label: '✉️ Welcome Email',      requiresPerm: 'settings.edit' },   /* WELCOME_EMAIL_v4 */
+  { id: 'email_log',     label: '📧 Email Log',          requiresPerm: 'settings.edit' }   /* EMAIL_LOG_v1 */
 ];
 
 
@@ -5561,6 +5562,75 @@ function _tenantDeleteBtn(t) {
       catch (e) { toast(e.message, 'err'); }
     } }, '🗑 Delete');
 }
+
+VIEWS.email_log = async (view) => {
+  /* EMAIL_LOG_v1 — every platform email send with its real SMTP outcome.
+   * This is where you confirm whether a welcome / invoice / password-reset
+   * email was actually accepted by the mail server (accepted[] non-empty,
+   * rejected[] empty) vs silently rejected. */
+  view.appendChild(h('h1', {}, '📧 Email Log'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } },
+    'Every email the platform tried to send (welcome, invoice, password reset, SMTP test) with the actual SMTP response. A row marked FAILED means the mail server did not accept the recipient — even if the app showed success.'));
+
+  const sumHost = h('div', { style: { display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' } });
+  view.appendChild(sumHost);
+
+  const ctxSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+    h('option', { value: '' }, 'All types'),
+    h('option', { value: 'password_reset' }, 'Password reset'),
+    h('option', { value: 'welcome' }, 'Welcome'),
+    h('option', { value: 'invoice' }, 'Invoice'),
+    h('option', { value: 'test' }, 'SMTP test'));
+  const failChk = h('input', { type: 'checkbox' });
+  const qInp = h('input', { type: 'search', placeholder: 'Search email / subject…', style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '200px' } });
+  const refreshBtn = h('button', { class: 'btn' }, '🔄 Refresh');
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' } },
+    ctxSel, h('label', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px' } }, failChk, 'Only failed'), qInp, refreshBtn));
+
+  const host = h('div', {}); view.appendChild(host);
+
+  async function reload() {
+    host.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    let data;
+    try {
+      data = await api('api_saas_email_logs_list', { context: ctxSel.value, only_failed: failChk.checked ? 1 : 0, q: qInp.value.trim(), limit: 200 });
+    } catch (e) { host.innerHTML = ''; host.appendChild(h('div', { style: { color: '#dc2626', padding: '1rem' } }, '⚠ ' + e.message)); return; }
+
+    const sm = data.summary || {};
+    sumHost.innerHTML = '';
+    const card = (label, val, color) => h('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 16px', minWidth: '120px' } },
+      h('div', { style: { fontSize: '12px', color: '#64748b' } }, label),
+      h('div', { style: { fontSize: '22px', fontWeight: 700, color: color || '#0f172a' } }, String(val || 0)));
+    sumHost.appendChild(card('Sent (7d)', sm.sent, '#16a34a'));
+    sumHost.appendChild(card('Failed (7d)', sm.failed, Number(sm.failed) ? '#dc2626' : '#16a34a'));
+    sumHost.appendChild(card('Total (7d)', sm.total));
+
+    const logs = data.logs || [];
+    host.innerHTML = '';
+    if (!logs.length) { host.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No emails logged yet.')); return; }
+
+    const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' } });
+    tbl.appendChild(h('thead', {}, h('tr', { style: { textAlign: 'left', borderBottom: '2px solid #e2e8f0' } },
+      ...['When', 'Type', 'To', 'Subject', 'Result', 'SMTP response'].map(x => h('th', { style: { padding: '8px' } }, x)))));
+    const tb = h('tbody', {});
+    logs.forEach(l => {
+      const ok = Number(l.success) === 1;
+      const tr = h('tr', { style: { borderBottom: '1px solid #f1f5f9', background: ok ? '#fff' : '#fef2f2' } },
+        h('td', { style: { padding: '8px', whiteSpace: 'nowrap' } }, new Date(l.created_at).toLocaleString()),
+        h('td', { style: { padding: '8px' } }, l.context || '—'),
+        h('td', { style: { padding: '8px', fontFamily: 'monospace' } }, l.to_email || '—'),
+        h('td', { style: { padding: '8px', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: l.subject || '' }, l.subject || '—'),
+        h('td', { style: { padding: '8px', fontWeight: 600, color: ok ? '#16a34a' : '#dc2626' } }, ok ? '✓ Accepted' : '✖ Failed'),
+        h('td', { style: { padding: '8px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: (l.smtp_response || '') + (l.error_text ? ('  |  ' + l.error_text) : '') }, l.error_text || l.smtp_response || (l.message_id ? ('id ' + l.message_id) : '—')));
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    host.appendChild(tbl);
+  }
+  ctxSel.onchange = reload; failChk.onchange = reload; refreshBtn.onclick = reload;
+  qInp.addEventListener('keydown', e => { if (e.key === 'Enter') reload(); });
+  await reload();
+};
 
 VIEWS.transactions = async (view) => {
   view.appendChild(h('h1', {}, '💳 Transactions'));
