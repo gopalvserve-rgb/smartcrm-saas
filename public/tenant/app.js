@@ -30014,12 +30014,18 @@ async function _renderTradeIndiaPanel(box, apiKey) {
     try {
       const r = await api('api_tradeindia_preview', { from_date: pvFrom.value, to_date: pvTo.value, limit: Number(pvLim.value) });
       pvOut.innerHTML = '';
-      pvOut.appendChild(h('div', { style: { fontSize: '.8rem', margin: '.3rem 0' } },
-        h('b', {}, 'Request URL: '),
-        h('a', { href: r.url, target: '_blank', rel: 'noopener', style: { wordBreak: 'break-all' } }, r.url)));
-      pvOut.appendChild(h('div', { style: { fontSize: '.82rem', margin: '.2rem 0' } },
-        r.ok ? ('✅ ' + r.count + ' record(s) · ' + r.response_ms + 'ms') : ('❌ ' + (r.error || 'failed')),
-        ));
+      // Full request URL (with key) in a copyable box + open-in-browser link, so
+      // the tenant can paste it into a browser tab and see the raw JSON there.
+      const urlInp = h('input', { type: 'text', readonly: 'readonly', value: r.url || '',
+        style: { flex: '1 1 340px', fontFamily: 'monospace', fontSize: '.74rem' }, onclick: e => e.target.select() });
+      pvOut.appendChild(h('div', { style: { margin: '.3rem 0' } },
+        h('div', { style: { fontSize: '.78rem', fontWeight: '600', marginBottom: '.2rem' } }, 'Request URL (open this in a browser to test):'),
+        h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' } },
+          urlInp,
+          h('button', { class: 'btn sm', type: 'button', onclick: () => { navigator.clipboard.writeText(r.url || '').then(() => toast('URL copied', 'ok'), () => { urlInp.select(); document.execCommand('copy'); toast('URL copied', 'ok'); }); } }, '📋 Copy'),
+          h('a', { href: r.url, target: '_blank', rel: 'noopener', class: 'btn sm' }, 'Open in browser ↗'))));
+      pvOut.appendChild(h('div', { style: { fontSize: '.82rem', margin: '.2rem 0', fontWeight: '600' } },
+        r.ok ? ('✅ ' + r.count + ' record(s) · ' + r.response_ms + 'ms') : ('❌ ' + (r.error || 'failed'))));
       if (r.ok) {
         pvOut.appendChild(h('div', { style: { fontSize: '.78rem', color: '#475569', marginBottom: '.2rem' } }, 'Response sample (first 3):'));
         pvOut.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.6rem', borderRadius: '6px', fontSize: '.74rem', maxHeight: '220px', overflow: 'auto' } },
@@ -30032,7 +30038,7 @@ async function _renderTradeIndiaPanel(box, apiKey) {
   box.appendChild(h('div', { style: { marginTop: '1rem', paddingTop: '.7rem', borderTop: '1px dashed #e2e8f0' } },
     h('div', { style: { fontWeight: '600', fontSize: '.85rem', marginBottom: '.4rem' } }, '🧪 Test connection'),
     h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } },
-      'Save your credentials above, then pull a date range to confirm TradeIndia returns your inquiries. Nothing is imported by this test.'),
+      'Save your credentials above, then fetch a date range to confirm TradeIndia returns your inquiries. Nothing is imported by this test. ⚠ TradeIndia allows a maximum 24-hour window — keep From and To on the SAME day (defaults to today).'),
     h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '.5rem' } },
       h('label', { style: { fontSize: '.8rem' } }, 'From', pvFrom),
       h('label', { style: { fontSize: '.8rem' } }, 'To', pvTo),

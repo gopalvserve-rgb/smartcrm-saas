@@ -413,31 +413,60 @@ async function runSync(opts) {
     const ownerId = await _ownerUserId();
     const mapping = await _loadMapping();
 
+    /* CF... TRADEINDIA_DAYWINDOW_v1 (2026-07-20) — TradeIndia's my_inquiry.html
+     * rejects any range wider than 24h ("greater than 24 hours not allowed for
+     * inquiries", HTTP 400). The old code sent from=(last_sync-1d or now-7d) →
+     * to=today in ONE call, which is >24h and always failed. Fix: iterate ONE
+     * DAY AT A TIME (from_date == to_date), newest day first, so every request
+     * is a valid ≤24h window. rfi_id dedupe makes day overlaps harmless. */
     const lookback = Math.max(1, Number(cfg.lookback_days) || 7);
-    // Re-scan from a day before the last sync so nothing straddling the
-    // boundary is missed; rfi_id dedupe makes the overlap harmless.
-    const from = cfg.last_sync_at
-      ? new Date(new Date(cfg.last_sync_at).getTime() - 24 * 3600 * 1000)
-      : new Date(Date.now() - lookback * 24 * 3600 * 1000);
-    const fromStr = _ymd(from), toStr = _ymd(new Date());
+    // How many days back to cover: for a scheduled run since a recent sync,
+    // just today + yesterday; for a first run, the lookback window. Hard-capped
+    // so a stale last_sync can't spawn hundreds of calls.
+    let daysBack;
+    if (cfg.last_sync_at) {
+      const gapDays = Math.ceil((Date.now() - new Date(cfg.last_sync_at).getTime()) / (24 * 3600 * 1000));
+      daysBack = Math.min(31, Math.max(1, gapDays + 1));   // +1 to cover the boundary day
+    } else {
+      daysBack = Math.min(31, lookback);
+    }
 
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const url = _buildUrl(cfg, fromStr, toStr, page);
-      if (page === 1) firstUrl = _redactUrl(url);
-      const rows = _asArray(await _fetchJson(url));
-      stats.records_received += rows.length;
-      for (const row of rows) {
+    for (let d = 0; d < daysBack; d++) {
+      const day = new Date(Date.now() - d * 24 * 3600 * 1000);
+      const dayStr = _ymd(day);   // from_date == to_date == this single day
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const url = _buildUrl(cfg, dayStr, dayStr, page);
+        if (!firstUrl) firstUrl = _redactUrl(url);
+        let rows;
         try {
-          const outcome = await _importOne(row, cfg, ownerId, mapping);
-          if (outcome === 'imported')      stats.imported_count++;
-          else if (outcome === 'updated')  stats.updated_count++;
-          else                             stats.skipped_count++;
+          rows = _asArray(await _fetchJson(url));
         } catch (e) {
+          // One bad day shouldn't abort the whole run — log it and move on.
           stats.error_count++;
-          console.warn('[tradeindia] row failed:', e.message);
+          console.warn('[tradeindia] ' + dayStr + ' p' + page + ' failed:', e.message);
+          if (!message) message = e.message;
+          break;   // stop paging this day
         }
+        stats.records_received += rows.length;
+        for (const row of rows) {
+          try {
+            const outcome = await _importOne(row, cfg, ownerId, mapping);
+            if (outcome === 'imported')      stats.imported_count++;
+            else if (outcome === 'updated')  stats.updated_count++;
+            else                             stats.skipped_count++;
+          } catch (e) {
+            stats.error_count++;
+            console.warn('[tradeindia] row failed:', e.message);
+          }
+        }
+        if (rows.length < PAGE_LIMIT) break;   // last page for this day
       }
-      if (rows.length < PAGE_LIMIT) break;
+    }
+    // If nothing came back and we hit errors, this run genuinely failed —
+    // don't paint a green 'success' pill over a wall of HTTP 400s.
+    if (stats.records_received === 0 && stats.error_count > 0) {
+      status = 'failed';
+      if (!message) message = 'All requests failed';
     }
   } catch (e) {
     status = 'failed';
