@@ -2,19 +2,13 @@
  * Fed by routes/saas/saasMailer._logEmail (welcome, invoice, password reset,
  * SMTP test). Control-DB table email_logs. */
 const control = require('../../control/db');
-const { authUser } = require('../../utils/auth');
-
-async function _requireAdmin(token) {
-  const me = await authUser(token);
-  if (!me || (me.role !== 'admin' && me.role !== 'superadmin' && !me.is_super)) {
-    // Super-admin app authenticates against control users; be permissive to
-    // the super-admin roles the rest of the SaaS API already trusts.
-  }
-  return me;
-}
+/* EMAIL_LOG_v1 fix — super-admin endpoints authenticate against the CONTROL
+ * users via requireSuperAdmin, NOT the tenant-scoped authUser (which has no
+ * tenant pool in the super-admin context and threw "API error"). */
+const { requireSuperAdmin } = require('./superAdminAuth');
 
 async function api_saas_email_logs_list(token, filters) {
-  await _requireAdmin(token);
+  await requireSuperAdmin(token);
   const f = filters || {};
   const lim = Math.min(500, Math.max(1, Number(f.limit) || 100));
   const where = []; const params = [];
