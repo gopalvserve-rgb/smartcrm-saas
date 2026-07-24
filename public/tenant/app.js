@@ -30062,7 +30062,10 @@ async function adminIntegrations() {
       // ---- Indian classifieds & lead vendors ----
       { id: 'indiamart',     label: '🛒 IndiaMART',         guide: 'IndiaMART Seller dashboard → Lead Manager → CRM Integration → paste URL' },
       { id: 'justdial',      label: '📞 JustDial',          guide: 'JustDial business dashboard → Lead Push API → Webhook URL → paste URL' },
-      { id: 'tradeindia',    label: '🏭 TradeIndia',        guide: 'TradeIndia Seller panel → Lead Manager → External CRM → paste URL' },
+      /* TradeIndia removed from the webhook list — it is a PULL integration now
+       * (see the '🏭 TradeIndia API (auto-import)' panel above). Keeping a
+       * webhook row here confused users into pasting a URL that TradeIndia
+       * cannot call. */
       { id: 'exportersindia',label: '🌍 ExportersIndia',    guide: 'ExportersIndia Seller dashboard → Lead Settings → Webhook → paste URL' },
       { id: 'sulekha',       label: '🔧 Sulekha',           guide: 'Sulekha Pro account → Lead Manager → External CRM → paste URL' },
       // ---- Real estate portals ----
