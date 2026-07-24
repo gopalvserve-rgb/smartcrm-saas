@@ -31,6 +31,7 @@
 
 const jwt = require('jsonwebtoken');
 const control = require('../../control/db');
+const r2store = require('../../utils/r2store'); // R2_STORE_v1 — zero-egress attachment offload (non-destructive)
 const { requireSuperAdmin } = require('./superAdminAuth');
 const tenantPoolMod = require('../../utils/tenantPool');
 
@@ -135,6 +136,9 @@ async function _ensureSchema() {
       CREATE INDEX IF NOT EXISTS idx_support_attach_ticket ON support_ticket_attachments(ticket_id);
       CREATE INDEX IF NOT EXISTS idx_support_attach_reply  ON support_ticket_attachments(reply_id);
     `);
+    // R2_STORE_v1 — additive column for the R2 object key. BYTEA stays the
+    // source of truth; this only records where the R2 copy lives (if any).
+    try { await control.query(`ALTER TABLE support_ticket_attachments ADD COLUMN IF NOT EXISTS r2_key TEXT`); } catch (_) {}
     _schemaEnsured = true;
   } catch (e) {
     console.warn('[tickets] _ensureSchema failed:', e.message);
@@ -833,6 +837,22 @@ async function expressAttachmentUpload(req, res) {
       uploaded_by_type: isAdmin ? 'admin' : 'tenant',
       uploaded_by_id: who.id || null
     });
+    // R2_STORE_v1 — best-effort dual-write to R2 (zero-egress serving layer).
+    // BYTEA above is already persisted and untouched; if this fails we simply
+    // keep serving from BYTEA. Gated by R2_OFFLOAD=write|on.
+    if (r2store.writesEnabled()) {
+      try {
+        const key = await r2store.put({
+          tenant: ticket.tenant_slug || 'unknown',
+          category: 'attachments',
+          subPath: 'tickets/' + ticket.id,
+          filename: id + '-' + (req.file.originalname || 'file'),
+          body: req.file.buffer,
+          contentType: req.file.mimetype || 'application/octet-stream',
+        });
+        await control.query('UPDATE support_ticket_attachments SET r2_key = $1 WHERE id = $2', [key, id]);
+      } catch (e) { console.warn('[ticket-attach] R2 dual-write skipped:', e.message); }
+    }
     res.json({ ok: true, id, filename: req.file.originalname, size_bytes: req.file.size });
   } catch (e) {
     console.error('[ticket-attach]', e.message);
@@ -865,6 +885,15 @@ async function expressAttachmentDownload(req, res) {
       } catch (_) {}
     }
     if (!allow) return res.status(401).json({ error: 'Not authorized' });
+    // R2_STORE_v1 — when reads are on and this row has an R2 copy, redirect the
+    // browser to a short-lived signed URL so the bytes come from Cloudflare (zero
+    // Railway egress). Any failure falls through to the original BYTEA stream.
+    if (r2store.readsEnabled() && a.r2_key) {
+      try {
+        const url = await r2store.presignGet(a.r2_key, 'attachments', 900);
+        return res.redirect(302, url);
+      } catch (e) { console.warn('[ticket-attach-dl] R2 read fell back to BYTEA:', e.message); }
+    }
     let buf = a.file_bytes;
     if (!Buffer.isBuffer(buf)) buf = buf ? Buffer.from(buf) : Buffer.alloc(0);
     res.setHeader('Content-Type', a.mime_type || 'application/octet-stream');
