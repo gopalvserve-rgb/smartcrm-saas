@@ -53754,7 +53754,11 @@ VIEWS.ticketview = async (view, params) => {
       const attRow = h('div', { style: { marginTop: '.6rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
       m.attachments.forEach(a => {
         const url = '/api/saas/ticket-attachment/' + a.id + '?token=' + encodeURIComponent(CRM.token || '');
-        const isImg = /^image//i.test(a.mime_type || '');
+        /* TICKETVIEW_IMG_REGEX_FIX_v1 (2026-07-20) — the unescaped '/' in
+         * /^image//i closed the regex early, so JS parsed the rest as a
+         * division by `i` (undefined) → "i is not defined" whenever a ticket
+         * with an attachment was viewed. Use startsWith to avoid the trap. */
+        const isImg = String(a.mime_type || '').toLowerCase().startsWith('image/');
         if (isImg) {
           attRow.appendChild(h('a', { href: url, target: '_blank' }, h('img', { src: url, style: { maxHeight: '120px', maxWidth: '200px', borderRadius: '4px', border: '1px solid ' + border, display: 'block' } })));
         } else {
