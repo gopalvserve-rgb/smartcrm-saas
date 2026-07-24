@@ -920,7 +920,17 @@ async function expressR2BackfillAttachments(req, res) {
     const GATE = 'r2bf-onetime-3f9a2c7d5e814b06a1';
     const given = String(req.query.key || req.headers['x-r2-key'] || '').trim();
     if (given !== GATE) return res.status(403).json({ error: 'forbidden' });
-    if (!r2store.isConfigured()) return res.status(400).json({ error: 'R2 not configured' });
+    if (!r2store.isConfigured()) {
+      return res.status(400).json({ error: 'R2 not configured', present: {
+        R2_ENDPOINT: !!process.env.R2_ENDPOINT,
+        R2_ACCESS_KEY_ID: !!process.env.R2_ACCESS_KEY_ID,
+        R2_SECRET_ACCESS_KEY: !!process.env.R2_SECRET_ACCESS_KEY,
+        R2_PRIVATE_BUCKET: !!process.env.R2_PRIVATE_BUCKET,
+        R2_PUBLIC_BUCKET: !!process.env.R2_PUBLIC_BUCKET,
+        R2_PUBLIC_BASE_URL: !!process.env.R2_PUBLIC_BASE_URL,
+        R2_OFFLOAD: process.env.R2_OFFLOAD || '(unset)',
+      }});
+    }
     await _ensureSchema();
     const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
     const { rows } = await control.query(
