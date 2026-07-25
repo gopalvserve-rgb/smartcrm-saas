@@ -3006,7 +3006,19 @@ function startCampaignWorker() {
   console.log(`[wb] campaign worker started, interval ${intervalMs}ms`);
 }
 
+let _campaignTickRunning = false;   // WB_CAMPAIGN_NODUP_v1 — re-entrancy guard
 async function _campaignTick() {
+  // WB_CAMPAIGN_NODUP_v1 (2026-07-25) — CONCURRENCY GUARD. The tick runs on a
+  // 30s interval AND is kicked by setImmediate on create/send_now. A 500-msg
+  // batch takes ~50s (100ms/send), so a second run would fire mid-batch, pull
+  // the SAME still-'queued' targets (they're only marked 'sent' after sending)
+  // and message the customer AGAIN. This flag lets only one tick run at a time.
+  if (_campaignTickRunning) return;
+  _campaignTickRunning = true;
+  try { return await _campaignTickInner(); }
+  finally { _campaignTickRunning = false; }
+}
+async function _campaignTickInner() {
   // Find queued campaigns whose scheduled_at has passed (or send_now=1)
   // WB_CAMPAIGN_WORKER_v1 (2026-07-02) — only process campaigns created on/after
   // this cutoff. Purpose: when the (previously-never-started) background sender
@@ -3045,6 +3057,19 @@ async function _campaignTick() {
     }
     for (const t of targets) {
       try {
+        // WB_CAMPAIGN_NODUP_v1 — STOP FAST ON PAUSE. Re-read the live campaign
+        // status each recipient; if it's no longer sending (admin paused /
+        // deleted it), abandon the rest of the batch immediately instead of
+        // blasting the remaining ~500 messages.
+        const liveStatus = (await db.query(`SELECT status FROM wa_campaigns WHERE id = $1`, [camp.id])).rows[0];
+        if (!liveStatus || liveStatus.status !== 'sending') break;
+        // ATOMIC CLAIM — flip this target to 'sending' ONLY if it is still
+        // 'queued'. If the UPDATE changes 0 rows, another run already took it,
+        // so skip. This makes a duplicate send impossible even if two ticks
+        // somehow overlap.
+        const claim = await db.query(
+          `UPDATE wa_campaign_targets SET status='sending' WHERE id=$1 AND status='queued'`, [t.id]);
+        if (!claim.rowCount) continue;
         // Render variables — replace @{lead_field} placeholders with actual values
         const lead = t.lead_id ? await db.findById('leads', t.lead_id) : null;
         // WA_CAMPAIGN_EXCEL_v1 — if Excel upload populated per-recipient
