@@ -336,6 +336,24 @@ app.get('/api/saas/_rec_retention_report', async (req, res) => {
     res.json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// REC_RETENTION_EXEC_v1 — DESTRUCTIVE per-tenant purge (secret-gated, one tenant per call).
+app.get('/api/saas/_rec_retention_purge', async (req, res) => {
+  try {
+    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
+    const slug = String(req.query.tenant || '').trim();
+    if (!slug) return res.status(400).json({ error: 'tenant required' });
+    const days = Number(req.query.days) || 30;
+    const rr = require('./routes/saas/recordingsRetention');
+    const before = await rr.measureTenant(slug, days);
+    let deleted = 0, r2 = 0, remaining = before.count, last = null;
+    for (let i = 0; i < 60; i++) {
+      last = await rr.purgeTenant(slug, days, 500);
+      deleted += last.deleted_rows; r2 += last.r2_objects_deleted; remaining = last.remaining;
+      if (last.deleted_rows === 0 || last.remaining === 0) break;
+    }
+    res.json({ tenant: slug, window_days: days, before_count: before.count, before_mb: before.mb, deleted_rows: deleted, r2_objects_deleted: r2, remaining });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //

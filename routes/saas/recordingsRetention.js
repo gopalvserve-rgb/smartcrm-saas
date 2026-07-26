@@ -63,6 +63,19 @@ async function report(days) {
   };
 }
 
+/** READ-ONLY. Count + Postgres MB of recordings older than `days` for ONE tenant. */
+async function measureTenant(slug, days) {
+  days = Math.max(1, parseInt(days, 10) || 30);
+  const t = await control.findOneBy('tenants', 'slug', slug);
+  if (!t) throw new Error('tenant not found: ' + slug);
+  const pool = tenantPoolMod.poolFor(t);
+  if (!pool) throw new Error('pool unavailable: ' + slug);
+  const q = await pool.query(
+    `SELECT COUNT(*)::int AS c, COALESCE(SUM(octet_length(audio_bytes)),0)::bigint AS b
+       FROM lead_recordings WHERE created_at < NOW() - ($1 || ' days')::interval`, [String(days)]);
+  return { count: q.rows[0].c | 0, mb: +((Number(q.rows[0].b) || 0) / 1048576).toFixed(2) };
+}
+
 /** DESTRUCTIVE. Delete recordings older than `days` for ONE tenant (R2 object + row). Batched. */
 async function purgeTenant(slug, days, limit) {
   days = Math.max(1, parseInt(days, 10) || 30);
@@ -111,4 +124,4 @@ async function runDailyForAllTenants(readConfigDays) {
   return { tenantsProcessed, totalDeleted };
 }
 
-module.exports = { report, purgeTenant, runDailyForAllTenants };
+module.exports = { report, measureTenant, purgeTenant, runDailyForAllTenants };
