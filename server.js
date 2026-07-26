@@ -328,32 +328,6 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
-// CAT_R2_MIGRATE_v1 + VACUUM_v1 — secret-gated temporary maintenance endpoints.
-app.get('/api/saas/_cat_list', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    res.json(await require('./routes/saas/catalogueVacuum').catalogueTenants());
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get('/api/saas/_cat_migrate', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    const slug = String(req.query.tenant || '').trim();
-    if (!slug) return res.status(400).json({ error: 'tenant required' });
-    const cv = require('./routes/saas/catalogueVacuum');
-    let moved = 0, remaining = 1, last = null;
-    for (let i = 0; i < 40; i++) { last = await cv.migrateCatalogue(slug, 200); moved += last.moved; remaining = last.remaining; if (last.moved === 0 || last.remaining === 0) break; }
-    res.json({ tenant: slug, moved, remaining, errors: (last && last.errors) || [] });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get('/api/saas/_vacuum', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    const slug = String(req.query.tenant || '').trim();
-    if (!slug) return res.status(400).json({ error: 'tenant required' });
-    res.json(await require('./routes/saas/catalogueVacuum').vacuumTenant(slug));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
 // REC_RETENTION_EXEC_v1 — daily all-tenant recordings retention cron. Purges
 // lead_recordings older than each tenant's RECORDING_RETENTION_DAYS (default 30;
 // '0' = keep forever). Only lead_recordings touched. Disable with RECORDINGS_RETENTION_CRON=off.
