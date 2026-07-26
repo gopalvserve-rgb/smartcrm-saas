@@ -328,32 +328,6 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
-// STORAGE_REPORT_v1 — READ-ONLY size report (secret-gated, deletes nothing). Temporary.
-app.get('/api/saas/_storage_report', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    res.json(await require('./routes/saas/storageReport').report());
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-// KB_R2_MIGRATE_v1 — secret-gated temporary endpoints to move ai_kb_documents to R2.
-app.get('/api/saas/_kb_list', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    res.json(await require('./routes/saas/kbBackfill').tenantsWithKb());
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get('/api/saas/_kb_migrate', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    const slug = String(req.query.tenant || '').trim();
-    if (!slug) return res.status(400).json({ error: 'tenant required' });
-    const kb = require('./routes/saas/kbBackfill');
-    const before = await kb.measure(slug);
-    let moved = 0, remaining = before.count, last = null;
-    for (let i = 0; i < 40; i++) { last = await kb.migrate(slug, 200); moved += last.moved; remaining = last.remaining; if (last.moved === 0 || last.remaining === 0) break; }
-    res.json({ tenant: slug, before_count: before.count, before_mb: before.mb, moved, remaining, errors: (last && last.errors) || [] });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
 // REC_RETENTION_EXEC_v1 — daily all-tenant recordings retention cron. Purges
 // lead_recordings older than each tenant's RECORDING_RETENTION_DAYS (default 30;
 // '0' = keep forever). Only lead_recordings touched. Disable with RECORDINGS_RETENTION_CRON=off.
