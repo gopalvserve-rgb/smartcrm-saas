@@ -328,6 +328,14 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
+// REC_RETENTION_EXEC_v1 — READ-ONLY dry-run report (secret-gated, deletes nothing).
+app.get('/api/saas/_rec_retention_report', async (req, res) => {
+  try {
+    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
+    const out = await require('./routes/saas/recordingsRetention').report(Number(req.query.days) || 30);
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //
