@@ -906,63 +906,6 @@ async function expressAttachmentDownload(req, res) {
   }
 }
 
-/**
- * R2_STORE_v1 — one-time, batched, secret-gated backfill of existing ticket
- * attachments into R2. NON-DESTRUCTIVE: copies file_bytes → R2, verifies byte
- * length, records r2_key. Never deletes/modifies file_bytes. Idempotent.
- * Auth: ?key= must equal R2_SECRET_ACCESS_KEY (env-only secret; not in repo).
- * Call repeatedly (each call does up to ?limit=25, max 100) until remaining=0.
- */
-async function expressR2BackfillAttachments(req, res) {
-  try {
-    // One-time gate token (this endpoint is temporary and will be removed after
-    // the backfill completes). Deterministic so it doesn't depend on env values.
-    const GATE = 'r2bf-onetime-3f9a2c7d5e814b06a1';
-    const given = String(req.query.key || req.headers['x-r2-key'] || '').trim();
-    if (given !== GATE) return res.status(403).json({ error: 'forbidden' });
-    if (!r2store.isConfigured()) {
-      return res.status(400).json({ error: 'R2 not configured', present: {
-        R2_ENDPOINT: !!process.env.R2_ENDPOINT,
-        R2_ACCESS_KEY_ID: !!process.env.R2_ACCESS_KEY_ID,
-        R2_SECRET_ACCESS_KEY: !!process.env.R2_SECRET_ACCESS_KEY,
-        R2_PRIVATE_BUCKET: !!process.env.R2_PRIVATE_BUCKET,
-        R2_PUBLIC_BUCKET: !!process.env.R2_PUBLIC_BUCKET,
-        R2_PUBLIC_BASE_URL: !!process.env.R2_PUBLIC_BASE_URL,
-        R2_OFFLOAD: process.env.R2_OFFLOAD || '(unset)',
-      }});
-    }
-    await _ensureSchema();
-    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
-    const { rows } = await control.query(
-      `SELECT a.id, a.ticket_id, a.filename, a.mime_type, a.file_bytes, t.tenant_slug
-         FROM support_ticket_attachments a
-         JOIN support_tickets t ON t.id = a.ticket_id
-        WHERE a.r2_key IS NULL AND a.file_bytes IS NOT NULL
-        ORDER BY a.id ASC LIMIT ${limit}`);
-    let migrated = 0, failed = 0; const errs = [];
-    for (const a of rows) {
-      try {
-        let buf = a.file_bytes;
-        if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
-        const k = await r2store.put({
-          tenant: a.tenant_slug || 'unknown', category: 'attachments',
-          subPath: 'tickets/' + a.ticket_id, filename: a.id + '-' + (a.filename || 'file'),
-          body: buf, contentType: a.mime_type || 'application/octet-stream',
-        });
-        const back = await r2store.getBuffer(k, 'attachments');
-        if (back.length !== buf.length) throw new Error('size mismatch ' + back.length + '/' + buf.length);
-        await control.query('UPDATE support_ticket_attachments SET r2_key = $1 WHERE id = $2', [k, a.id]);
-        migrated++;
-      } catch (e) { failed++; errs.push({ id: a.id, err: e.message }); }
-    }
-    const { rows: [cnt] } = await control.query(
-      `SELECT COUNT(*)::int AS remaining FROM support_ticket_attachments WHERE r2_key IS NULL AND file_bytes IS NOT NULL`);
-    res.json({ ok: true, migrated_this_call: migrated, failed, remaining: cnt.remaining, errs });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-}
-
 // ================================================================
 // TKT_AUTOCLOSE_v1 — remind the tenant at 24h then auto-close at 48h when a ticket
 // is waiting on the customer (last reply was ours). Run hourly from server.js.
@@ -1085,7 +1028,6 @@ module.exports = {
   // Attachments (Express)
   expressAttachmentUpload,
   expressAttachmentDownload,
-  expressR2BackfillAttachments,
   // Constants exposed for tests / introspection
   CATEGORIES, STATUSES, PRIORITIES
 };
