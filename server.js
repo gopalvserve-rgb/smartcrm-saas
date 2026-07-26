@@ -328,6 +328,13 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
+// STORAGE_REPORT_v1 — READ-ONLY size report (secret-gated, deletes nothing). Temporary.
+app.get('/api/saas/_storage_report', async (req, res) => {
+  try {
+    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
+    res.json(await require('./routes/saas/storageReport').report());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // REC_RETENTION_EXEC_v1 — daily all-tenant recordings retention cron. Purges
 // lead_recordings older than each tenant's RECORDING_RETENTION_DAYS (default 30;
 // '0' = keep forever). Only lead_recordings touched. Disable with RECORDINGS_RETENTION_CRON=off.
