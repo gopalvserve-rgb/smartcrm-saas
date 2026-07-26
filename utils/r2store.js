@@ -35,6 +35,7 @@ let _client = null;
 
 const CATEGORIES = {
   attachments: { public: false },
+  kb:          { public: false },
   whatsapp:    { public: false },
   receipts:    { public: false },
   imports:     { public: false },

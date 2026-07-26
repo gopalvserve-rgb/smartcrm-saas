@@ -191,6 +191,7 @@ async function _ensureAiBotColumns() {
     // when that phone's bot replies). Lets a tenant with two
     // businesses keep their KBs separate per number.
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS r2_key TEXT`); // R2_STORE_v1 — offloaded attachment bytes
     await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id)`);
     // Multi-phone KB scope (May 2026): a single KB doc can be assigned to N phones at once.
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS additional_phone_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
@@ -2365,11 +2366,16 @@ async function _sendAttachmentMatches({ matches, phone, leadId, inboundPhoneId }
   let sent = 0;
   for (const m of matches) {
     try {
-      // Pull the binary
-      const r = await db.query(`SELECT file_data, file_name, file_mime_type FROM ai_kb_documents WHERE id = $1`, [m.id]);
+      // Pull the binary — from Postgres if present, else from R2 (R2_STORE_v1 offload).
+      const r = await db.query(`SELECT file_data, file_name, file_mime_type, r2_key FROM ai_kb_documents WHERE id = $1`, [m.id]);
       const row = r.rows[0];
-      if (!row || !row.file_data) continue;
-      const buf = Buffer.isBuffer(row.file_data) ? row.file_data : Buffer.from(row.file_data);
+      if (!row) continue;
+      let buf = row.file_data ? (Buffer.isBuffer(row.file_data) ? row.file_data : Buffer.from(row.file_data)) : null;
+      if (!buf && row.r2_key) {
+        try { buf = await require('../utils/r2store').getBuffer(row.r2_key, 'kb'); }
+        catch (e) { console.warn('[aibot-kb] R2 fetch failed for id ' + m.id + ':', e.message); }
+      }
+      if (!buf) continue;
       // Upload to WhatsApp Graph media to get a media_id, then send as a document.
       const media = await wb._uploadMediaToWhatsApp(buf, row.file_mime_type || 'application/octet-stream', row.file_name || 'attachment', cfg);
       if (!media || !media.id) continue;
