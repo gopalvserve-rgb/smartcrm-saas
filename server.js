@@ -328,6 +328,32 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
+// CAT_R2_MIGRATE_v1 + VACUUM_v1 — secret-gated temporary maintenance endpoints.
+app.get('/api/saas/_cat_list', async (req, res) => {
+  try {
+    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
+    res.json(await require('./routes/saas/catalogueVacuum').catalogueTenants());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/saas/_cat_migrate', async (req, res) => {
+  try {
+    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
+    const slug = String(req.query.tenant || '').trim();
+    if (!slug) return res.status(400).json({ error: 'tenant required' });
+    const cv = require('./routes/saas/catalogueVacuum');
+    let moved = 0, remaining = 1, last = null;
+    for (let i = 0; i < 40; i++) { last = await cv.migrateCatalogue(slug, 200); moved += last.moved; remaining = last.remaining; if (last.moved === 0 || last.remaining === 0) break; }
+    res.json({ tenant: slug, moved, remaining, errors: (last && last.errors) || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/saas/_vacuum', async (req, res) => {
+  try {
+    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
+    const slug = String(req.query.tenant || '').trim();
+    if (!slug) return res.status(400).json({ error: 'tenant required' });
+    res.json(await require('./routes/saas/catalogueVacuum').vacuumTenant(slug));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // REC_RETENTION_EXEC_v1 — daily all-tenant recordings retention cron. Purges
 // lead_recordings older than each tenant's RECORDING_RETENTION_DAYS (default 30;
 // '0' = keep forever). Only lead_recordings touched. Disable with RECORDINGS_RETENTION_CRON=off.
@@ -2665,9 +2691,21 @@ app.get('/api/wa-catalogue-file/:token', (req, res) => {
         try { await authUser(authTok); } catch (_) { return res.status(401).json({ error: 'auth required' }); }
         const tok = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
         if (!tok) return res.status(404).end();
-        const r = await tenantDb.query(`SELECT mime, bytes, filename FROM wa_catalogue_media WHERE token=$1`, [tok]);
-        if (!r.rows.length) return res.status(404).json({ error: 'file not found' });
-        const row = r.rows[0];
+        // R2_STORE_v1 — tolerate tenants not yet migrated (no r2_key column).
+        let row;
+        try {
+          row = (await tenantDb.query(`SELECT mime, bytes, filename, r2_key FROM wa_catalogue_media WHERE token=$1`, [tok])).rows[0];
+        } catch (_colErr) {
+          row = (await tenantDb.query(`SELECT mime, bytes, filename FROM wa_catalogue_media WHERE token=$1`, [tok])).rows[0];
+        }
+        if (!row) return res.status(404).json({ error: 'file not found' });
+        // Serve from R2 when offloaded (bytes nulled after move); fall back to bytea.
+        if (row.r2_key) {
+          try {
+            const url = await require('./utils/r2store').presignGet(row.r2_key, 'catalogue', 900);
+            return res.redirect(302, url);
+          } catch (e) { console.warn('[wa-catalogue-file] R2 presign failed, using bytea:', e.message); }
+        }
         res.setHeader('Content-Type', row.mime || 'application/octet-stream');
         res.setHeader('Cache-Control', 'private, max-age=86400');
         if (row.filename) res.setHeader('Content-Disposition', 'inline; filename="' + row.filename.replace(/["\\]/g, '') + '"');
