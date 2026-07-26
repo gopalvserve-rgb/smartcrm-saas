@@ -104,24 +104,34 @@ async function purgeTenant(slug, days, limit) {
   return { tenant: slug, window_days: days, deleted_rows: deleted, r2_objects_deleted: r2Deleted, remaining, errors: errs };
 }
 
-/** Daily cron entry: purge every tenant using its own RECORDING_RETENTION_DAYS (0/blank = keep forever). */
-async function runDailyForAllTenants(readConfigDays) {
+/** Daily cron entry: purge every tenant using its own RECORDING_RETENTION_DAYS.
+ *  Blank/missing → 30 (the documented default). '0' → keep forever (skip). */
+async function runDailyForAllTenants() {
   const slugs = await _activeTenantSlugs();
-  let tenantsProcessed = 0, totalDeleted = 0;
+  const summary = { tenantsProcessed: 0, totalDeleted: 0, perTenant: [] };
   for (const slug of slugs) {
     try {
-      const days = await readConfigDays(slug); // caller supplies per-tenant window
-      if (!days || days <= 0) continue;        // 0/blank = keep forever → skip
-      // delete in batches until this tenant is clear (bounded loop)
+      const t = await control.findOneBy('tenants', 'slug', slug);
+      if (!t) continue;
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) continue;
+      let days = 30; // documented default
+      try {
+        const c = await pool.query("SELECT value FROM config WHERE key = 'RECORDING_RETENTION_DAYS' LIMIT 1");
+        if (c.rows.length && String(c.rows[0].value).trim() !== '') days = parseInt(c.rows[0].value, 10);
+      } catch (_) {}
+      if (!Number.isFinite(days) || days <= 0) continue; // 0/invalid = keep forever
+      let del = 0;
       for (let i = 0; i < 50; i++) {
         const r = await purgeTenant(slug, days, 500);
-        totalDeleted += r.deleted_rows;
+        del += r.deleted_rows;
         if (r.deleted_rows === 0 || r.remaining === 0) break;
       }
-      tenantsProcessed++;
+      if (del > 0) summary.perTenant.push({ tenant: slug, deleted: del, window_days: days });
+      summary.totalDeleted += del; summary.tenantsProcessed++;
     } catch (e) { console.warn('[rec-retention]', slug, e.message); }
   }
-  return { tenantsProcessed, totalDeleted };
+  return summary;
 }
 
 module.exports = { report, measureTenant, purgeTenant, runDailyForAllTenants };

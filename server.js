@@ -328,32 +328,17 @@ app.post('/api/saas/ticket-attachment',
   tickets.expressAttachmentUpload
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
-// REC_RETENTION_EXEC_v1 — READ-ONLY dry-run report (secret-gated, deletes nothing).
-app.get('/api/saas/_rec_retention_report', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    const out = await require('./routes/saas/recordingsRetention').report(Number(req.query.days) || 30);
-    res.json(out);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-// REC_RETENTION_EXEC_v1 — DESTRUCTIVE per-tenant purge (secret-gated, one tenant per call).
-app.get('/api/saas/_rec_retention_purge', async (req, res) => {
-  try {
-    if (String(req.query.key || '').trim() !== 'r2bf-onetime-3f9a2c7d5e814b06a1') return res.status(403).json({ error: 'forbidden' });
-    const slug = String(req.query.tenant || '').trim();
-    if (!slug) return res.status(400).json({ error: 'tenant required' });
-    const days = Number(req.query.days) || 30;
-    const rr = require('./routes/saas/recordingsRetention');
-    const before = await rr.measureTenant(slug, days);
-    let deleted = 0, r2 = 0, remaining = before.count, last = null;
-    for (let i = 0; i < 60; i++) {
-      last = await rr.purgeTenant(slug, days, 500);
-      deleted += last.deleted_rows; r2 += last.r2_objects_deleted; remaining = last.remaining;
-      if (last.deleted_rows === 0 || last.remaining === 0) break;
-    }
-    res.json({ tenant: slug, window_days: days, before_count: before.count, before_mb: before.mb, deleted_rows: deleted, r2_objects_deleted: r2, remaining });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+// REC_RETENTION_EXEC_v1 — daily all-tenant recordings retention cron. Purges
+// lead_recordings older than each tenant's RECORDING_RETENTION_DAYS (default 30;
+// '0' = keep forever). Only lead_recordings touched. Disable with RECORDINGS_RETENTION_CRON=off.
+if (String(process.env.RECORDINGS_RETENTION_CRON || 'on').toLowerCase() !== 'off') {
+  const _runRecRetention = () => require('./routes/saas/recordingsRetention').runDailyForAllTenants()
+    .then(s => { if (s && s.totalDeleted) console.log('[rec-retention] daily purge:', JSON.stringify(s).slice(0, 400)); })
+    .catch(e => console.warn('[rec-retention] daily run failed:', e.message));
+  setInterval(_runRecRetention, 24 * 60 * 60 * 1000);
+  setTimeout(_runRecRetention, 5 * 60 * 1000);
+  console.log('[rec-retention] daily retention cron active (set RECORDINGS_RETENTION_CRON=off to disable)');
+}
 
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //
