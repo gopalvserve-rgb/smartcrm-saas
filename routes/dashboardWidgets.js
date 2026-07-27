@@ -187,6 +187,9 @@ async function api_dashboard_callerWiseLeads(token, filters) {
 // ----------------------------------------------------------------
 async function api_dashboard_callerDialingReport(token, filters) {
   const me = await authUser(token);
+  // ce.src is referenced in the query below (CALLLOG_ONLY filter); make sure the
+  // column exists on this tenant, same guard api_call_history uses.
+  try { await require('../utils/callEventCols').ensureCallEventCols(); } catch (_e) {}
   const range = _resolveRange(filters || {});
 
   let scopeSql = '';
@@ -208,7 +211,19 @@ async function api_dashboard_callerDialingReport(token, filters) {
         LEFT JOIN lead_recordings lr ON lr.id = ce.recording_id
        WHERE ce.created_at >= $1 AND ce.created_at <= $2
          AND ce.user_id IS NOT NULL
-         AND ce.event != 'autodial_requested'
+         -- CALLER_DIALING_MATCH_ACTIVITY_v1 (2026-07-27): mirror the Call Activity
+         -- report (routes/reports.js) so BOTH call widgets show the same totals.
+         -- (1) Exclude BOTH intent events. dial_requested is written the instant a
+         --     rep TAPS the call button (before the dialer even opens) so it is NOT
+         --     a real call; the old code only excluded autodial_requested, which
+         --     inflated Total/Out by every abandoned tap.
+         -- (2) CALLLOG_ONLY: count only the phone call-log rows (src calllog/-fix)
+         --     or pre-Jul-12 history, and drop superseded live-receiver duplicates
+         --     (src=live-dup). Live rows are delayed/duplicated ghosts, not calls.
+         AND ce.event NOT IN ('autodial_requested', 'dial_requested')
+         AND COALESCE(ce.src,'') <> 'live-dup'
+         AND ( COALESCE(ce.src,'') IN ('calllog', 'calllog-fix')
+               OR ce.created_at < '2026-07-12T00:00:00Z'::timestamptz )
          ${scopeSql}
     ),
     bucketed AS (
@@ -218,9 +233,29 @@ async function api_dashboard_callerDialingReport(token, filters) {
              (ARRAY_AGG(direction ORDER BY
                CASE direction WHEN 'missed' THEN 1 WHEN 'out' THEN 2 WHEN 'in' THEN 3 ELSE 9 END
              ))[1] AS direction,
-             GREATEST(COALESCE(MAX(rec_duration), 0), COALESCE(MAX(evt_duration), 0))::int AS duration_s
+             GREATEST(COALESCE(MAX(rec_duration), 0), COALESCE(MAX(evt_duration), 0))::int AS duration_s,
+             -- connected = call actually had talk time / a completion event / a
+             -- recording. Matches CALL_CONNECTED_EVENTNAME_FIX_v1 in reports.js
+             -- (the phone logs the completion event as 'ended', not 'call_ended').
+             BOOL_OR(
+               event IN ('call_ended', 'ended', 'outgoing_ended', 'call_disconnected')
+               OR recording_id IS NOT NULL
+               OR COALESCE(evt_duration, 0) > 0
+               OR COALESCE(rec_duration, 0) > 0
+             ) AS is_connected
         FROM base
        GROUP BY user_id, phone, bucket
+    ),
+    calls AS (
+      -- An unanswered INCOMING call is a Missed call, not an Incoming one
+      -- (identical rule to the Call Activity report).
+      SELECT user_id, phone, duration_s,
+             CASE
+               WHEN NOT is_connected AND direction = 'in' THEN 'missed'
+               WHEN direction = 'missed'                  THEN 'missed'
+               ELSE COALESCE(direction, 'unknown')
+             END AS direction
+        FROM bucketed
     )
     SELECT user_id,
            COUNT(*) FILTER (WHERE direction = 'in')::int     AS incoming,
@@ -229,7 +264,7 @@ async function api_dashboard_callerDialingReport(token, filters) {
            COUNT(*)::int                                     AS total_calls,
            COALESCE(SUM(duration_s) FILTER (WHERE duration_s > 0), 0)::int AS total_talk_s,
            COUNT(*) FILTER (WHERE duration_s > 0)::int       AS connected
-      FROM bucketed
+      FROM calls
      GROUP BY user_id
      ORDER BY total_calls DESC
   `;
