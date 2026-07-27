@@ -1059,7 +1059,23 @@ async function api_reports_callActivity(token, filters) {
           COALESCE(MAX(evt_duration), 0)
         )::int AS duration_s,
         MIN(created_at) AS started_at,
-        BOOL_OR(event = 'call_ended' OR recording_id IS NOT NULL) AS connected
+        -- CALL_CONNECTED_EVENTNAME_FIX_v1 (2026-07-27): the phone call-log sync
+        -- (src='calllog'/'calllog-fix') writes the completion event as 'ended',
+        -- NOT 'call_ended' (only the retired pre-Jul-12 live-receiver rows used
+        -- 'call_ended'). The old check event = 'call_ended' therefore matched
+        -- almost nothing, so connected was ~always FALSE. That mis-filed every
+        -- ANSWERED incoming call as "missed" (Incoming collapsed to a handful) and
+        -- counted every connected outbound as unanswered. Fix: treat a call as
+        -- connected if ANY of its events is a real completion event OR there is a
+        -- recording OR there is positive talk time. Does NOT change outgoing/total
+        -- counts — only the incoming vs missed split and the connected/unanswered
+        -- metrics become correct.
+        BOOL_OR(
+          event IN ('call_ended', 'ended', 'outgoing_ended', 'call_disconnected')
+          OR recording_id IS NOT NULL
+          OR COALESCE(evt_duration, 0) > 0
+          OR COALESCE(rec_duration, 0) > 0
+        ) AS connected
       FROM base_events
       GROUP BY user_id, phone, bucket
     ),
