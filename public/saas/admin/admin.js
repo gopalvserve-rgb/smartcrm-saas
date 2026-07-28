@@ -3819,6 +3819,66 @@ VIEWS.tickets = async (view) => {
 };
 
 // ---- Ticket detail modal ----------------------------------------
+/* TKT_MULTI_ATTACH_ADMIN_v1 (2026-07-20) — super-admin ticket attachment tray:
+ * up to 5 files via the picker or by pasting images (Ctrl/Cmd+V). Mirrors the
+ * tenant-side _ticketAttachTray. Uploads are one-file-per-request (backend is
+ * multer().single('file')), so the caller loops getFiles(). */
+const TKT_MAX_ATTACH_ADMIN = 5;
+function _adminTicketAttachTray(fileIn, previewHost, pasteTargets) {
+  const files = [];
+  try { fileIn.setAttribute('multiple', 'multiple'); } catch (_) {}
+  const _key = f => (f.name || '') + '|' + (f.size || 0) + '|' + (f.type || '');
+  function _add(list) {
+    let rejected = false, added = 0;
+    for (const f of list) {
+      if (files.length >= TKT_MAX_ATTACH_ADMIN) { rejected = true; break; }
+      if (files.some(x => _key(x) === _key(f))) continue;
+      files.push(f); added++;
+    }
+    if (rejected) toast('Max ' + TKT_MAX_ATTACH_ADMIN + ' attachments', 'err');
+    _render(); return added;
+  }
+  function _render() {
+    if (!previewHost) return;
+    previewHost.innerHTML = '';
+    if (!files.length) return;
+    const wrap = h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.4rem' } });
+    files.forEach((file, idx) => {
+      const chip = h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '.4rem', padding: '.3rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', fontSize: '.78rem', maxWidth: '220px' } });
+      if (/^image\//.test(file.type)) {
+        chip.appendChild(h('img', { src: URL.createObjectURL(file), style: { height: '34px', width: '34px', objectFit: 'cover', borderRadius: '4px' } }));
+      } else { chip.appendChild(h('span', {}, '📎')); }
+      chip.appendChild(h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: file.name }, (file.name || 'file') + ' · ' + Math.max(1, Math.round((file.size || 0) / 1024)) + ' KB'));
+      chip.appendChild(h('button', { type: 'button', class: 'btn', style: { padding: '0 .35rem' }, title: 'Remove', onclick: () => { files.splice(idx, 1); _render(); } }, '✕'));
+      wrap.appendChild(chip);
+    });
+    wrap.appendChild(h('span', { style: { alignSelf: 'center', fontSize: '.72rem', color: '#64748b' } }, files.length + '/' + TKT_MAX_ATTACH_ADMIN));
+    previewHost.appendChild(wrap);
+  }
+  fileIn.addEventListener('change', () => {
+    if (fileIn.files && fileIn.files.length) { _add(Array.from(fileIn.files)); try { fileIn.value = ''; } catch (_) {} }
+  });
+  (pasteTargets || []).forEach(el => {
+    if (!el) return;
+    el.addEventListener('paste', (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      const pasted = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it && it.kind === 'file' && it.type && it.type.indexOf('image') === 0) {
+          const blob = it.getAsFile();
+          if (blob) {
+            const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+            pasted.push(new File([blob], 'pasted-' + Date.now() + '-' + i + '.' + ext, { type: blob.type }));
+          }
+        }
+      }
+      if (pasted.length) { e.preventDefault(); const n = _add(pasted); if (n) toast('📎 ' + n + ' image' + (n === 1 ? '' : 's') + ' pasted', 'ok'); }
+    });
+  });
+  return { getFiles: () => files.slice(), clear: () => { files.length = 0; _render(); } };
+}
+
 async function openAdminTicketModal(ticketId) {
   const cat = await _loadTkCatalog();
   // TKT_REPLY_DRAFT_v1 — preserve the reply being typed across in-modal reloads
@@ -3960,9 +4020,12 @@ async function openAdminTicketModal(ticketId) {
       _draftHint.textContent = replyIn.value.trim() ? '📝 Draft saved' : '';
     });
     const fileIn = h('input', { type: 'file' });
+    const _attPrev = h('div', {});
     const intCb = h('input', { type: 'checkbox' });
     compWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '✏ Reply'));
     compWrap.appendChild(replyIn);
+    const _attTray = _adminTicketAttachTray(fileIn, _attPrev, [replyIn, compWrap]);   /* TKT_MULTI_ATTACH_ADMIN_v1 */
+    compWrap.appendChild(_attPrev);
     const aiBtn = h('button', { class: 'btn', title: 'Let AI draft a step-by-step resolution from the ticket — you can edit before sending' }, '✨ AI Suggest');
     aiBtn.onclick = async () => {
       aiBtn.disabled = true; const _t = aiBtn.textContent; aiBtn.textContent = '✨ Thinking…';
@@ -3978,6 +4041,7 @@ async function openAdminTicketModal(ticketId) {
     };
     compWrap.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
       fileIn,
+      h('span', { style: { fontSize: '.72rem', color: '#64748b' } }, 'up to 5 · or paste with Ctrl/Cmd+V'),
       aiBtn, _draftHint,
       h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem', fontSize: '.85rem' } }, intCb, '🔒 Internal note (hidden from customer)'),
       h('button', { class: 'btn primary', onclick: async (e) => {
@@ -3989,12 +4053,12 @@ async function openAdminTicketModal(ticketId) {
             body: replyIn.value.trim(),
             is_internal: intCb.checked ? 1 : 0
           });
-          if (fileIn.files && fileIn.files[0]) {
+          for (const f of _attTray.getFiles()) {
             try {
               const fd = new FormData();
               fd.append('ticket_id', t.id);
               fd.append('reply_id', r.reply_id);
-              fd.append('file', fileIn.files[0]);
+              fd.append('file', f);
               await fetch('/api/saas/ticket-attachment', {
                 method: 'POST',
                 headers: { 'X-Auth-Token': APP.token },
