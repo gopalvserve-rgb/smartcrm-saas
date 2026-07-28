@@ -53546,12 +53546,12 @@ VIEWS.ticketnew = async (view) => {
   const fileIn = h('input', { type: 'file', accept: 'image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.log,.zip', style: { display: 'block', marginTop: '.25rem' } });
   const pastePrev = h('div', {});
   form.appendChild(h('label', {},
-    h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Attachment (optional, max 25 MB)'),
+    h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Attachments (optional — up to 5 files, 25 MB each)'),
     fileIn,
     h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, 'or copy an image and paste it here with Ctrl/Cmd+V'),
     pastePrev
   ));
-  _enableTicketPaste([descIn, form], fileIn, pastePrev);   /* TKT_PASTE_ATTACH_v1 */
+  const _tray = _ticketAttachTray(fileIn, pastePrev, [descIn, form]);   /* TKT_MULTI_ATTACH_v1 */
 
   // TKT_AI_DEFLECT_v1 — try to solve it with SmartCRM AI BEFORE raising a ticket.
   const aiPanel = h('div', { style: { display: 'none', marginTop: '.6rem', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '.85rem 1rem' } });
@@ -53620,12 +53620,12 @@ VIEWS.ticketnew = async (view) => {
       submitBtn.disabled = false; submitBtn.textContent = '🚀 Submit Ticket';
       return;
     }
-    // Optional attachment
-    if (fileIn.files && fileIn.files[0]) {
+    // Optional attachments — TKT_MULTI_ATTACH_v1: up to 5, one POST each.
+    for (const f of _tray.getFiles()) {
       try {
         const fd = new FormData();
         fd.append('ticket_id', created.id);
-        fd.append('file', fileIn.files[0]);
+        fd.append('file', f);
         const r = await fetch(location.origin + '/api/saas/ticket-attachment', {
           method: 'POST',
           headers: { 'X-Auth-Token': CRM.token || '' },
@@ -53648,61 +53648,78 @@ VIEWS.ticketnew = async (view) => {
   view.appendChild(wrap);
 };
 
-// ---- TKT_PASTE_ATTACH_v1 (2026-07-20) — paste an image from the clipboard ----
-// straight into a ticket attachment (Ctrl/Cmd+V), instead of only the file
-// picker. We inject the pasted image into the SAME <input type=file> (via a
-// DataTransfer) so the existing upload path (fileIn.files[0]) needs no change,
-// then render a small preview with a remove (✕) button.
-function _enableTicketPaste(pasteTargets, fileIn, previewHost) {
-  function _setFile(file) {
-    try {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      fileIn.files = dt.files;
-      fileIn.dispatchEvent(new Event('change', { bubbles: true }));
-    } catch (_) { /* DataTransfer unsupported — ignore, file picker still works */ }
-    _renderPreview(file);
+// ---- TKT_PASTE_ATTACH_v1 / TKT_MULTI_ATTACH_v1 (2026-07-20) ----------------
+// Attachment tray for tickets: up to 5 files, added via the file picker OR by
+// pasting images (Ctrl/Cmd+V). Uploads are one-file-per-request (the backend is
+// multer().single('file')), so callers loop over tray.getFiles(). Each file
+// gets a thumbnail/name chip with a ✕ remove.
+var TKT_MAX_ATTACH = 5;
+function _ticketAttachTray(fileIn, previewHost, pasteTargets) {
+  const files = [];
+  try { fileIn.setAttribute('multiple', 'multiple'); } catch (_) {}
+
+  function _key(f) { return (f.name || '') + '|' + (f.size || 0) + '|' + (f.type || ''); }
+  function _add(list) {
+    let added = 0, rejected = false;
+    for (const f of list) {
+      if (files.length >= TKT_MAX_ATTACH) { rejected = true; break; }
+      if (files.some(x => _key(x) === _key(f))) continue;   // dedupe
+      files.push(f); added++;
+    }
+    if (rejected && typeof toast === 'function') toast('Max ' + TKT_MAX_ATTACH + ' attachments', 'err');
+    _render();
+    return added;
   }
-  function _renderPreview(file) {
+  function _render() {
     if (!previewHost) return;
     previewHost.innerHTML = '';
-    if (!file) return;
-    const wrap = h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '.5rem', marginTop: '.4rem', padding: '.35rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', fontSize: '.8rem' } });
-    if (/^image\//.test(file.type)) {
-      const url = URL.createObjectURL(file);
-      wrap.appendChild(h('img', { src: url, style: { height: '38px', width: '38px', objectFit: 'cover', borderRadius: '4px' } }));
-    } else {
-      wrap.appendChild(h('span', {}, '📎'));
-    }
-    wrap.appendChild(h('span', {}, (file.name || 'pasted') + ' · ' + Math.max(1, Math.round((file.size || 0) / 1024)) + ' KB'));
-    wrap.appendChild(h('button', { type: 'button', class: 'btn xs', title: 'Remove', onclick: () => {
-      try { const dt = new DataTransfer(); fileIn.files = dt.files; } catch (_) {}
-      previewHost.innerHTML = '';
-    } }, '✕'));
+    if (!files.length) return;
+    const wrap = h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.45rem' } });
+    files.forEach((file, idx) => {
+      const chip = h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '.4rem', padding: '.3rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', fontSize: '.78rem', maxWidth: '220px' } });
+      if (/^image\//.test(file.type)) {
+        const url = URL.createObjectURL(file);
+        chip.appendChild(h('img', { src: url, style: { height: '34px', width: '34px', objectFit: 'cover', borderRadius: '4px' } }));
+      } else { chip.appendChild(h('span', {}, '📎')); }
+      chip.appendChild(h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: file.name }, (file.name || 'file') + ' · ' + Math.max(1, Math.round((file.size || 0) / 1024)) + ' KB'));
+      chip.appendChild(h('button', { type: 'button', class: 'btn xs', title: 'Remove', onclick: () => { files.splice(idx, 1); _render(); } }, '✕'));
+      wrap.appendChild(chip);
+    });
+    wrap.appendChild(h('span', { class: 'muted', style: { alignSelf: 'center', fontSize: '.72rem' } }, files.length + '/' + TKT_MAX_ATTACH));
     previewHost.appendChild(wrap);
   }
-  // Reflect a normal file-picker choice in the preview too.
-  fileIn.addEventListener('change', () => { if (fileIn.files && fileIn.files[0]) _renderPreview(fileIn.files[0]); });
+
+  // File picker (multiple) — merge, then clear the input so re-picking the same
+  // file still fires change and the native list doesn't fight our tray.
+  fileIn.addEventListener('change', () => {
+    if (fileIn.files && fileIn.files.length) { _add(Array.from(fileIn.files)); try { fileIn.value = ''; } catch (_) {} }
+  });
+
+  // Paste image(s) from clipboard.
   (pasteTargets || []).forEach(el => {
     if (!el) return;
     el.addEventListener('paste', (e) => {
       const items = (e.clipboardData && e.clipboardData.items) || [];
+      const pasted = [];
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (it && it.kind === 'file' && it.type && it.type.indexOf('image') === 0) {
           const blob = it.getAsFile();
           if (blob) {
             const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-            const named = new File([blob], 'pasted-' + Date.now() + '.' + ext, { type: blob.type });
-            _setFile(named);
-            e.preventDefault();   // don't dump binary into the textarea
-            if (typeof toast === 'function') toast('📎 Image pasted — will attach on send', 'ok');
-            break;
+            pasted.push(new File([blob], 'pasted-' + Date.now() + '-' + i + '.' + ext, { type: blob.type }));
           }
         }
       }
+      if (pasted.length) {
+        e.preventDefault();
+        const n = _add(pasted);
+        if (n && typeof toast === 'function') toast('📎 ' + n + ' image' + (n === 1 ? '' : 's') + ' pasted', 'ok');
+      }
     });
   });
+
+  return { getFiles: () => files.slice(), clear: () => { files.length = 0; _render(); } };
 }
 
 // ---- VIEWS.ticketview — single ticket + replies + composer ------
@@ -53774,7 +53791,7 @@ VIEWS.ticketview = async (view, params) => {
       const fileIn  = h('input', { type: 'file', accept: 'image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.log,.zip' });
       const pastePrev = h('div', {});
       compWrap.appendChild(replyIn);
-      _enableTicketPaste([replyIn, compWrap], fileIn, pastePrev);   /* TKT_PASTE_ATTACH_v1 */
+      const _tray = _ticketAttachTray(fileIn, pastePrev, [replyIn, compWrap]);   /* TKT_MULTI_ATTACH_v1 */
       compWrap.appendChild(pastePrev);
       compWrap.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
         fileIn,
@@ -53785,12 +53802,13 @@ VIEWS.ticketview = async (view, params) => {
           e.target.disabled = true; e.target.textContent = 'Sending...';
           try {
             const r = await sapi('api_saas_tk_replyTenant', { ticket_id: t.id, body: text });
-            if (fileIn.files && fileIn.files[0]) {
+            /* TKT_MULTI_ATTACH_v1 — upload each tray file (backend takes one per POST). */
+            for (const f of _tray.getFiles()) {
               try {
                 const fd = new FormData();
                 fd.append('ticket_id', t.id);
                 fd.append('reply_id', r.reply_id);
-                fd.append('file', fileIn.files[0]);
+                fd.append('file', f);
                 await fetch(location.origin + '/api/saas/ticket-attachment', {
                   method: 'POST',
                   headers: { 'X-Auth-Token': CRM.token || '' },
