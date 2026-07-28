@@ -53508,6 +53508,31 @@ VIEWS.ticketnew = async (view) => {
   wrap.appendChild(h('h2', { style: { margin: '0 0 .5rem' } }, '➕ New Support Ticket'));
   wrap.appendChild(h('p', { style: { color: '#6b7280', margin: '0 0 1.25rem' } }, 'Tell us what you need. We auto-fill your contact details — edit them if you want a different reply-to.'));
 
+  /* TKT_AI_FIRST_BANNER_v1 (2026-07-20) — steer tenants to the AI assistant
+   * before raising a ticket, to deflect how-to questions. */
+  var _aiBanner = h('div', { style: { background: 'linear-gradient(135deg,#ede9fe,#eff6ff)', border: '1px solid #c4b5fd', borderRadius: '12px', padding: '1rem 1.15rem', margin: '0 0 1.25rem', maxWidth: '720px' } });
+  _aiBanner.innerHTML =
+    '<div style="display:flex;gap:.6rem;align-items:flex-start">' +
+      '<div style="font-size:1.6rem;line-height:1">🤖</div>' +
+      '<div style="flex:1">' +
+        '<div style="font-weight:700;font-size:1rem;color:#5b21b6;margin-bottom:.2rem">Get an instant answer — ask SmartCRM AI first</div>' +
+        '<div style="font-size:.86rem;color:#4b5563;line-height:1.5">Most “how do I…” questions are answered instantly by our AI assistant from SmartCRM\'s help guide — no waiting for support. Type your question in the <b>Description</b> box below and tap <b>“✨ Try SmartCRM AI first”</b>. Still stuck? Submit the ticket and our team takes over.</div>' +
+        '<button type="button" id="tkt-ask-ai-btn" style="margin-top:.7rem;background:#7c3aed;color:#fff;font-weight:600;padding:.55rem 1.1rem;border:none;border-radius:8px;cursor:pointer">🤖 Ask SmartCRM AI</button>' +
+      '</div>' +
+    '</div>';
+  wrap.appendChild(_aiBanner);
+  setTimeout(function () {
+    var b = _aiBanner.querySelector('#tkt-ask-ai-btn');
+    if (b) b.addEventListener('click', function () {
+      try {
+        var ta = view.querySelector('textarea');
+        if (ta) { ta.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(function () { ta.focus(); }, 300); }
+        var aib = Array.prototype.slice.call(view.querySelectorAll('button')).find(function (x) { return /Try SmartCRM AI/i.test(x.textContent || ''); });
+        if (aib) { aib.style.boxShadow = '0 0 0 3px rgba(124,58,237,.55)'; setTimeout(function () { aib.style.boxShadow = ''; }, 2500); }
+      } catch (_) {}
+    });
+  }, 0);
+
   const form = h('div', { style: { display: 'grid', gap: '1rem', maxWidth: '720px' } });
 
   // Contact card
