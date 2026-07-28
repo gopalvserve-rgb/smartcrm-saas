@@ -39,8 +39,15 @@
     setTimeout(function () { div.remove(); }, 3200);
   }
 
-  /* Time preset chips (max 3 pickable) */
+  /* REMINDER_LONG_OFFSETS_v1 (2026-07-20) — added day-scale reminder times
+   * (1/2/5/10 days before) and raised the per-flow cap so all four can be
+   * chosen together with the shorter ones. */
+  var MAX_RUNGS = 6;
   var TIMES = [
+    { m: -14400, l: '10 days before' },
+    { m: -7200,  l: '5 days before' },
+    { m: -2880,  l: '2 days before' },
+    { m: -1440,  l: '1 day (24 hrs) before' },
     { m: -180, l: '3 hrs before' },
     { m: -60,  l: '1 hour before' },
     { m: -30,  l: '30 min before' },
@@ -49,6 +56,19 @@
     { m: -5,   l: '5 min before' },
     { m: 0,    l: 'At follow-up time' }
   ];
+
+  /* Format an offset (minutes, <=0) as a short human label: On time / Nm /
+   * Nh / Nd before. Shared by the grid chips and the log so day-scale offsets
+   * don't render as '240h before'. */
+  function _offLabel(m) {
+    m = Number(m) || 0;
+    if (m === 0) return 'On time';
+    var a = Math.abs(m);
+    if (a % 1440 === 0) return (a / 1440) + 'd before';
+    if (a % 60 === 0)   return (a / 60) + 'h before';
+    if (a < 60)         return a + 'm before';
+    return Math.round(a / 60) + 'h before';
+  }
 
   /* Merge tokens available in template variable dropdowns */
   var TOKEN_OPTS = [
@@ -127,8 +147,7 @@
                  : Number(f.channel_wa) ? 'WA'
                  : Number(f.channel_email) ? 'Email' : '—';
       var rungHtml = rungs.length ? rungs.map(function (r) {
-        var m = Number(r.offset_minutes);
-        var lbl = m === 0 ? 'On time' : (Math.abs(m) < 60 ? Math.abs(m) + 'm' : (Math.abs(m) / 60) + 'h') + ' before';
+        var lbl = _offLabel(Number(r.offset_minutes));
         return '<span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">' + esc(lbl) + '</span>';
       }).join(' ') : '<span style="color:#94a3b8;font-size:11px">— no rungs configured —</span>';
       var isDefault = Number(f.is_default) === 1;
@@ -214,7 +233,7 @@
 
     var rows = items.map(function (r) {
       var rung = Number(r.rung_offset_minutes || 0);
-      var rungLbl = rung === 0 ? 'On time' : (Math.abs(rung) < 60 ? Math.abs(rung) + 'm before' : (Math.abs(rung) / 60) + 'h before');
+      var rungLbl = _offLabel(rung);
       var recipient = r.recipient_type === 'lead'
         ? '👤 Lead · ' + esc(r.recipient_phone || r.recipient_email || '—')
         : '💼 Owner · ' + esc(r.recipient_phone || r.recipient_email || '—');
@@ -395,7 +414,7 @@
             '<span style="background:#6366f1;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">1</span>' +
             'Reminder alert times' +
           '</h4>' +
-          '<p style="color:#475569;margin:0 0 12px;font-size:12.5px">Pick when reminders fire relative to the follow-up. Max 3.</p>' +
+          '<p style="color:#475569;margin:0 0 12px;font-size:12.5px">Pick when reminders fire relative to the follow-up. Max ' + MAX_RUNGS + '.</p>' +
           '<div id="rf-times" style="display:flex;gap:8px;flex-wrap:wrap">' +
             TIMES.map(function (t) {
               var on = pickedMs.has(t.m);
@@ -547,8 +566,8 @@
         e.preventDefault();
         var cb = chip.querySelector('input');
         var picked = Array.from(timeChips).filter(function (c) { return c.querySelector('input').checked; });
-        if (!cb.checked && picked.length >= 3) {
-          toast('Max 3 reminder times per flow', 'err');
+        if (!cb.checked && picked.length >= MAX_RUNGS) {
+          toast('Max ' + MAX_RUNGS + ' reminder times per flow', 'err');
           return;
         }
         cb.checked = !cb.checked;

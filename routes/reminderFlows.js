@@ -130,7 +130,7 @@ async function api_reminderFlows_save(token, payload) {
   const rungs = Array.isArray(p.rungs) ? p.rungs : [];
   if (!flow.name || !String(flow.name).trim()) throw new Error('Flow name is required');
   if (!rungs.length) throw new Error('Pick at least 1 reminder time');
-  if (rungs.length > 3) throw new Error('Max 3 reminders per flow');
+  if (rungs.length > 6) throw new Error('Max 6 reminders per flow');   /* REMINDER_LONG_OFFSETS_v1 — raised from 3 */
   if (!Number(flow.channel_wa) && !Number(flow.channel_email)) {
     throw new Error('Pick at least one channel — WhatsApp or Email');
   }
