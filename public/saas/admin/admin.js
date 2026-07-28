@@ -3684,6 +3684,9 @@ VIEWS.tickets = async (view) => {
     tableWrap.innerHTML = '<div class="muted" style="padding:1rem">Loading...</div>';
     let res;
     try {
+      /* TKT_LIST_RELOAD_v1 — expose this list's reload so the ticket modal can
+       * refresh the listing after a reply (status/last-reply/assignee change). */
+      window._ticketsListReload = load;
       res = await api('api_saas_tk_admin_listAll', {
         statuses: _tkStatuses,
         priority: prioSel.value || null,
@@ -4072,6 +4075,9 @@ async function openAdminTicketModal(ticketId) {
           intCb.checked = false;
           toast('✓ Reply sent — ticket assigned to you');
           load();
+          /* TKT_LIST_RELOAD_v1 — refresh the ticket listing behind the modal so
+           * the updated status / last remark / assignee show without reopening. */
+          try { if (typeof window._ticketsListReload === 'function') window._ticketsListReload(); } catch (_) {}
         } catch (err) {
           toast(err.message, 'err');
           e.target.disabled = false; e.target.textContent = 'Send reply';
