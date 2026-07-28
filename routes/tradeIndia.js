@@ -47,9 +47,20 @@ const TI_CUSTOM_FIELDS = [
 // ============================================================
 // Schema
 // ============================================================
-let _schemaReady = false;
+/* TRADEINDIA_SCHEMA_PERPOOL_FIX_v1 (2026-07-20) — _schemaReady was a single
+ * MODULE-LEVEL boolean, so the FIRST tenant to touch TradeIndia flipped it true
+ * process-wide and every OTHER tenant then skipped CREATE TABLE — their DB
+ * never got marketplace_integrations/marketplace_sync_logs ("relation does not
+ * exist", e.g. PRAM ELECTECH). Track readiness PER TENANT POOL instead, exactly
+ * like routes/aiBot.js _aiBotEnsuredPools. */
+const _schemaReadyPools = new WeakSet();
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  let pool = null;
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    pool = store && store.pool;
+  } catch (_) {}
+  if (pool && _schemaReadyPools.has(pool)) return;
   await db.query(`CREATE TABLE IF NOT EXISTS marketplace_integrations (
     id SERIAL PRIMARY KEY,
     provider          TEXT NOT NULL,
@@ -87,7 +98,7 @@ async function _ensureSchema() {
   )`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_mkt_logs_provider
                   ON marketplace_sync_logs(provider, started_at DESC)`);
-  _schemaReady = true;
+  if (pool) _schemaReadyPools.add(pool);
 }
 
 // ============================================================
