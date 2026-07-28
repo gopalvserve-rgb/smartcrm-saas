@@ -29921,8 +29921,14 @@ async function _renderTradeIndiaPanel(box, apiKey) {
     row('Duplicate rule', selDup, 'Matched on rfi_id.'));
   box.appendChild(grid);
   box.appendChild(h('div', { style: { display: 'flex', gap: '1.2rem', flexWrap: 'wrap', margin: '.2rem 0 .8rem' } },
-    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.9rem', fontWeight: '600' } }, chkAuto, '🟢 Auto-pull ON — pull leads automatically every ' + (Number(st.sync_interval_min) || 15) + ' min (uncheck = OFF)'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.9rem', fontWeight: '600' } }, chkAuto, '🟢 Auto-pull ON — automatically pull leads on the daily schedule (uncheck = OFF)'),
     h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, chkLogs, 'Keep sync logs')));
+  /* TRADEINDIA_FIXED_SLOTS_v1 — show the tenant exactly when auto-pull runs. */
+  box.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', margin: '.1rem 0 .7rem', padding: '.5rem .7rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', fontSize: '.84rem' } },
+    h('span', {}, '⏰'),
+    h('span', {}, 'When ON, leads are pulled automatically at '),
+    h('b', {}, (data && data.pull_schedule) || '8:00 AM, 1:00 PM, 5:00 PM IST'),
+    h('span', { class: 'muted' }, ' every day. Use ⬇️ Pull leads now anytime for an instant pull.')));
 
   // Status strip
   const statusPill = (txt, bg, fg) => h('span', { class: 'tag', style: { background: bg, color: fg } }, txt);

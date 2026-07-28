@@ -506,13 +506,51 @@ async function runSync(opts) {
 }
 
 /** Called by the scheduler inside a tenant scope. Honours auto_import + interval. */
+/* TRADEINDIA_FIXED_SLOTS_v1 (2026-07-20) — auto-pull runs at FIXED times each
+ * day: 08:00, 13:00 and 17:00 IST, for every tenant with auto-pull ON. The
+ * 5-min sweep in server.js calls this; a pull fires on the first sweep at/after
+ * a slot, and last_sync_at dedupes so each slot pulls exactly once per day.
+ * (Env PULL_SLOTS_IST can override, e.g. "8,13,17".) */
+const PULL_SLOTS_IST = String(process.env.PULL_SLOTS_IST || '8,13,17')
+  .split(',').map(x => parseInt(x, 10)).filter(n => n >= 0 && n <= 23);
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+/** The most recent scheduled slot start (as a real Date/instant) that has
+ * already passed today in IST, or null if we're before the first slot. */
+function _mostRecentSlotStart(now) {
+  const nowMs = (now ? now.getTime() : Date.now());
+  const ist = new Date(nowMs + IST_OFFSET_MS);   // IST wall-clock in UTC fields
+  const y = ist.getUTCFullYear(), mo = ist.getUTCMonth(), d = ist.getUTCDate();
+  const curMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  let slotHour = null;
+  PULL_SLOTS_IST.slice().sort((a, b) => a - b).forEach(h => { if (curMin >= h * 60) slotHour = h; });
+  if (slotHour === null) return null;
+  // Convert that IST wall-time back to a real UTC instant.
+  return new Date(Date.UTC(y, mo, d, slotHour, 0, 0) - IST_OFFSET_MS);
+}
+
+/** Human-readable slot list, e.g. "8:00 AM, 1:00 PM, 5:00 PM IST" — used by the
+ * settings API so the tenant sees exactly when auto-pull runs. */
+function pullScheduleLabel() {
+  const fmt = h => {
+    const ap = h < 12 ? 'AM' : 'PM';
+    const hr = h % 12 === 0 ? 12 : h % 12;
+    return hr + ':00 ' + ap;
+  };
+  return PULL_SLOTS_IST.slice().sort((a, b) => a - b).map(fmt).join(', ') + ' IST';
+}
+
 async function runDueForCurrentTenant() {
   const cfg = await _getSettings();
   if (!Number(cfg.auto_import)) return { skipped: 'auto_import off' };
   if (!cfg.api_key || !cfg.api_user_id || !cfg.api_profile_id) return { skipped: 'not configured' };
-  const every = Math.max(5, Number(cfg.sync_interval_min) || 15) * 60 * 1000;
-  if (cfg.last_sync_at && (Date.now() - new Date(cfg.last_sync_at).getTime()) < every) {
-    return { skipped: 'not due' };
+  const slotStart = _mostRecentSlotStart();
+  if (!slotStart) return { skipped: 'before first slot today' };
+  // Already pulled at/after this slot's start today → not due again until the
+  // next slot. (Manual 'Pull leads now' also stamps last_sync_at, which just
+  // means the automatic run for that slot is skipped — no double pull.)
+  if (cfg.last_sync_at && new Date(cfg.last_sync_at).getTime() >= slotStart.getTime()) {
+    return { skipped: 'already pulled this slot' };
   }
   return runSync({ trigger: 'auto' });
 }
@@ -549,6 +587,7 @@ async function api_tradeindia_settings_get(token) {
     },
     mapping_source: MAPPING_SOURCE,
     fields: TI_CUSTOM_FIELDS,
+    pull_schedule: pullScheduleLabel(),   /* TRADEINDIA_FIXED_SLOTS_v1 */
   };
 }
 
@@ -637,6 +676,7 @@ module.exports = {
   api_tradeindia_logs_list,
   runSync,
   runDueForCurrentTenant,
+  pullScheduleLabel,
   _stripHtml,
   _asArray,
   _defaultPayload,
