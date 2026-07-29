@@ -158,6 +158,12 @@ const SAAS_API = {};
 const app = express();
 app.set('trust proxy', 1);
 
+// EGRESS_FIX_v1 — gzip/brotli compress all responses. The `compression` dep was
+// installed but never wired, so JS/JSON/HTML (incl. the 3.2MB app.js) shipped
+// uncompressed — a major Railway egress driver. This alone cuts text payloads
+// ~70-80%. Skips already-compressed types (images/audio) automatically.
+app.use(require('compression')());
+
 // ---- Cashfree webhook: needs raw body for HMAC verify ---------
 // Mounted BEFORE bodyParser.json so the webhook receives the raw bytes
 // Cashfree signed against; everything else uses parsed JSON.
