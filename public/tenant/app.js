@@ -57961,6 +57961,21 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       recompute();
 
       const actions = h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } });
+      // INVOICE_CONVERT_TO_TAX_v1 — Convert a proforma into a real tax invoice.
+      if (invoice && invoice.doc_type === 'proforma' && invoice.status !== 'cancelled' && !invoice.converted_to_id) {
+        actions.appendChild(_btn('➡️ Convert to Tax Invoice', { onclick: async () => {
+          if (!confirm('Convert ' + invoice.invoice_no + ' into a Tax Invoice?\n\nA new tax invoice will be created with a proper number from your invoice series. This proforma is kept for your records and marked Converted.')) return;
+          try {
+            const r = await api('api_invoicing_invoices_convertToTax', invoice.id);
+            toast('Created tax invoice ' + r.invoice_no, 'ok');
+            close();
+            openInvoiceModal(r.id);
+          } catch (e) { toast(e.message, 'err'); }
+        }}));
+      }
+      if (invoice && invoice.doc_type === 'proforma' && invoice.converted_to_id) {
+        actions.appendChild(h('span', { style:{ alignSelf:'center', color:'#16a34a', fontWeight:600, fontSize:'.82rem' } }, '✓ Converted to a tax invoice'));
+      }
       if (invoice && invoice.status !== 'cancelled') {
         actions.appendChild(_btn('Cancel Invoice', { kind:'ghost', onclick: async () => {
           if (!confirm('Cancel invoice ' + invoice.invoice_no + '? It will be excluded from totals.')) return;

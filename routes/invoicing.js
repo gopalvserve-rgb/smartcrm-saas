@@ -1221,6 +1221,103 @@ async function api_invoicing_invoices_setNumber(token, payload) {
   return { ok: true, id, from: cur.invoice_no, to: newNo };
 }
 
+/**
+ * INVOICE_CONVERT_TO_TAX_v1 — turn a Proforma (PI-) into a real Tax Invoice.
+ * Creates a NEW tax invoice that copies the proforma's customer, addresses,
+ * totals, custom fields and line items, and allocates a proper number from the
+ * company's tax series (prefix + next_no). The proforma is KEPT for the record
+ * and stamped converted_to_id/converted_at so it can't be converted twice.
+ */
+async function api_invoicing_invoices_convertToTax(token, payload) {
+  const { user } = await _ctx(token);
+  const id = Number(payload && payload.id != null ? payload.id : payload);
+  if (!id) throw new Error('Invoice id is required');
+
+  let store = null; try { store = db.tenantStorage.getStore(); } catch (_) {}
+  const pool = store && store.pool;
+  if (!pool) throw new Error('No tenant context');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // link columns (idempotent)
+    await client.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS converted_to_id   INTEGER`);
+    await client.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS converted_from_id INTEGER`);
+    await client.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS converted_at       TIMESTAMPTZ`);
+
+    const pi = (await client.query(`SELECT * FROM invoices_inv WHERE id=$1 FOR UPDATE`, [id])).rows[0];
+    if (!pi) throw new Error('Invoice not found');
+    if (pi.doc_type !== 'proforma') throw new Error('Only a proforma can be converted to a tax invoice');
+    if (pi.status === 'cancelled')  throw new Error('This proforma is cancelled');
+    if (pi.converted_to_id) {
+      const ex = (await client.query(`SELECT invoice_no FROM invoices_inv WHERE id=$1`, [pi.converted_to_id])).rows[0];
+      throw new Error('Already converted to ' + ((ex && ex.invoice_no) || ('#' + pi.converted_to_id)));
+    }
+
+    const newNo = await _allocateInvoiceNumber(client, pi.company_id);
+    const ins = await client.query(`
+      INSERT INTO invoices_inv (
+        invoice_no, invoice_date, due_date, company_id, customer_id,
+        customer_name, customer_gstin, customer_state, customer_state_code,
+        bill_to_address, ship_to_address, place_of_supply,
+        company_name, company_gstin, company_state,
+        subtotal, discount, cgst, sgst, igst, cess, round_off, total, amount_in_words,
+        status, paid_status, amount_paid, notes, terms, is_reverse_charge, created_by, doc_type,
+        custom_fields, converted_from_id
+      ) VALUES (
+        $1,$2,$3,$4,$5, $6,$7,$8,$9, $10,$11,$12, $13,$14,$15,
+        $16,$17,$18,$19,$20,$21,$22,$23,$24, $25,'unpaid',0,$26,$27,$28,$29,'tax',
+        $30,$31
+      ) RETURNING id
+    `, [
+      newNo,
+      new Date().toISOString().slice(0,10),   // tax invoice issue date = today
+      pi.due_date,
+      pi.company_id, pi.customer_id,
+      pi.customer_name, pi.customer_gstin, pi.customer_state, pi.customer_state_code,
+      pi.bill_to_address, pi.ship_to_address, pi.place_of_supply,
+      pi.company_name, pi.company_gstin, pi.company_state,
+      pi.subtotal, pi.discount, pi.cgst, pi.sgst, pi.igst, pi.cess, pi.round_off, pi.total, pi.amount_in_words,
+      'finalized', pi.notes, pi.terms, pi.is_reverse_charge, user.id,
+      (pi.custom_fields != null ? (typeof pi.custom_fields === 'object' ? JSON.stringify(pi.custom_fields) : pi.custom_fields) : null),
+      pi.id
+    ]);
+    const newId = ins.rows[0].id;
+
+    // copy line items verbatim
+    const piLines = (await client.query(`SELECT * FROM invoice_lines_inv WHERE invoice_id=$1 ORDER BY line_no`, [id])).rows;
+    for (const ln of piLines) {
+      await client.query(`
+        INSERT INTO invoice_lines_inv
+          (invoice_id, line_no, item_id, description, hsn_sac, unit,
+           qty, rate, discount_pct, gst_pct,
+           taxable_value, cgst, sgst, igst, cess, line_total)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      `, [
+        newId, ln.line_no, ln.item_id, ln.description, ln.hsn_sac, ln.unit,
+        ln.qty, ln.rate, ln.discount_pct, ln.gst_pct,
+        ln.taxable_value, ln.cgst, ln.sgst, ln.igst, ln.cess, ln.line_total
+      ]);
+    }
+
+    // stamp the proforma as converted (kept for record)
+    await client.query(`UPDATE invoices_inv SET converted_to_id=$1, converted_at=NOW(), updated_at=NOW() WHERE id=$2`, [newId, id]);
+
+    await client.query(
+      `INSERT INTO inv_audit_log (user_id, user_email, action, entity, entity_id, detail)
+       VALUES ($1,$2,'invoice.convertToTax','invoice',$3,$4)`,
+      [user.id, user.email, newId, JSON.stringify({ from_proforma: pi.invoice_no, to_invoice: newNo })]
+    );
+
+    await client.query('COMMIT');
+    return { ok: true, id: newId, invoice_no: newNo, from_proforma: pi.invoice_no };
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   api_invoicing_dashboard,
   api_invoicing_companies_list,
@@ -1239,6 +1336,7 @@ module.exports = {
   api_invoicing_invoices_get,
   api_invoicing_invoices_save,
   api_invoicing_invoices_setNumber,
+  api_invoicing_invoices_convertToTax,
   api_invoicing_invoices_cancel,
   api_invoicing_invoices_delete,
   api_invoicing_invoices_pdf_html,
