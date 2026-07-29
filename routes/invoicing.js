@@ -1185,6 +1185,42 @@ async function api_invoicing_settings_save(token, payload) {
   return r.rows[0];
 }
 
+/**
+ * INVOICE_SETNUMBER_v1 — correct / override an existing invoice's number.
+ * Needed when a mis-configured prefix produced a wrong invoice_no and the
+ * invoice must be renumbered WITHOUT deleting it (the normal save path keeps
+ * invoice_no locked). Refuses a value already used by another invoice of the
+ * same seller company so numbers stay unique.
+ */
+async function api_invoicing_invoices_setNumber(token, payload) {
+  const { user } = await _ctx(token);
+  payload = payload || {};
+  const id    = Number(payload.id);
+  const newNo = s(payload.invoice_no).trim();
+  if (!id)    throw new Error('Invoice id is required');
+  if (!newNo) throw new Error('New invoice number is required');
+  const ex = await db.query(`SELECT id, invoice_no, company_id FROM invoices_inv WHERE id=$1`, [id]);
+  if (!ex.rows.length) throw new Error('Invoice not found');
+  const cur = ex.rows[0];
+  const dup = await db.query(
+    `SELECT id FROM invoices_inv WHERE company_id=$1 AND invoice_no=$2 AND id<>$3 LIMIT 1`,
+    [cur.company_id, newNo, id]
+  );
+  if (dup.rows.length) throw new Error('Another invoice already uses number ' + newNo);
+  const r = await db.query(
+    `UPDATE invoices_inv SET invoice_no=$1, updated_at=NOW() WHERE id=$2
+       RETURNING id, invoice_no, company_id, total`, [newNo, id]
+  );
+  try {
+    await db.query(
+      `INSERT INTO inv_audit_log (user_id, user_email, action, entity, entity_id, detail)
+       VALUES ($1,$2,'invoice.setNumber','invoice',$3,$4)`,
+      [user.id, user.email, id, JSON.stringify({ from: cur.invoice_no, to: newNo })]
+    );
+  } catch (_e) {}
+  return { ok: true, id, from: cur.invoice_no, to: newNo };
+}
+
 module.exports = {
   api_invoicing_dashboard,
   api_invoicing_companies_list,
@@ -1202,6 +1238,7 @@ module.exports = {
   api_invoicing_invoices_list,
   api_invoicing_invoices_get,
   api_invoicing_invoices_save,
+  api_invoicing_invoices_setNumber,
   api_invoicing_invoices_cancel,
   api_invoicing_invoices_delete,
   api_invoicing_invoices_pdf_html,
