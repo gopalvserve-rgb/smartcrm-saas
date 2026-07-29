@@ -30271,6 +30271,49 @@ async function adminIntegrations() {
       "}"
     ].join('\n');
 
+    // GFORM_BACKFILL_v1 — one-time import of EXISTING (past) form responses.
+    const gfBackfillScript = [
+      "/** SmartCRM - one-time backfill of EXISTING Google Form responses.",
+      " *  Run this ONCE from the editor (Run). Safe to re-run: the CRM dedupes",
+      " *  by phone, so the same person is not added twice. */",
+      "function backfillOldResponses() {",
+      "  var CRM_WEBHOOK_URL = '" + gfUrl + "';",
+      "  var form = FormApp.getActiveForm();   // script must be bound to the FORM",
+      "  var responses = form.getResponses();  // ALL past responses",
+      "  var sent = 0;",
+      "  for (var r = 0; r < responses.length; r++) {",
+      "    var items = responses[r].getItemResponses();",
+      "    var fields = {};",
+      "    for (var i = 0; i < items.length; i++) {",
+      "      var a = items[i].getResponse();",
+      "      if (Object.prototype.toString.call(a) === '[object Array]') a = a.join(', ');",
+      "      fields[items[i].getItem().getTitle()] = a;",
+      "    }",
+      "    var payload = {};",
+      "    for (var question in fields) {",
+      "      var answer = fields[question];",
+      "      payload[question] = answer;",
+      "      var q = String(question).toLowerCase();",
+      "      if (!payload.name && q.indexOf('name') >= 0 && q.indexOf('company') < 0) payload.name = answer;",
+      "      if (!payload.phone && (q.indexOf('phone') >= 0 || q.indexOf('mobile') >= 0 || q.indexOf('whatsapp') >= 0 || q.indexOf('contact') >= 0)) payload.phone = answer;",
+      "      if (!payload.email && q.indexOf('mail') >= 0) payload.email = answer;",
+      "      if (!payload.city && (q.indexOf('city') >= 0 || q.indexOf('location') >= 0)) payload.city = answer;",
+      "      if (!payload.company && (q.indexOf('company') >= 0 || q.indexOf('business') >= 0 || q.indexOf('organi') >= 0)) payload.company = answer;",
+      "    }",
+      "    payload.source = 'Google Forms';",
+      "    payload.source_ref = responses[r].getId();",
+      "    try { payload.form_title = form.getTitle(); } catch (e) {}",
+      "    UrlFetchApp.fetch(CRM_WEBHOOK_URL, {",
+      "      method: 'post', contentType: 'application/json',",
+      "      payload: JSON.stringify(payload), muteHttpExceptions: true",
+      "    });",
+      "    sent++;",
+      "    Utilities.sleep(300);",
+      "  }",
+      "  Logger.log('Backfill complete: ' + sent + ' responses pushed.');",
+      "}"
+    ].join('\n');
+
     const gfCard = h('div', { class: 'card', style: { padding: '.9rem 1rem', marginTop: '1rem', border: '1px solid #c7d2fe', background: '#f5f3ff' } });
     gfCard.appendChild(h('h4', { style: { margin: '0 0 .3rem' } }, '📋 Google Forms — step-by-step setup'));
     gfCard.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: 0 } },
@@ -30313,6 +30356,28 @@ async function adminIntegrations() {
     gfCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem' } },
       'ℹ️ The script sends every question and its answer, so nothing is lost even before you map fields. ' +
       'A lead needs a phone number — make sure your form has a phone/mobile question and mark it required.'));
+
+    /* GFORM_BACKFILL_v1 — optional one-time import of PAST responses. The
+     * onFormSubmit script above only catches NEW submissions; this pulls the
+     * history. */
+    const gfBackDet = h('details', { style: { marginTop: '.8rem', borderTop: '1px dashed #c7d2fe', paddingTop: '.7rem' } });
+    gfBackDet.appendChild(h('summary', { style: { cursor: 'pointer', fontWeight: 600, fontSize: '.85rem', color: '#4338ca' } },
+      '📥 Also import EXISTING (old) responses — optional one-time backfill'));
+    gfBackDet.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: '.4rem 0' } },
+      'The script above only captures NEW submissions. To pull responses that came in BEFORE you added the trigger, ' +
+      'paste this function into the SAME Apps Script project and run ', h('b', {}, 'backfillOldResponses'), ' once ' +
+      '(this one is safe to click ▶ Run — it needs no event). Re-running is safe: the CRM dedupes by phone.'));
+    const gfBackPre = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.7rem', borderRadius: '6px', fontSize: '.74rem', maxHeight: '240px', overflow: 'auto', whiteSpace: 'pre', margin: '0 0 .4rem' } }, gfBackfillScript);
+    gfBackDet.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.25rem' } },
+      h('span', { style: { fontSize: '.8rem', fontWeight: 600 } }, 'Backfill script — run once'),
+      h('button', { class: 'btn sm', onclick: () => {
+        navigator.clipboard.writeText(gfBackfillScript).then(() => toast('Backfill script copied', 'ok'), () => toast('Select the code and copy manually', 'err'));
+      } }, '📋 Copy script')));
+    gfBackDet.appendChild(gfBackPre);
+    gfBackDet.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem' } },
+      'If your script is bound to the linked Google Sheet (not the Form), replace FormApp.getActiveForm() with FormApp.openByUrl(\'<your form edit URL>\').'));
+    gfCard.appendChild(gfBackDet);
+
     wrap.appendChild(gfCard);
   }
 
