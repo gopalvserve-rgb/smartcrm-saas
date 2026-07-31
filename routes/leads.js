@@ -837,6 +837,29 @@ async function api_leads_get(token, id) {
   return { lead: hydrated, remarks, followups, messages };
 }
 
+/* LEAD_PHONE_FORMAT_v1 (2026-07-29) — format a NEW lead's phone per the tenant
+ * setting so the dialer triggers with the right format. ON = ensure the country
+ * code prefix (+CC); OFF = store the plain national number. Conservative: only
+ * transforms the clean India-style cases (10-digit national, or CC + 10) so odd
+ * inputs are never mangled. */
+async function _formatLeadPhone(raw) {
+  const orig = String(raw || '').trim();
+  if (!orig) return orig;
+  let auto = '0', cc = '91';
+  try { auto = String(await db.getConfig('LEAD_CC_AUTOADD', '0') || '0'); } catch (_) {}
+  try { cc = String(await db.getConfig('LEAD_CC_CODE', '91') || '91').replace(/\D/g, '') || '91'; } catch (_) {}
+  let d = orig.replace(/\D/g, '').replace(/^00/, '');   // digits only, strip intl 00
+  if (!d) return orig;
+  if (auto === '1') {
+    if (d.length === 10) return '+' + cc + d;                                  // bare national
+    if (d.startsWith(cc) && d.length === cc.length + 10) return '+' + d;       // already CC+national
+    return orig.charAt(0) === '+' ? orig : ('+' + d);                          // otherwise keep, ensure +
+  }
+  // OFF — strip the CC only when it's clearly CC + 10-digit national.
+  if (d.startsWith(cc) && d.length === cc.length + 10) return d.slice(cc.length);
+  return d;
+}
+
 async function api_leads_create(token, payload) {
   const me = await authUser(token);
   const p = Object.assign({}, payload || {});
@@ -916,8 +939,8 @@ async function api_leads_create(token, payload) {
   }
 
   // Normalize phone — strip Excel artefacts (leading apostrophe used to force text)
-  const cleanPhone = String(p.phone || '').trim().replace(/^'/, '');
-  const cleanWA    = String(p.whatsapp || cleanPhone || '').trim().replace(/^'/, '');
+  const cleanPhone = await _formatLeadPhone(String(p.phone || '').trim().replace(/^'/, ''));
+  const cleanWA    = await _formatLeadPhone(String(p.whatsapp || cleanPhone || '').trim().replace(/^'/, ''));
 
   // Resolve status_id: prefer numeric `status_id`, otherwise look up `status`
   // by NAME (the natural shape of CSV imports). Auto-creates missing statuses.

@@ -34714,6 +34714,33 @@ async function adminRules() {
     ));
     wrap.appendChild(adCard);
 
+    // ---- LEAD_PHONE_FORMAT_v1 — country-code formatting for new lead numbers ----
+    const ccOn = String(cfg.LEAD_CC_AUTOADD || '0') === '1';
+    const ccCode = String(cfg.LEAD_CC_CODE || '91').replace(/\D/g, '') || '91';
+    const pfCard = h('div', { class: 'card', style: { marginBottom: '1rem' } });
+    pfCard.appendChild(h('h4', { style: { marginTop: 0 } }, '📱 Phone number formatting'));
+    pfCard.appendChild(h('p', { class: 'muted' },
+      'Controls how a NEW lead\'s phone number is stored, so the dialer triggers the call with the format you want. ',
+      h('b', {}, 'ON'), ' = auto-add the country code (e.g. a 10-digit ', h('code', {}, '9876543210'), ' is saved as ', h('code', {}, '+91 9876543210'), '). ',
+      h('b', {}, 'OFF'), ' = store the plain number with no prefix. Existing leads are not changed.'));
+    const ccSel = h('select', { style: { padding: '.35rem .5rem', borderRadius: '6px', border: '1px solid #cbd5e1' } },
+      ...[['91','🇮🇳 +91 India'],['1','🇺🇸 +1 USA/Canada'],['971','🇦🇪 +971 UAE'],['44','🇬🇧 +44 UK'],['61','🇦🇺 +61 Australia'],['966','🇸🇦 +966 Saudi'],['65','🇸🇬 +65 Singapore'],['92','🇵🇰 +92 Pakistan'],['880','🇧🇩 +880 Bangladesh'],['977','🇳🇵 +977 Nepal']]
+        .map(o => h('option', { value: o[0], selected: o[0] === ccCode ? 'selected' : null }, o[1])));
+    const ccChk = h('input', { type: 'checkbox', checked: ccOn ? 'checked' : null });
+    async function _savePhoneFmt() {
+      try {
+        await api('api_admin_setConfig', { LEAD_CC_AUTOADD: ccChk.checked ? '1' : '0', LEAD_CC_CODE: ccSel.value });
+        toast('Phone formatting saved', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+    ccChk.addEventListener('change', _savePhoneFmt);
+    ccSel.addEventListener('change', () => { if (ccChk.checked) _savePhoneFmt(); });
+    pfCard.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
+      ccChk, h('span', {}, 'Auto-add country code to new lead numbers')));
+    pfCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+      h('span', { class: 'muted', style: { fontSize: '.85rem' } }, 'Country code:'), ccSel));
+    wrap.appendChild(pfCard);
+
     // ---- AI call summary / transcription toggle ----
     const aiOn = String(cfg.AI_TRANSCRIPTION_ENABLED == null ? '1' : cfg.AI_TRANSCRIPTION_ENABLED) === '1';
     const aiCard = h('div', { class: 'card', style: { marginBottom: '1rem' } });

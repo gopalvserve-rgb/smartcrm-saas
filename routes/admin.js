@@ -38,6 +38,9 @@ const CONFIG_KEYS = [
   // Auto-dial: when a new lead is created, push a "📞 Tap to call" notification
   // to the assignee's mobile in addition to the standard "lead assigned" alert.
   'LEAD_AUTODIAL_ON',
+  /* LEAD_PHONE_FORMAT_v1 (2026-07-29) — auto-prefix country code on new lead
+   * numbers so the dialer triggers with the right format. */
+  'LEAD_CC_AUTOADD', 'LEAD_CC_CODE',
   // AI call summary / transcription master switch. '1' (default) = on,
   // '0' = paused (worker won't process new recordings + UI hides the
   // AI panel). Useful for tenants that don't want to spend on Gemini
