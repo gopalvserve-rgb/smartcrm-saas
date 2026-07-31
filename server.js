@@ -3383,6 +3383,39 @@ setInterval(() => {
 setTimeout(() => _runTradeIndiaForAllTenants().catch(() => {}), 90_000);
 console.log('[tradeindia] marketplace inquiry pull worker started');
 
+/* TRADEINDIA_CATCHALL_v1 (2026-07-29) — the registry-based sweep above only
+ * visits tenants that were explicitly enrolled (on Save). To guarantee daily
+ * imports even if a tenant was never enrolled (configured before the schema
+ * fix, or only ever used 'Pull leads now'), this catch-all walks EVERY active
+ * tenant a few times a day and runs the TradeIndia due-check. Configured+auto
+ * tenants pull at their slot AND self-enroll (so the fast sweep then owns them);
+ * unconfigured tenants return cheaply. Same all-tenant walk the reminder
+ * scheduler already does every 60s, so no new load pattern. */
+async function _runTradeIndiaCatchAll() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`);
+    rows = r.rows;
+  } catch (e) { console.warn('[tradeindia-catchall] tenant list failed:', e.message); return; }
+  let ti; try { ti = require('./routes/tradeIndia'); } catch (_) { return; }
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => ti.runDueForCurrentTenant());
+    } catch (e) { console.warn(`[tradeindia-catchall] ${row.slug}:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runTradeIndiaCatchAll().catch(e => console.error('[tradeindia-catchall] cycle failed:', e.message));
+}, 60 * 60_000);   // hourly — the per-tenant slot logic still limits actual pulls to 8/1/5 IST
+setTimeout(() => _runTradeIndiaCatchAll().catch(() => {}), 120_000);
+console.log('[tradeindia] catch-all discovery sweep started (hourly)');
+
 /* Public per-tenant CSV endpoints — the URL shown in the tenant's export settings.
  * Also lost in the 27-June gutting, so the "Public download URL" in the UI was dead. */
 try {

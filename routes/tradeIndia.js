@@ -558,6 +558,9 @@ async function runDueForCurrentTenant() {
   const cfg = await _getSettings();
   if (!Number(cfg.auto_import)) return { skipped: 'auto_import off' };
   if (!cfg.api_key || !cfg.api_user_id || !cfg.api_profile_id) return { skipped: 'not configured' };
+  /* Self-enroll: any configured+auto tenant we reach (via the catch-all sweep)
+   * gets added to the fast 5-min registry sweep too, so enrollment can't lapse. */
+  try { await _registerTenantForSync(1); } catch (_) {}
   const slotStart = _mostRecentSlotStart();
   if (!slotStart) return { skipped: 'before first slot today' };
   // Already pulled at/after this slot's start today → not due again until the
