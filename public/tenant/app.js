@@ -29968,7 +29968,13 @@ async function _renderTradeIndiaPanel(box, apiKey) {
     h('b', {}, st.last_sync_at ? new Date(st.last_sync_at).toLocaleString() : 'never'),
     st.sync_status === 'success' ? statusPill('✅ success', '#dcfce7', '#166534')
       : st.sync_status === 'failed' ? statusPill('❌ failed', '#fee2e2', '#991b1b')
-      : statusPill('— not run', '#e2e8f0', '#475569'));
+      : statusPill('— not run', '#e2e8f0', '#475569'),
+    /* TRADEINDIA_ENROLL_SELFHEAL_v1 — show whether the auto-pull cron is enrolled. */
+    Number(st.auto_import)
+      ? (st.auto_enrolled
+          ? statusPill('🟢 auto-pull enrolled · ' + (st.pull_schedule_hint || '8 AM, 1 PM, 5 PM IST'), '#dcfce7', '#166534')
+          : statusPill('⚠ auto-pull NOT enrolled — click Save settings once', '#fef3c7', '#92400e'))
+      : statusPill('⚪ auto-pull OFF', '#e2e8f0', '#475569'));
   box.appendChild(statusRow);
   if (st.last_error) box.appendChild(h('div', { class: 'error-box', style: { fontSize: '.8rem' } }, '⚠ ' + st.last_error));
 

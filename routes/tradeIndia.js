@@ -248,6 +248,20 @@ async function _persistSettings(patch) {
 
 /** Keep a control-DB registry of which tenants to poll, so the 15-min sweep
  *  never has to open all ~95 tenant databases just to discover config. */
+/* TRADEINDIA_ENROLL_SELFHEAL_v1 (2026-07-29) — is this tenant currently enrolled
+ * in the auto-pull cron (control-DB registry, enabled=1)? */
+async function _isEnrolled() {
+  try {
+    const controlDb = require('../control/db');
+    const slug = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore() || {}).slug;
+    if (!slug) return false;
+    const r = await controlDb.query(
+      `SELECT enabled FROM marketplace_sync_registry WHERE slug = $1 AND provider = $2 LIMIT 1`,
+      [slug, PROVIDER]);
+    return !!(r.rows[0] && Number(r.rows[0].enabled) === 1);
+  } catch (_) { return false; }
+}
+
 async function _registerTenantForSync(enabled) {
   try {
     const controlDb = require('../control/db');
@@ -569,6 +583,12 @@ async function _requireAdmin(token) {
 async function api_tradeindia_settings_get(token) {
   await _requireAdmin(token);
   const cfg = await _getSettings();
+  /* SELF-HEAL: keep the auto-pull registry in sync with the saved auto_import
+   * flag every time the panel loads. This fixes tenants that were configured
+   * before the schema fix (Save failed) or only ever used 'Pull leads now', so
+   * they were never enrolled and the cron never visited them. */
+  try { await _registerTenantForSync(Number(cfg.auto_import) === 1); } catch (_) {}
+  const _enrolled = await _isEnrolled();
   return {
     settings: {
       api_url:           cfg.api_url || DEFAULT_API_URL,
@@ -584,6 +604,8 @@ async function api_tradeindia_settings_get(token) {
       last_sync_at:      cfg.last_sync_at || null,
       sync_status:       cfg.sync_status || null,
       last_error:        cfg.last_error || null,
+      auto_enrolled:     _enrolled,        /* in the auto-pull cron registry */
+      pull_schedule_hint: pullScheduleLabel(),
     },
     mapping_source: MAPPING_SOURCE,
     fields: TI_CUSTOM_FIELDS,
@@ -618,6 +640,9 @@ async function api_tradeindia_settings_save(token, payload) {
 
 async function api_tradeindia_sync_now(token) {
   await _requireAdmin(token);
+  /* Clicking 'Pull leads now' also enrolls the tenant in the auto-pull cron if
+   * auto-import is on, so the automatic schedule can never silently lapse. */
+  try { const cfg = await _getSettings(); await _registerTenantForSync(Number(cfg.auto_import) === 1); } catch (_) {}
   return runSync({ trigger: 'manual' });
 }
 
