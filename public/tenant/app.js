@@ -10257,8 +10257,9 @@ async function openLeadModal(id) {
                 h('span', { style: { background: statusColor, color: '#fff', padding: '.1rem .4rem', borderRadius: '4px', fontSize: '.74rem' } },
                   isOverdue && i.status !== 'paid' ? 'overdue' : i.status)),
               h('td', { style: { textAlign: 'right' } },
-                i.status === 'paid' ? null :
-                  h('button', { class: 'btn xs', type: 'button', onclick: () => openMarkPaidModal(i, () => openLeadModal(id)) }, '₹ Mark paid')
+                (i.status === 'paid' || Number(i.paid_amount) > 0)
+                  ? h('button', { class: 'btn xs', type: 'button', title: 'Download / print the payment receipt', onclick: () => _downloadInstallmentReceipt(id, i) }, '🧾 Receipt')
+                  : h('button', { class: 'btn xs', type: 'button', onclick: () => openMarkPaidModal(i, () => openLeadModal(id)) }, '₹ Mark paid')
               )
             );
           }))
@@ -44152,6 +44153,33 @@ async function openCreateEnrollmentModal(lead, onSaved) {
   setTimeout(_recalc, 50);
 }
 
+/* EDU_INLINE_RECEIPT_v1 (2026-07-20) — download/print the official receipt for
+ * a paid installment straight from the lead modal's Fees & Installments table.
+ * Reuses the same receipt HTML as the '🖨 Print receipt' button in the Fees &
+ * Receipts modal, so the output is the proper branded receipt (open, then
+ * Ctrl/Cmd+P → Save as PDF). Falls back to the full receipts modal if no
+ * receipt row exists yet (e.g. a legacy/token payment recorded before receipts). */
+async function _downloadInstallmentReceipt(leadId, inst) {
+  try {
+    const rd = await api('api_edu_receipts_list', { lead_id: leadId, limit: 200 }).catch(() => ({ items: [] }));
+    const items = (rd && rd.items) || [];
+    const rx = items.find(r => String(r.installment_id) === String(inst.id))
+            || items.find(r => Number(r.amount) === Number(inst.paid_amount || inst.amount));
+    if (!rx) {
+      toast('Opening receipts…', 'ok');
+      if (typeof _openFeeReceiptsForLead === 'function') _openFeeReceiptsForLead(leadId);
+      else toast('No receipt found for this payment yet.', 'err');
+      return;
+    }
+    const rr = await api('api_edu_receipts_html', rx.id);
+    if (!rr || !rr.html) throw new Error('No receipt content returned');
+    const w = window.open('', '_blank', 'width=760,height=900');
+    if (!w) { toast('Allow pop-ups to open the receipt', 'err'); return; }
+    w.document.open(); w.document.write(rr.html); w.document.close();
+    setTimeout(() => { try { w.focus(); } catch (_) {} }, 200);
+  } catch (e) { toast(e.message || 'Could not open receipt', 'err'); }
+}
+
 async function openMarkPaidModal(installment, onSaved) {
   const due = Math.max(0, Number(installment.amount) + Number(installment.late_fee) - Number(installment.paid_amount));
   const amtInput = h('input', { type: 'number', step: '0.01', value: due });
@@ -48741,6 +48769,16 @@ try { window.openCloseSaleModal = openCloseSaleModal; } catch (_) {}
 // Patch the existing modal so when a course is chosen, token + EMI rows auto-fill.
 // We attach to the course input via input/change events when the modal opens.
 (function _autoFillCloseSaleFromCourse() {
+  /* CLOSE_SALE_DUP_COURSE_FIX_v1 (2026-07-20) — DISABLED. This older patch
+   * injected a second '— Pick saved course —' dropdown next to 'Course name'.
+   * It raced (both do async api_products_list) with the newer
+   * _enhanceCloseSaleWithCoursePicker patch, which adds 'Pick course from
+   * catalog (auto-fills fees)' AND feeds the discount course-fee field. When the
+   * old patch's API call resolved last it re-added its dropdown after the newer
+   * patch removed it, so tenants saw BOTH ('Pick course' + 'Course name' with a
+   * duplicate picker). The newer patch fully covers course selection + token/fee
+   * autofill, so this one is now a no-op to remove the duplicate. */
+  return;
   // Hook into openCloseSaleModal by wrapping it
   if (typeof openCloseSaleModal !== 'function') return;
   const _orig = openCloseSaleModal;
