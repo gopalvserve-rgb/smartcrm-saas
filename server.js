@@ -68,7 +68,8 @@ const copilotKb = require('./routes/saas/copilotKb'); // COPILOT_KB_v1
 const saasWhatsapp = require('./routes/saas/saasWhatsapp'); // SAAS_WA_EMBEDDED_v1
 const dbVolume = require('./routes/saas/dbVolume'); // DB_VOLUME_v1 — tenant storage usage
 const transactions = require('./routes/saas/transactions');
-const emailLogs = require('./routes/saas/emailLogs'); /* EMAIL_LOG_v1 */ // SAAS_TXN_v1
+const emailLogs = require('./routes/saas/emailLogs'); /* EMAIL_LOG_v1 */
+const marketplaceDiag = require('./routes/saas/marketplaceDiag'); /* TRADEINDIA_DIAG_v1 */ // SAAS_TXN_v1
 const customReqs = require('./routes/saas/customRequirements');
 const webhookLogs = require('./routes/saas/webhookLogs');
 const cashfreeWebhook = require('./routes/saas/cashfreeWebhook');
@@ -148,7 +149,8 @@ const SAAS_API = {};
   tickets,
   finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth,
   copilotKb, saasWhatsapp, dbVolume, transactions,
-  emailLogs   /* EMAIL_LOG_v1 */
+  emailLogs,  /* EMAIL_LOG_v1 */
+  marketplaceDiag   /* TRADEINDIA_DIAG_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];

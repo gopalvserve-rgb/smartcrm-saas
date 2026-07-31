@@ -173,7 +173,8 @@ const NAV = [
   { id: 'device_health', label: '📱 Device Health',      requiresPerm: 'device_health.view' },
   { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' },
   { id: 'email_template', label: '✉️ Welcome Email',      requiresPerm: 'settings.edit' },   /* WELCOME_EMAIL_v4 */
-  { id: 'email_log',     label: '📧 Email Log',          requiresPerm: 'settings.edit' }   /* EMAIL_LOG_v1 */
+  { id: 'email_log',     label: '📧 Email Log',          requiresPerm: 'settings.edit' },   /* EMAIL_LOG_v1 */
+  { id: 'mkt_diag',      label: '🏭 TradeIndia Diag',    requiresPerm: 'settings.edit' }   /* TRADEINDIA_DIAG_v1 */
 ];
 
 
@@ -5633,7 +5634,81 @@ function _tenantDeleteBtn(t) {
     } }, '🗑 Delete');
 }
 
+VIEWS.mkt_diag = async (view) => {
+  /* TRADEINDIA_DIAG_v1 — live diagnostic: enter a tenant slug, see the saved
+   * TradeIndia settings, enrollment, last sync + error, recent logs, and a LIVE
+   * fetch of today's inquiries straight from TradeIndia. */
+  view.appendChild(h('h1', {}, '🏭 TradeIndia diagnostic'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } },
+    'Enter a workspace slug (e.g. mark-engineers) to see why its TradeIndia leads are/aren\'t importing.'));
+  const slugInp = h('input', { type: 'text', placeholder: 'tenant slug', value: 'mark-engineers', style: { padding: '.45rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '220px' } });
+  const goBtn = h('button', { class: 'btn primary' }, 'Run diagnostic');
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', marginBottom: '14px' } }, slugInp, goBtn));
+  const host = h('div', {}); view.appendChild(host);
+
+  async function run() {
+    host.innerHTML = '<div class="muted" style="padding:1rem">Running live check…</div>';
+    let d;
+    try { d = await api('api_saas_marketplace_diag', { slug: slugInp.value.trim(), provider: 'tradeindia' }); }
+    catch (e) { host.innerHTML = ''; host.appendChild(h('div', { style: { color: '#dc2626', padding: '1rem' } }, '⚠ ' + e.message)); return; }
+    host.innerHTML = '';
+    const st = d.settings || {};
+    const pill = (txt, bg, fg) => h('span', { style: { background: bg, color: fg, padding: '2px 8px', borderRadius: '999px', fontSize: '12px', fontWeight: 700 } }, txt);
+    const kv = (k, v) => h('div', { style: { display: 'flex', gap: '8px', padding: '3px 0', fontSize: '13px' } }, h('b', { style: { minWidth: '160px', color: '#475569' } }, k), h('span', {}, String(v == null ? '—' : v)));
+    const card = h('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px', marginBottom: '12px' } });
+    card.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' } },
+      h('b', {}, d.slug),
+      st.configured ? pill('✓ configured', '#dcfce7', '#166534') : pill('✖ NOT configured', '#fee2e2', '#991b1b'),
+      Number(st.auto_import) ? pill('auto-pull ON', '#dcfce7', '#166534') : pill('auto-pull OFF', '#fef3c7', '#92400e'),
+      d.enrolled ? pill('enrolled in cron', '#dcfce7', '#166534') : pill('NOT enrolled', '#fef3c7', '#92400e')));
+    card.appendChild(kv('User ID', st.api_user_id));
+    card.appendChild(kv('Profile ID', st.api_profile_id));
+    card.appendChild(kv('API key', st.api_key_hint));
+    card.appendChild(kv('Schedule', d.schedule));
+    card.appendChild(kv('Last sync', st.last_sync_at));
+    card.appendChild(kv('Last status', st.sync_status));
+    if (st.last_error) card.appendChild(h('div', { style: { color: '#b91c1c', fontSize: '13px', marginTop: '4px' } }, '⚠ last error: ' + st.last_error));
+    host.appendChild(card);
+
+    // LIVE fetch result
+    const live = d.live || {};
+    const lc = h('div', { style: { background: live.ok ? '#f0fdf4' : '#fef2f2', border: '1px solid ' + (live.ok ? '#bbf7d0' : '#fecaca'), borderRadius: '10px', padding: '14px', marginBottom: '12px' } });
+    lc.appendChild(h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, '🔴 LIVE TradeIndia fetch (today)'));
+    if (live.error) lc.appendChild(h('div', { style: { color: '#b91c1c', fontSize: '13px' } }, '❌ ' + live.error));
+    else {
+      lc.appendChild(h('div', { style: { fontSize: '13px', marginBottom: '6px' } }, '✅ ' + (live.count || 0) + ' record(s) returned · ' + (live.response_ms || 0) + 'ms'));
+      lc.appendChild(h('div', { style: { fontSize: '12px', color: '#475569', wordBreak: 'break-all', marginBottom: '6px' } }, live.url_redacted || ''));
+      lc.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '10px', borderRadius: '6px', fontSize: '11.5px', maxHeight: '260px', overflow: 'auto', whiteSpace: 'pre-wrap' } }, JSON.stringify(live.sample && live.sample.length ? live.sample : live.raw, null, 2)));
+    }
+    host.appendChild(lc);
+
+    // recent logs
+    const logs = d.logs || [];
+    if (logs.length) {
+      const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' } });
+      tbl.appendChild(h('thead', {}, h('tr', { style: { textAlign: 'left', borderBottom: '2px solid #e2e8f0' } },
+        ...['When', 'Trigger', 'Recv', 'Imported', 'Skipped', 'Errors', 'Status', 'Message'].map(x => h('th', { style: { padding: '6px' } }, x)))));
+      const tb = h('tbody', {});
+      logs.forEach(l => tb.appendChild(h('tr', { style: { borderBottom: '1px solid #f1f5f9' } },
+        h('td', { style: { padding: '6px', whiteSpace: 'nowrap' } }, new Date(l.started_at).toLocaleString()),
+        h('td', { style: { padding: '6px' } }, l.trigger_type || ''),
+        h('td', { style: { padding: '6px' } }, String(l.records_received || 0)),
+        h('td', { style: { padding: '6px' } }, String(l.imported_count || 0)),
+        h('td', { style: { padding: '6px' } }, String(l.skipped_count || 0)),
+        h('td', { style: { padding: '6px', color: Number(l.error_count) ? '#dc2626' : '' } }, String(l.error_count || 0)),
+        h('td', { style: { padding: '6px' } }, l.status || ''),
+        h('td', { style: { padding: '6px', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: l.message || '' }, l.message || ''))));
+      tbl.appendChild(tb);
+      host.appendChild(h('div', { style: { fontWeight: 700, margin: '6px 0' } }, '📜 Recent sync logs'));
+      host.appendChild(tbl);
+    } else host.appendChild(h('div', { class: 'muted' }, 'No sync logs recorded yet.'));
+  }
+  goBtn.onclick = run;
+  await run();
+};
+
 VIEWS.email_log = async (view) => {
+
   /* EMAIL_LOG_v1 — every platform email send with its real SMTP outcome.
    * This is where you confirm whether a welcome / invoice / password-reset
    * email was actually accepted by the mail server (accepted[] non-empty,

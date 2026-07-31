@@ -665,6 +665,12 @@ async function api_tradeindia_logs_list(token, limit) {
  * plus a redacted copy and a 3-record sample. No leads are imported here. */
 async function api_tradeindia_preview(token, payload) {
   await _requireAdmin(token);
+  return _previewCore(payload);
+}
+
+/* Auth-free preview core — used by the settings preview AND the super-admin
+ * diagnostic (which is already authenticated + running in tenant scope). */
+async function _previewCore(payload) {
   const cfg = await _getSettings();
   if (!cfg.api_key || !cfg.api_user_id || !cfg.api_profile_id) {
     throw new Error('Enter and Save your User ID, Profile ID and API Key first.');
@@ -705,6 +711,7 @@ module.exports = {
   runSync,
   runDueForCurrentTenant,
   pullScheduleLabel,
+  _previewCore,
   _stripHtml,
   _asArray,
   _defaultPayload,
