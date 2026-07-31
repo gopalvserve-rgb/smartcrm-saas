@@ -6907,10 +6907,33 @@ function renderLeadsTable(rows) {
   const activeCols = getActiveColumns();
   const extraCols = (customFields || []).filter(f => f.show_in_list);
 
+  /* LEAD_COL_SORT_v1 (2026-07-29) — clickable column headers. First click sorts
+   * ascending (A-Z / oldest / lowest), second click flips to descending. Only
+   * columns the backend can sort by a real lead field are clickable; the arrow
+   * shows the active column + direction. */
+  const _SORTABLE_COL = { name:'name', phone:'phone', email:'email', whatsapp:'whatsapp', city:'city', created:'created', updated:'updated', last_change:'updated', followup:'followup', smart_score:'score' };
+  function _sortHeader(key, label) {
+    const sf = _SORTABLE_COL[key];
+    if (!sf) return h('th', {}, label);
+    const cur   = String((CRM.prefs.filters && CRM.prefs.filters.sort) || 'created_desc');
+    const isAsc = cur === sf + '_asc';
+    const isDesc= cur === sf + '_desc';
+    const arrow = isAsc ? ' \u25B2' : isDesc ? ' \u25BC' : ' \u21C5';
+    return h('th', { style: { cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }, title: 'Click to sort',
+      onclick: () => {
+        const next = isAsc ? (sf + '_desc') : (sf + '_asc');   // 1st click asc, then toggle
+        CRM.prefs.filters.sort = next;
+        try { const fs = document.getElementById('f-sort'); if (fs && [...fs.options].some(o => o.value === next)) fs.value = next; } catch (_) {}
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      } },
+      h('span', {}, label),
+      h('span', { style: { opacity: (isAsc || isDesc) ? 1 : 0.35, fontSize: '.85em', marginLeft: '2px' } }, arrow));
+  }
+
   const thead = h('thead', {},
     h('tr', {},
       h('th', { class: 'th-check' }, h('input', { type: 'checkbox', id: 'sel-all', onclick: ev => selectAll(ev.target.checked) })),
-      ...activeCols.map(key => h('th', {}, (LEAD_COLUMNS.find(c => c.key === key) || {}).label || key)),
+      ...activeCols.map(key => _sortHeader(key, (LEAD_COLUMNS.find(c => c.key === key) || {}).label || key)),
       ...extraCols.map(f => h('th', {}, f.label)),
       h('th', {})
     )

@@ -575,9 +575,17 @@ async function api_leads_list(token, filters) {
     }
     if (sort.startsWith('score')) {
       // LEAD_SCORING_v1 P1.5 — sort by smart_score (0 for unscored).
-      // Pad to 4 digits so numeric compare works on strings.
-      return String(Number(l.smart_score || 0)).padStart(4, '0');
+      return String(Number(l.smart_score || 0)).padStart(6, '0');
     }
+    /* LEAD_COL_SORT_v1 (2026-07-29) — click-to-sort by more columns. Text keys
+     * are lowered for case-insensitive A-Z; phone/whatsapp strip non-digits. */
+    if (sort.startsWith('name'))     return String(l.name || '').toLowerCase();
+    if (sort.startsWith('phone'))    return String(l.phone || '').replace(/\D/g, '');
+    if (sort.startsWith('email'))    return String(l.email || '').toLowerCase();
+    if (sort.startsWith('whatsapp')) return String(l.whatsapp || '').replace(/\D/g, '');
+    if (sort.startsWith('city'))     return String(l.city || '').toLowerCase();
+    if (sort.startsWith('company'))  return String(l.company || '').toLowerCase();
+    if (sort.startsWith('followup')) return String(l.next_followup_at || '');
     // POOL_PULL_FRESH_v1 — a recycled/pulled lead surfaces with its FRESH pull
     // time (pulled_at) so it jumps to the top of Recent; created_at is kept
     // underneath for reporting. Normal leads (pulled_at NULL) are unaffected.
