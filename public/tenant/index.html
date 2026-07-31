@@ -125,7 +125,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-07-29-phonefmt-v1" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-07-29-multi-batch-v1" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -166,7 +166,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-07-29-phonefmt-v1';
+          s.src = 'app.js?v=2026-07-29-multi-batch-v1';
           document.body.appendChild(s);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
@@ -180,7 +180,7 @@
           hol.src = 'holiday.js?v=2026-07-18-pkg-builder-v2';
           document.body.appendChild(hol);
           var wap = document.createElement('script');   // WHATSAPP_PACK_v1
-          wap.src = 'whatsapp.js?v=2026-07-29-phonefmt-v1';
+          wap.src = 'whatsapp.js?v=2026-07-29-multi-batch-v1';
           document.body.appendChild(wap);
           // RE_PACK_v2 (2026-06-27) — isolated pack SPA
           var re = document.createElement('script');
@@ -229,7 +229,7 @@
           /* CUSTOMER_MODULE_v1 - Customers page + Convert modal. Own file (isolation
            * standard). Gated to vserve in the nav + backend; harmless to load elsewhere. */
           var cust = document.createElement('script');
-          cust.src = 'customers.js?v=2026-07-18-filters-v3-design';
+          cust.src = 'customers.js?v=2026-07-29-multiprod-v1';
           document.body.appendChild(cust);
           var wbM = document.createElement('script');
           wbM.src = 'wbChatV2Mobile.js?v=2026-07-12-wa-mobile-v2-2';

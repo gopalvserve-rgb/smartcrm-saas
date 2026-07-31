@@ -470,9 +470,14 @@ async function api_leads_list(token, filters) {
     rows = rows.filter(l => Number(l.campaign_id) === Number(filters.campaign_id));
   }
   if (filters.product_id)  rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
+  /* LEAD_UNASSIGNED_FILTER_v1 (2026-07-29) — 'Unassigned' = no owner. Combines
+   * with picked users (their leads OR unassigned). */
+  const _wantUnassigned = !!filters.unassigned;
   if (Array.isArray(filters.assigned_tos) && filters.assigned_tos.length) {
     const set = new Set(filters.assigned_tos.map(x => Number(x)));
-    rows = rows.filter(l => set.has(Number(l.assigned_to)));
+    rows = rows.filter(l => set.has(Number(l.assigned_to)) || (_wantUnassigned && !Number(l.assigned_to)));
+  } else if (_wantUnassigned) {
+    rows = rows.filter(l => !Number(l.assigned_to));
   } else if (filters.assigned_to) {
     rows = rows.filter(l => Number(l.assigned_to) === Number(filters.assigned_to));
   }

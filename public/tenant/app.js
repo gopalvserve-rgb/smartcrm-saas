@@ -5701,12 +5701,17 @@ VIEWS.leads = async (view) => {
     })()
       ? multiSelectDropdown({
           id: 'f-assigned', label: 'Assigned',
-          options: users.map(u => ({ id: u.id, name: u.name })),
-          values: CRM.prefs.filters.assigned_tos || (CRM.prefs.filters.assigned_to ? [CRM.prefs.filters.assigned_to] : []),
+          /* LEAD_UNASSIGNED_FILTER_v1 (2026-07-29) — 'Unassigned' sentinel (id '0')
+           * shows leads with no owner. Combines with real users (their leads OR
+           * unassigned). */
+          options: [{ id: '0', name: '🚫 Unassigned' }].concat(users.map(u => ({ id: u.id, name: u.name }))),
+          values: (CRM.prefs.filters.include_unassigned ? ['0'] : []).concat(CRM.prefs.filters.assigned_tos || (CRM.prefs.filters.assigned_to ? [CRM.prefs.filters.assigned_to] : [])),
           allLabel: 'Any assignee',
           onApply: (vals) => {
-            CRM.prefs.filters.assigned_tos = vals;
-            CRM.prefs.filters.assigned_to = vals.length === 1 ? vals[0] : '';
+            CRM.prefs.filters.include_unassigned = vals.some(v => String(v) === '0');
+            const userVals = vals.filter(v => String(v) !== '0');
+            CRM.prefs.filters.assigned_tos = userVals;
+            CRM.prefs.filters.assigned_to = userVals.length === 1 ? userVals[0] : '';
             CRM._leadsPage = 1; loadLeads({ page: 1 });
           }
         })
@@ -6652,6 +6657,8 @@ async function loadLeads(opts) {
     tags:        tags || undefined,
     assigned_to: ats  ? (ats.length === 1 ? ats[0] : undefined)  : (CRM.prefs.filters.assigned_to || undefined),
     assigned_tos: ats || undefined,
+    /* LEAD_UNASSIGNED_FILTER_v1 */
+    unassigned: CRM.prefs.filters.include_unassigned ? 1 : undefined,
     /* LEAD_CAMPAIGN_FILTER_FIX_v1 (2026-07-02) — cids was computed but never
        attached, so the Leads Campaign filter selection was never sent to the
        backend (which already honours filters.campaign_ids) — the list showed

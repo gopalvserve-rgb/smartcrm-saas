@@ -200,7 +200,38 @@
     body.appendChild(sec('Customer'));
     body.appendChild(row2(h('div', {}, label('Customer name *'), fName), h('div', {}, label('Phone (match key)'), fPhone)));
     body.appendChild(sec('Order'));
+    /* CUST_MULTI_PRODUCT_v1 (2026-07-29) — the primary product (fProduct) still
+     * drives assignee routing / reports / inventory (unchanged). Reps can add
+     * MORE products+amounts here; the full list is stored on the customer and
+     * the Order value auto-sums. */
     body.appendChild(row2(h('div', {}, label('Product / package *'), fProduct), h('div', {}, label('Order value *'), fAmount)));
+    const _extraRows = [];
+    const _extrasWrap = h('div', {});
+    function _recalcTotal() {
+      let t = Number(String(fAmount.value).replace(/[^0-9.]/g, '')) || 0;
+      _extraRows.forEach(function (r) { t += Number(String(r.amt.value).replace(/[^0-9.]/g, '')) || 0; });
+      // reflect the total in a small hint
+      _totalHint.textContent = _extraRows.length ? ('Total order value: ₹' + t.toLocaleString('en-IN')) : '';
+    }
+    function _addExtraRow() {
+      const sel = h('select', { style: { width: '100%', border: '1px solid ' + C.border, borderRadius: '6px', padding: '.42rem .55rem', fontSize: '.85rem', boxSizing: 'border-box' } },
+        h('option', { value: '' }, '— pick a product —'),
+        products.map(function (pr) { return h('option', { value: pr.id }, pr.name); }));
+      const amt = input({ placeholder: 'amount' });
+      const rm = h('button', { type: 'button', style: { border: '1px solid ' + C.border, background: '#fff', borderRadius: '6px', cursor: 'pointer', padding: '0 .5rem' }, title: 'Remove' }, '✕');
+      const rowEl = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '.5rem', marginTop: '.4rem', alignItems: 'center' } }, sel, amt, rm);
+      const rec = { sel: sel, amt: amt, el: rowEl };
+      rm.addEventListener('click', function () { const i = _extraRows.indexOf(rec); if (i >= 0) _extraRows.splice(i, 1); rowEl.remove(); _recalcTotal(); });
+      amt.addEventListener('input', _recalcTotal);
+      _extraRows.push(rec); _extrasWrap.appendChild(rowEl); _recalcTotal();
+    }
+    const _totalHint = h('div', { style: { fontSize: '.78rem', color: C.soft, marginTop: '.35rem', fontWeight: 700 } }, '');
+    const _addBtn = h('button', { type: 'button', style: { marginTop: '.5rem', border: '1px dashed ' + C.border, background: '#f8fafc', borderRadius: '6px', cursor: 'pointer', padding: '.4rem .7rem', fontSize: '.82rem', fontWeight: 600, color: C.soft } }, '+ Add another product');
+    _addBtn.addEventListener('click', _addExtraRow);
+    fAmount.addEventListener('input', _recalcTotal);
+    body.appendChild(_extrasWrap);
+    body.appendChild(_addBtn);
+    body.appendChild(_totalHint);
     body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '.7rem', marginTop: '.6rem' } },
       h('div', {}, label('Payment received'), fPaid), h('div', {}, label('Mode'), fMode), h('div', {}, label('Reference'), fRef)));
     body.appendChild(sec('Delivery'));
@@ -265,12 +296,22 @@
       doBtn.disabled = 'disabled'; doBtn.textContent = 'Converting…';
       try {
         const prodName = (products.find(function (p) { return Number(p.id) === Number(fProduct.value); }) || {}).name || '';
+        /* CUST_MULTI_PRODUCT_v1 — primary (fProduct) + any extra rows. Total sale
+         * amount sums every line; the primary product keeps driving routing. */
+        const _order = [];
+        if (fProduct.value) _order.push({ product_id: Number(fProduct.value), product_name: prodName, amount: Number(String(fAmount.value).replace(/[^0-9.]/g, '')) || 0 });
+        _extraRows.forEach(function (rr) {
+          if (!rr.sel.value) return;
+          _order.push({ product_id: Number(rr.sel.value), product_name: (products.find(function (p) { return Number(p.id) === Number(rr.sel.value); }) || {}).name || '', amount: Number(String(rr.amt.value).replace(/[^0-9.]/g, '')) || 0 });
+        });
+        const _totalSale = _order.length ? _order.reduce(function (a, b) { return a + (b.amount || 0); }, 0) : (Number(String(fAmount.value).replace(/[^0-9.]/g, '')) || 0);
         const r = await api('api_customers_convert', {
           extra_json: extra,
           lead_id: lead.id,
           name: fName.value, phone: fPhone.value,
           product_id: Number(fProduct.value), product_name: prodName,
-          sale_amount: fAmount.value, paid_amount: fPaid.value,
+          order_products: _order,
+          sale_amount: (_order.length > 1 ? _totalSale : fAmount.value), paid_amount: fPaid.value,
           payment_mode: fMode.value === '—' ? null : fMode.value, payment_ref: fRef.value,
           address: fAddr.value, site_contact: fContact.value,
           target_date: fTarget.value || null, notes: fNotes.value

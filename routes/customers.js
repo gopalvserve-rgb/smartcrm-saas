@@ -220,6 +220,18 @@ async function api_customers_convert(token, payload) {
     } catch (_) {}
   }
 
+  /* CUST_MULTI_PRODUCT_v1 (2026-07-29) — the primary product (product_id) still
+   * drives routing/reports/inventory. Any additional products the rep picked
+   * ride along in extra_json.order_products so the customer keeps the full list. */
+  const _orderProducts = Array.isArray(p.order_products)
+    ? p.order_products.filter(function (x) { return x && x.product_id; }).map(function (x) {
+        return { product_id: Number(x.product_id), product_name: String(x.product_name || ''), amount: Number(x.amount) || 0 };
+      })
+    : [];
+  if (_orderProducts.length > 1) {
+    p.extra_json = Object.assign({}, (p.extra_json && typeof p.extra_json === 'object') ? p.extra_json : {}, { order_products: _orderProducts });
+  }
+
   const pick = await _pickAssignee(productId);
 
   const stageId = await _firstStageId();
