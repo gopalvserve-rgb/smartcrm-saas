@@ -1,0 +1,35 @@
+active
+container->host gateway: 172.17.0.1
+=== TEST via pgbouncer ===
+psql: error: connection to server at "172.17.0.1", port 6432 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+control tenants:
+psql: error: connection to server at "172.17.0.1", port 6432 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+vserve leads:
+concurrency OK
+=== switch app to pgbouncer (rollback copy kept at .env.direct) ===
+bouncer urls in .env: 2
+[PM2] Applying action restartProcessId on app [smartcrm](ids: [ 6 ])
+[PM2] [smartcrm](6) ✓
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 70238    │ 0      │ 2213 │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 70222    │ 0      │ 2234 │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2123     │ 23m    │ 0    │ online    │ 0.5%     │ 48.5mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 70259    │ 1s     │ 3    │ online    │ 0%       │ 48.2mb   │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 2268     │ 23m    │ 0    │ online    │ 0.5%     │ 65.3mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 2015     │ online   │ 0    │ 0.5%     │ 44.3mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+REAL postgres connections now: 112  (was ~260 before pooler)
+LIVE HTTP 200
+tenant vserve HTTP 200
+PGBOUNCER_LIVE
+---exit=0---
