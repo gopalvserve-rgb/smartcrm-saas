@@ -11,8 +11,12 @@ RHOST="metro.proxy.rlwy.net"; RPORT="26133"; RUSER="postgres"
 DUMPDIR=/root/smartcrm-migration/dumps/$(date +%Y%m%d_%H%M%S)
 mkdir -p "$DUMPDIR"
 
-# Ensure local postgres superuser password matches .env
-sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '${LOCAL_PG_PASS}';" >/dev/null
+# Ensure local postgres superuser password matches .env (password is alphanumeric)
+if command -v sudo >/dev/null 2>&1; then
+  sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '${LOCAL_PG_PASS}';" >/dev/null
+else
+  su -s /bin/bash postgres -c "psql -c \"ALTER USER postgres WITH PASSWORD '${LOCAL_PG_PASS}';\"" >/dev/null
+fi
 
 export PGPASSWORD="$PGPASSWORD_RAILWAY"
 echo "--- databases on Railway ---"
