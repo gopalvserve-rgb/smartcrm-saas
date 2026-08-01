@@ -1,0 +1,5 @@
+databases to sync: 128
+== parallel dump start 01:58:34 ==
+3.2G	/root/smartcrm-migration/dumps/final_20260802_015832
+dns@8.8.8.8: 69.46.46.36
+---exit=0---
