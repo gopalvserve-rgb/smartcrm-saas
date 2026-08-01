@@ -1,0 +1,53 @@
+=== DIAGNOSIS ===
+--- OOM kills? ---
+--- container state ---
+Up 2 minutes
+--- pg container logs tail ---
+	          SET status = 'sending'
+	        WHERE id IN (
+	          SELECT id FROM ai_reengage_log
+	           WHERE status = 'scheduled' AND scheduled_for <= NOW()
+	           ORDER BY id ASC LIMIT 50
+	           FOR UPDATE SKIP LOCKED
+	        )
+	        RETURNING *
+--- memory ---
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       2.8Gi       315Mi       728Mi       2.8Gi       2.3Gi
+=== RECOVER: sane PG memory, restart-safe ===
+smartcrm-pg
+WARNING: Your kernel does not support swap limit capabilities or the cgroup is not mounted. Memory limited without swap.
+79c21405a6518a14f68e7f9e401d02534a58184789538a86dd39f5dd9e3542dc
+250
+256MB
+=== tighten app pools so boot burst stays small ===
+[PM2] Applying action restartProcessId on app [smartcrm](ids: [ 6 ])
+[PM2] [smartcrm](6) ✓
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 7545     │ 0s     │ 122  │ online    │ 0%       │ 35.9mb   │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 7537     │ 0      │ 122  │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2123     │ 3m     │ 0    │ online    │ 1.5%     │ 60.1mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 7557     │ 0s     │ 1    │ online    │ 0%       │ 18.1mb   │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 2268     │ 3m     │ 0    │ online    │ 0%       │ 72.9mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 2015     │ online   │ 0    │ 0%       │ 48.6mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+waiting for boot settle...
+connections: 136 / 250
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  sorry, too many clients already
+connections:  / 250
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  sorry, too many clients already
+connections:  / 250
+LIVE site HTTP 200
+tenant vserve HTTP 200
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       2.8Gi       193Mi       419Mi       2.9Gi       2.6Gi
+RECOVERED
+---exit=0---
