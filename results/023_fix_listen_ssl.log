@@ -1,0 +1,24 @@
+2:    listen 103.139.75.150:80;
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+--- pubIP test (502 expected while app restoring/stopped) ---
+pubIP+host HTTP 404
+--- certbot retry ---
+   your certificates, run "certbot renew"
+ - If you like Certbot, please consider supporting our work by:
+
+   Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate
+   Donating to EFF:                    https://eff.org/donate-le
+
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+16:    listen 443 ssl; # managed by Certbot
+17:    ssl_certificate /etc/letsencrypt/live/crm.smartcrmsolution.com/fullchain.pem; # managed by Certbot
+29:    listen 103.139.75.150:80;
+--- sync progress ---
+databases to sync: 128
+== parallel dump start 01:58:34 ==
+== dump done 02:19:53 ==
+3.6G	/dumps/final_20260802_015832
+== parallel restore start 02:19:53 ==
+---exit=0---
