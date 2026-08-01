@@ -33,22 +33,29 @@ module.exports = { apps: [{
 }]};
 EOF
 
-# Apache reverse-proxy vhost (Virtualmin box — old sites untouched)
-a2enmod proxy proxy_http proxy_wstunnel headers rewrite >/dev/null 2>&1 || true
-cat > /etc/apache2/sites-available/crm.smartcrmsolution.com.conf <<'EOF'
-<VirtualHost *:80>
-    ServerName crm.smartcrmsolution.com
-    ProxyPreserveHost On
-    ProxyPass /.well-known/ !
-    DocumentRoot /var/www/html
-    ProxyPass / http://127.0.0.1:3000/
-    ProxyPassReverse / http://127.0.0.1:3000/
-    RewriteEngine On
-    RewriteCond %{HTTP:Upgrade} =websocket [NC]
-    RewriteRule /(.*) ws://127.0.0.1:3000/$1 [P,L]
-    LimitRequestBody 104857600
-</VirtualHost>
+# nginx reverse-proxy vhost (nginx owns :80/:443 on this box — old sites untouched)
+if [ -d /etc/nginx/sites-enabled ]; then CONF=/etc/nginx/sites-available/crm.smartcrmsolution.com.conf; LINK=1
+elif [ -d /etc/nginx/conf.d ]; then CONF=/etc/nginx/conf.d/crm.smartcrmsolution.com.conf; LINK=0
+else echo "NGINX_LAYOUT_UNKNOWN"; ls /etc/nginx; exit 1; fi
+
+cat > "$CONF" <<'EOF'
+server {
+    listen 80;
+    server_name crm.smartcrmsolution.com;
+    client_max_body_size 100M;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
 EOF
-a2ensite crm.smartcrmsolution.com >/dev/null 2>&1 || true
-apachectl configtest && systemctl reload apache2 && echo "VHOST=apache OK"
+[ "$LINK" = 1 ] && ln -sf "$CONF" /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx && echo "VHOST=nginx OK ($CONF)"
 echo "=== DEPLOY DONE (app starts after DB restore) ==="
