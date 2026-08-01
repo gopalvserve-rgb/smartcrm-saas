@@ -1,0 +1,52 @@
+== Sun 02 Aug 2026 12:06:56 AM IST ==
+active
+--- stage1 processes ---
+--- latest stage1 log tail ---
+total 16
+drwxr-xr-x 2 root root 4096 Aug  2 00:04 .
+drwxr-xr-x 4 root root 4096 Aug  2 00:04 ..
+-rw-r--r-- 1 root root 7242 Aug  2 00:04 stage1_20260802_000403.log
+xxmin.letscompare.in.conf
+000-default.conf
+=== AUDIT DONE ===
+=== INSTALL ===
+Hit:1 https://download.docker.com/linux/ubuntu focal InRelease
+Get:2 https://deb.nodesource.com/node_14.x focal InRelease [4,583 B]
+Hit:3 http://repo.percona.com/percona/apt focal InRelease
+Get:4 https://dl.yarnpkg.com/debian stable InRelease
+Hit:5 http://repo.percona.com/prel/apt focal InRelease
+Hit:6 http://apt.bitninja.io/debian bitninja InRelease
+Get:7 http://ppa.launchpad.net/ondrej/php/ubuntu focal InRelease [24.6 kB]
+Hit:8 http://software.virtualmin.com/vm/6/gpl/apt virtualmin-focal InRelease
+Hit:9 http://software.virtualmin.com/vm/6/gpl/apt virtualmin-universal InRelease
+Hit:11 http://archive.ubuntu.com/ubuntu focal InRelease
+Hit:12 http://security.ubuntu.com/ubuntu focal-security InRelease
+Get:13 https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 InRelease [4,009 B]
+Hit:14 http://repo.zabbix.com/zabbix/5.0/ubuntu focal InRelease
+Hit:15 http://archive.ubuntu.com/ubuntu focal-updates InRelease
+Ign:10 https://repo.r1soft.com/apt stable InRelease
+Err:4 https://dl.yarnpkg.com/debian stable InRelease
+  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 62D54FD4003F6525
+Get:16 https://repo.r1soft.com/apt stable Release [3,255 B]
+Get:17 https://repo.r1soft.com/apt stable Release.gpg [490 B]
+Err:8 http://software.virtualmin.com/vm/6/gpl/apt virtualmin-focal InRelease
+  The following signatures were invalid: EXPKEYSIG D9F9010760D62A6B Virtualmin, Inc. (Package signing key for Virtualmin 6) <security@virtualmin.com>
+Err:9 http://software.virtualmin.com/vm/6/gpl/apt virtualmin-universal InRelease
+  The following signatures were invalid: EXPKEYSIG D9F9010760D62A6B Virtualmin, Inc. (Package signing key for Virtualmin 6) <security@virtualmin.com>
+Err:13 https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 InRelease
+  The following signatures were invalid: EXPKEYSIG 656408E390CFB1F5 MongoDB 4.4 Release Signing Key <packaging@mongodb.com>
+Err:17 https://repo.r1soft.com/apt stable Release.gpg
+  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 37B2BAF45650A294
+Reading package lists...
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://dl.yarnpkg.com/debian stable InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 62D54FD4003F6525
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: http://software.virtualmin.com/vm/6/gpl/apt virtualmin-focal InRelease: The following signatures were invalid: EXPKEYSIG D9F9010760D62A6B Virtualmin, Inc. (Package signing key for Virtualmin 6) <security@virtualmin.com>
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: http://software.virtualmin.com/vm/6/gpl/apt virtualmin-universal InRelease: The following signatures were invalid: EXPKEYSIG D9F9010760D62A6B Virtualmin, Inc. (Package signing key for Virtualmin 6) <security@virtualmin.com>
+E: Repository 'http://ppa.launchpad.net/ondrej/php/ubuntu focal InRelease' changed its 'Label' value from '***** The main PPA for supported PHP versions with many PECL extensions *****' to 'PPA for PHP'
+W: GPG error: https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 InRelease: The following signatures were invalid: EXPKEYSIG 656408E390CFB1F5 MongoDB 4.4 Release Signing Key <packaging@mongodb.com>
+E: The repository 'https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 InRelease' is no longer signed.
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://repo.r1soft.com/apt stable Release: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 37B2BAF45650A294
++ exit 1
+--- versions ---
+v16.13.1
+5.1.0
+---exit=0---
