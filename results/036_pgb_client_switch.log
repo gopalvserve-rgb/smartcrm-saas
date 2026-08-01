@@ -1,0 +1,3 @@
+Warning: No existing cluster is suitable as a default target. Please see man pg_wrapper(1) how to specify one.
+Error: You must install at least one postgresql-client-<version> package
+---exit=1---
