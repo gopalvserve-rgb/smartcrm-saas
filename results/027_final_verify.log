@@ -1,0 +1,12 @@
+tenants railway=128 local=128
+FINAL_SYNC_MATCH_OK
+databases restored: 128
+{"status":"error","code":404,"message":"Application not found","request_id":"q6-TmqVRTL2EA8zMipRofQ"}
+--- workers alive ---
+2026-08-02T02:36:36: [tenant-bootstrap] applied=0 defaults=8 errors=0
+2026-08-02T02:36:36: [tenant-bootstrap] applied=0 defaults=8 errors=1
+2026-08-02T02:36:37: [tenant-bootstrap] applied=0 defaults=8 errors=0
+2026-08-02T02:36:42: [WA_CATALOGUE_ROLLOUT] flipped=0 alreadyOn=67 errors=0 total=123
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       4.1Gi        57Mi       357Mi       1.7Gi       1.3Gi
+---exit=0---
