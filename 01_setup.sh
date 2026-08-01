@@ -47,13 +47,13 @@ if ! docker ps --format '{{.Names}}' | grep -q '^smartcrm-pg$'; then
   docker rm -f smartcrm-pg >/dev/null 2>&1 || true
   docker run -d --name smartcrm-pg --restart unless-stopped \
     -e POSTGRES_PASSWORD="$LOCAL_PG_PASS" -e POSTGRES_DB=railway \
-    -v /home/crm.smartcrmsolution.com/pgdata:/var/lib/postgresql/data \
+    -v /home/crm.smartcrmsolution.com/pgdata:/var/lib/postgresql \
     -v /root/smartcrm-migration/dumps:/dumps \
     -p 127.0.0.1:5433:5432 postgres:18 \
   || { echo "bridge-net failed — using host network fallback"; docker rm -f smartcrm-pg >/dev/null 2>&1;
        docker run -d --name smartcrm-pg --restart unless-stopped --network host \
          -e POSTGRES_PASSWORD="$LOCAL_PG_PASS" -e POSTGRES_DB=railway \
-         -v /home/crm.smartcrmsolution.com/pgdata:/var/lib/postgresql/data \
+         -v /home/crm.smartcrmsolution.com/pgdata:/var/lib/postgresql \
          -v /root/smartcrm-migration/dumps:/dumps \
          postgres:18 -c port=5433 -c listen_addresses=127.0.0.1 ; }
 fi
