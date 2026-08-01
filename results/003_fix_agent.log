@@ -1,0 +1,6 @@
+agent.sh rewritten with sanitization
+HEAD is now at 37713ad cmd 003 fix agent
+repo reset to origin
+restart scheduled
+FIX003 OK
+---exit=0---
