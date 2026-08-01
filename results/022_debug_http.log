@@ -1,0 +1,45 @@
+--- nat PREROUTING (interception?) ---
+--- nginx vhosts ---
+27:	# server_names_hash_bucket_size 64;
+28:	# server_name_in_redirect off;
+105:	server_names_hash_bucket_size 128;
+118:#		listen     localhost:110;
+124:#		listen     localhost:143;
+282:	server_name 103-139-75-150.hyperxapps.com www.103-139-75-150.hyperxapps.com;
+283:	listen 103.139.75.150;
+304:	fastcgi_param SERVER_NAME $server_name;
+312:	listen 103.139.75.150:443 ssl;
+328:	server_name adbullet.co.in www.adbullet.co.in;
+329:	listen 103.139.75.150;
+350:	fastcgi_param SERVER_NAME $server_name;
+377:	listen 103.139.75.150:443 ssl;
+995:	server_name adbullet.in www.adbullet.in;
+996:	listen 103.139.75.150;
+1017:	fastcgi_param SERVER_NAME $server_name;
+1037:	listen 103.139.75.150:443 ssl http2;
+1047:	server_name cloud-server.comparedth.com www.cloud-server.comparedth.com;
+1048:	listen 103.139.75.150;
+1069:	fastcgi_param SERVER_NAME $server_name;
+1080:	listen 103.139.75.150:443 ssl;
+1090:	server_name comparedth.com www.comparedth.com;
+1091:	listen 103.139.75.150;
+1112:	fastcgi_param SERVER_NAME $server_name;
+1180:	listen 103.139.75.150:443 default ssl http2;
+1424:fastcgi_param  SERVER_NAME        $server_name;
+1431:	server_name crm.adbullet.in www.crm.adbullet.in;
+1432:	listen 103.139.75.150;
+1453:	fastcgi_param SERVER_NAME $server_name;
+1487:	listen 103.139.75.150:443 ssl;
+grep: write error: Broken pipe
+--- includes ---
+4:include /etc/nginx/modules-enabled/*.conf;
+29:	include /etc/nginx/mime.types;
+102:	include /etc/nginx/conf.d/*.conf;
+103:	include /etc/nginx/sites-enabled/*;
+--- self-test via public IP ---
+pubIP+host HTTP 404
+
+acme-path via pubIP: HTTP 404
+--- bitninja ---
+inactive
+---exit=0---
