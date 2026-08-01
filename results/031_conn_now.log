@@ -1,0 +1,6 @@
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+	Is the server running locally and accepting connections on that socket?
+conns/max:
+too-many-clients errors in log: 2430
+site HTTP 502
+---exit=0---
