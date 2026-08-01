@@ -1,0 +1,18 @@
+--- sync progress ---
+databases to sync: 128
+== parallel dump start 01:58:34 ==
+3.5G	/root/smartcrm-migration/dumps/final_20260802_015832
+--- issuing SSL ---
+   Type:   unauthorized
+   Detail: 103.139.75.150: Invalid response from
+   http://crm.smartcrmsolution.com/.well-known/acme-challenge/KBwSZxsuWed3SDV3mI9wtR6A2IBhjFnJhKEtUh1XfGo:
+   404
+
+   To fix these errors, please make sure that your domain name was
+   entered correctly and the DNS A/AAAA record(s) for that domain
+   contain(s) the right IP address.
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+--- https test (app may still be restoring; 502 is OK here, cert is what matters) ---
+https HTTP 000 ssl_verify:0
+---exit=7---
