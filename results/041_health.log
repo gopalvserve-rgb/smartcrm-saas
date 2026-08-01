@@ -1,0 +1,9 @@
+site HTTP 200 in 0.336627s
+vserve HTTP 200 in 2.074048s
+PG conns: 12
+active inactive 
+│ status            │ online                                       │
+│ restarts          │ 3                                            │
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       2.6Gi       577Mi       606Mi       2.7Gi       2.6Gi
+---exit=0---
