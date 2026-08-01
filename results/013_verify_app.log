@@ -1,0 +1,30 @@
+--- listener ---
+no listener on 3000
+--- pm2 smartcrm ---
+│ status            │ online                                       │
+│ restarts          │ 0                                            │
+│ uptime            │ 9m                                           │
+│ unstable restarts │ 0                                            │
+--- direct ---
+config.json HTTP 000
+
+--- via nginx ---
+via-nginx HTTP 502
+--- tenant page ---
+tenant login HTTP 502
+--- app logs (last 25) ---
+2026-08-02T01:39:43: [push] FCM initialised
+2026-08-02T01:39:44: [saasInvoiceAutoGen] sweep started (every 6h)
+2026-08-02T01:39:44: [rec-retention] daily retention cron active (set RECORDINGS_RETENTION_CRON=off to disable)
+2026-08-02T01:39:44: [boot] migrating control planeÃ¢ÂÂ¦
+2026-08-02T01:41:44: [tickets] _ensureSchema failed: The server does not support SSL connections
+2026-08-02T01:41:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:42:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:43:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:44:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:44:44: [rec-retention] daily run failed: The server does not support SSL connections
+2026-08-02T01:45:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:46:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:47:44: [social] scheduled posts run failed: The server does not support SSL connections
+2026-08-02T01:48:44: [social] scheduled posts run failed: The server does not support SSL connections
+---exit=0---
