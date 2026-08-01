@@ -1,0 +1,8 @@
+=== install pgbouncer ===
+ create mode 100644 sysctl.d/30-postgresql-shm.conf
+ create mode 120000 systemd/system/multi-user.target.wants/postgresql.service
+=== config ===
+active
+=== TEST through pgbouncer (port 6432) BEFORE touching the app ===
+TEST FAILED control: Error: You must install at least one postgresql-client-<version> package
+---exit=2---
