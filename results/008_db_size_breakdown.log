@@ -1,0 +1,166 @@
+== DATABASE SIZES ON RAILWAY (descending) ==
+tenant_vserve                1229 MB
+tenant_miga_fashion_institut 972 MB
+railway                      517 MB
+tenant_samt                  473 MB
+tenant_plus_91               315 MB
+tenant_global_outsourcing_so 223 MB
+tenant_jyoti                 202 MB
+tenant_gnk                   174 MB
+tenant_aeroline_fitness      171 MB
+tenant_basic                 151 MB
+tenant_test                  134 MB
+tenant_jay                   125 MB
+tenant_quick                 115 MB
+tenant_opc                   101 MB
+tenant_trinetra              87 MB
+tenant_life_on_tapes         87 MB
+tenant_gharonda_buildcon     84 MB
+tenant_softssolutionservice  84 MB
+tenant_apna                  78 MB
+tenant_sudarshan_digital_pre 68 MB
+tenant_samstiti              65 MB
+tenant_nb_visa_world         60 MB
+tenant_makeboq               59 MB
+tenant_shipuncle             56 MB
+tenant_learnimo              56 MB
+tenant_premier_enterprise    56 MB
+tenant_royal                 55 MB
+tenant_shashir               55 MB
+tenant_gujarat_auto          54 MB
+tenant_his                   52 MB
+tenant_iscdig                51 MB
+tenant_shri                  49 MB
+tenant_ach                   47 MB
+tenant_bje                   46 MB
+tenant_myow                  46 MB
+tenant_sharan                46 MB
+tenant_navneet               45 MB
+tenant_udified               45 MB
+tenant_nature                44 MB
+tenant_rama                  42 MB
+tenant_dm_exports            42 MB
+tenant_red                   42 MB
+tenant_bhumija               41 MB
+tenant_swarup_group          40 MB
+tenant_sks_realtors          36 MB
+tenant_pram                  36 MB
+tenant_elite                 36 MB
+tenant_fortune               36 MB
+tenant_ace_marketing         36 MB
+tenant_aqua                  34 MB
+tenant_add                   34 MB
+tenant_fastech               34 MB
+tenant_dokt                  33 MB
+tenant_smcbroking            32 MB
+tenant_nityay                32 MB
+tenant_aapli                 31 MB
+tenant_thinknew              29 MB
+tenant_showcase              29 MB
+tenant_prime                 29 MB
+tenant_landmark              28 MB
+tenant_new                   28 MB
+tenant_sa_palss_prop         27 MB
+tenant_gbb                   25 MB
+tenant_svs                   25 MB
+tenant_ecs                   25 MB
+tenant_sabharwal             25 MB
+tenant_kota_gurukal          24 MB
+tenant_tele                  24 MB
+tenant_                      24 MB
+tenant_mark_engineers        24 MB
+tenant_swigato               23 MB
+tenant_safar                 23 MB
+tenant_audio                 23 MB
+tenant_gea                   23 MB
+tenant_ment                  22 MB
+tenant_tru                   22 MB
+tenant_pal_financial_service 22 MB
+tenant_showcase_re           22 MB
+tenant_threes                22 MB
+tenant_carbolink             21 MB
+tenant_showcase_edu          21 MB
+tenant_mahajan               21 MB
+tenant_twg                   21 MB
+tenant_nkrealty              21 MB
+tenant_algorithms_it         21 MB
+tenant_advance_fin_solutions 20 MB
+tenant_leather_goods_repair  20 MB
+tenant_idigitalpreneur       20 MB
+tenant_ace                   19 MB
+tenant_imperial_furn         19 MB
+tenant_pramyan               19 MB
+tenant_epoxy                 19 MB
+tenant_meditrix              18 MB
+tenant_shivangani_transline  18 MB
+tenant_rktraders             18 MB
+tenant_showcase_holiday      18 MB
+tenant_viviana_realty        18 MB
+tenant_showcase_solar        17 MB
+tenant_showcase_finance      17 MB
+tenant_mangalam_homes        17 MB
+tenant_arrow                 17 MB
+tenant_north_east_power_cons 17 MB
+tenant_glowee_organics       17 MB
+tenant_brand                 17 MB
+tenant_nextera               17 MB
+tenant_showcase_ecommerce    17 MB
+tenant_manpower              17 MB
+tenant_edge                  16 MB
+tenant_showcase_mfg          16 MB
+tenant_quintess              16 MB
+tenant_sansaar               16 MB
+tenant_puneet                16 MB
+tenant_saharsa               16 MB
+tenant_testfv                16 MB
+tenant_kaasaa                16 MB
+tenant_mauli                 16 MB
+tenant_meds                  16 MB
+tenant_sajusnair             16 MB
+tenant_ozostack_0s3c         15 MB
+tenant_showcase_whatsapp     15 MB
+tenant_amg_baths             15 MB
+tenant_adonprint             14 MB
+tenant_ozostack              14 MB
+tenant_ignify                14 MB
+tenant_nepc                  14 MB
+tenant_govind                14 MB
+tenant_shriganpatimarriage   12 MB
+tenant_smc                   7750 kB
+postgres                     7678 kB
+
+== TOP TABLES IN 3 BIGGEST DBs ==
+--- tenant_vserve ---
+lead_recordings                1034 MB  rows~1574
+wa_activity_log                70 MB  rows~70188
+lead_score_log                 23 MB  rows~44964
+notifications                  18 MB  rows~96699
+whatsapp_messages              15 MB  rows~18334
+lead_actions                   8760 kB  rows~28729
+call_events                    4288 kB  rows~21772
+wa_template_samples            4232 kB  rows~-1
+device_diag_events             3976 kB  rows~4088
+webhook_logs                   3968 kB  rows~2000
+--- tenant_miga_fashion_institute ---
+lead_recordings                905 MB  rows~891
+wa_activity_log                13 MB  rows~12911
+notifications                  5336 kB  rows~27349
+lead_actions                   4656 kB  rows~20795
+webhook_logs                   3984 kB  rows~2000
+leads                          3512 kB  rows~1219
+whatsapp_messages              2376 kB  rows~3049
+copilot_lead_summaries         2176 kB  rows~1049
+call_events                    2064 kB  rows~11047
+webhook_log                    1888 kB  rows~2868
+--- railway ---
+perf_slow_log                  394 MB  rows~1306369
+perf_client_reports            59 MB  rows~58771
+ai_usage_log                   33 MB  rows~112019
+support_ticket_attachments     8080 kB  rows~26
+error_logs                     7712 kB  rows~209
+help_shots                     4264 kB  rows~-1
+audit_log                      640 kB  rows~1669
+cashfree_webhook_logs          256 kB  rows~67
+tenants                        176 kB  rows~111
+signups                        176 kB  rows~138
+---exit=0---
