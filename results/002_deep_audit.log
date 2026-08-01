@@ -1,0 +1,77 @@
+== FULL AUDIT ==
++ source ./secrets.env
+++ export PGPASSWORD_RAILWAY=[REDACTED]
+++ PGPASSWORD_RAILWAY=[REDACTED]
+++ export LOCAL_PG_PASS=[REDACTED]
+++ LOCAL_PG_PASS=[REDACTED]
+++ export GH_PAT=[REDACTED]
+++ GH_PAT=[REDACTED]
++ export GH_PAT
++ echo '########## 0. INSTALL CLAUDE-OPS AGENT (remote control) ##########'
+########## 0. INSTALL CLAUDE-OPS AGENT (remote control) ##########
++ bash 00_install_agent.sh
+Cloning into '/opt/claude-ops/repo'...
+Created symlink /etc/systemd/system/multi-user.target.wants/claude-ops.service → /etc/systemd/system/claude-ops.service.
+active
+CLAUDE-OPS AGENT RUNNING
++ echo '########## 1. AUDIT ##########'
+########## 1. AUDIT ##########
++ bash 01_setup.sh
+=== AUDIT ===
+OS: Ubuntu 20.04.2 LTS
+CPU: 2 cores | RAM: 5.9Gi | Disk free: 138G
+--- listening ports ---
+State  Recv-Q Send-Q                    Local Address:Port    Peer Address:Port Process                                                                         
+LISTEN 0      110                                   *:3306               *:*     users:(("mysqld",pid=1486792,fd=19))                                           
+--- existing web server ---
+failed
+inactive
+inactive
+--- existing node/pg ---
+v16.13.1
+psql: none
+5.1.0
+103-139-75-150.hyperxapps.com.conf
+adbullet.co.in.conf
+adbullet.in.conf
+cloud-server.comparedth.com.conf
+comparedth.com.conf
+crm.adbullet.in.conf
+csppoint.letscompare.in.conf
+default
+dypissatara.in.conf
+fitnet.in.conf
+indianex.co.in.conf
+kudostrips.com.conf
+letscompare.in.conf
+marketing.stockboxtech.com.conf
+node.comparedth.in.conf
+offers.celesteabode.com.conf
+offer.thetigergroove.in.conf
+pma.comparedth.com.conf
+puneetthakkar.com.conf
+smartcrmsolution.com.conf
+sumup-login.celesteabode.com.conf
+thetigergroove.in.conf
+tigerpma.hyperx.cloud.conf
+topnotchresorts.in.conf
+xxmin.letscompare.in.conf
+000-default.conf
+=== AUDIT DONE ===
++ echo '########## 2. INSTALL ##########'
+== extras ==
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       4.0Gi       140Mi       214Mi       1.7Gi       1.5Gi
+/dev/xvda1      246G   96G  138G  41% /
+2
+0.0.0.0:80 users:(("nginx",pid=1001791,fd=52),("nginx",pid=1001790,fd=52),("nginx",pid=1001789,fd=52))
+103.139.75.150:443 users:(("nginx",pid=1001791,fd=53),("nginx",pid=1001790,fd=53),("nginx",pid=1001789,fd=53))
+*:3306 users:(("mysqld",pid=1486792,fd=19))
+Server version: Apache/2.4.41 (Ubuntu)
+mysql  Ver 14.14 Distrib 5.7.34-37, for debian-linux-gnu (x86_64) using  8.0
+000-default.conf
+/usr/bin/certbot
+PRETTY_NAME="Ubuntu 20.04.2 LTS"
+---exit=0---
