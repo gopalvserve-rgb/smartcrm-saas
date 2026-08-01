@@ -1,0 +1,9 @@
+--- DNS checks ---
+@8.8.8.8: 69.46.46.36
+@1.1.1.1: 103.139.75.150
+--- final sync progress ---
+databases to sync: 128
+== parallel dump start 01:58:34 ==
+--- dump dir size so far ---
+1.1G	/root/smartcrm-migration/dumps/final_20260802_015832
+---exit=0---
