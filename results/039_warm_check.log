@@ -1,0 +1,17 @@
+=== slow API in last 60 log lines ===
+slow entries (recent): 19
+=== live latency samples (should be well under 1s warm) ===
+config.json  total=0.165563s http=200
+tenant vserve total=0.101140s http=200
+config.json  total=0.018130s http=200
+tenant vserve total=0.021964s http=200
+config.json  total=5.029710s http=200
+tenant vserve total=0.037723s http=200
+=== real PG conns now ===
+225
+=== persist pgbouncer + confirm autostart on reboot ===
+pgbouncer.service is not a native service, redirecting to systemd-sysv-install.
+Executing: /lib/systemd/systemd-sysv-install is-enabled pgbouncer
+enabled
+active
+---exit=0---
