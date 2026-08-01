@@ -1,0 +1,6 @@
+From https://github.com/gopalvserve-rgb/smartcrm-saas
+ * branch            migration-scripts -> FETCH_HEAD
+   d869c68..3846831  migration-scripts -> origin/migration-scripts
+HEAD is now at 3846831 final cutover sync script (parallel + rename)
+final sync launched (pid 1360689)
+---exit=0---
