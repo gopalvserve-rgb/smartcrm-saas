@@ -1,0 +1,797 @@
+########## 0. CLAUDE-OPS AGENT ##########
+active
+########## 1+2. AUDIT & INSTALL ##########
+=== AUDIT ===
+OS: Ubuntu 20.04.2 LTS
+CPU: 2 cores | RAM: 5.9Gi | Disk free: 137G
+State  Recv-Q Send-Q                     Local Address:Port   Peer Address:Port Process                                                                         
+LISTEN 0      128                              0.0.0.0:80          0.0.0.0:*     users:(("nginx",pid=1078511,fd=52),("nginx",pid=1078510,fd=52),("nginx",pid=1001789,fd=52))
+LISTEN 0      128                       103.139.75.150:443         0.0.0.0:*     users:(("nginx",pid=1078511,fd=53),("nginx",pid=1078510,fd=53),("nginx",pid=1001789,fd=53))
+LISTEN 0      110                                    *:3306              *:*     users:(("mysqld",pid=1486792,fd=19))                                           
+v16.13.1
+5.1.0
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+=== AUDIT DONE ===
+=== INSTALL ===
+E: Repository 'http://ppa.launchpad.net/ondrej/php/ubuntu focal InRelease' changed its 'Label' value from '***** The main PPA for supported PHP versions with many PECL extensions *****' to 'PPA for PHP'
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://repo.r1soft.com/apt stable Release: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 37B2BAF45650A294
+v20.19.4
+ffmpeg version 4.2.7-0ubuntu0.1 Copyright (c) 2000-2022 the FFmpeg developers
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+fd757d5dbae432200cf8345d41e5beb5cea4ede2ee167eef8c2934e30d299e88
+PG18 ready (bridge 127.0.0.1:5433)
+=== INSTALL DONE ===
+########## 3. DEPLOY CODE ##########
+From https://github.com/gopalvserve-rgb/smartcrm-saas
+ * branch            main       -> FETCH_HEAD
+HEAD is now at b3208b6 TRADEINDIA_DIAG_v1: super-admin live diagnostic for a tenant's TradeIndia pull
+deployed commit: b3208b6 TRADEINDIA_DIAG_v1: super-admin live diagnostic for a tenant's TradeIndia pull
+env vars: 28
+  npm audit fix --force
+
+Run `npm audit` for details.
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+VHOST=nginx OK (/etc/nginx/sites-available/crm.smartcrmsolution.com.conf)
+=== DEPLOY DONE (app starts after DB restore) ===
+########## 4. TRIAL DB COPY (Railway stays live) ##########
+--- databases on Railway ---
+railway
+tenant_
+tenant_aapli
+tenant_ace
+tenant_ace_marketing
+tenant_ach
+tenant_add
+tenant_adonprint
+tenant_advance_fin_solutions
+tenant_aeroline_fitness
+tenant_algorithms_it
+tenant_amg_baths
+tenant_apna
+tenant_aqua
+tenant_arrow
+tenant_audio
+tenant_basic
+tenant_bhumija
+tenant_bje
+tenant_brand
+tenant_carbolink
+tenant_dm_exports
+tenant_dokt
+tenant_ecs
+tenant_edge
+tenant_elite
+tenant_epoxy
+tenant_fastech
+tenant_fortune
+tenant_gbb
+tenant_gea
+tenant_gharonda_buildcon
+tenant_global_outsourcing_solutions
+tenant_glowee_organics
+tenant_gnk
+tenant_govind
+tenant_gujarat_auto
+tenant_his
+tenant_idigitalpreneur
+tenant_ignify
+tenant_imperial_furn
+tenant_iscdig
+tenant_jay
+tenant_jyoti
+tenant_kaasaa
+tenant_kota_gurukal
+tenant_landmark
+tenant_learnimo
+tenant_leather_goods_repair
+tenant_life_on_tapes
+tenant_mahajan
+tenant_makeboq
+tenant_mangalam_homes
+tenant_manpower
+tenant_mark_engineers
+tenant_mauli
+tenant_meditrix
+tenant_meds
+tenant_ment
+tenant_miga_fashion_institute
+tenant_myow
+tenant_nature
+tenant_navneet
+tenant_nb_visa_world
+tenant_nepc
+tenant_new
+tenant_nextera
+tenant_nityay
+tenant_nkrealty
+tenant_north_east_power_cons
+tenant_opc
+tenant_ozostack
+tenant_ozostack_0s3c
+tenant_pal_financial_services
+tenant_plus_91
+tenant_pram
+tenant_pramyan
+tenant_premier_enterprise
+tenant_prime
+tenant_puneet
+tenant_quick
+tenant_quintess
+tenant_rama
+tenant_red
+tenant_rktraders
+tenant_royal
+tenant_sa_palss_prop
+tenant_sabharwal
+tenant_safar
+tenant_saharsa
+tenant_sajusnair
+tenant_samstiti
+tenant_samt
+tenant_sansaar
+tenant_sharan
+tenant_shashir
+tenant_shipuncle
+tenant_shivangani_transline
+tenant_showcase
+tenant_showcase_ecommerce
+tenant_showcase_edu
+tenant_showcase_finance
+tenant_showcase_holiday
+tenant_showcase_mfg
+tenant_showcase_re
+tenant_showcase_solar
+tenant_showcase_whatsapp
+tenant_shri
+tenant_shriganpatimarriage
+tenant_sks_realtors
+tenant_smc
+tenant_smcbroking
+tenant_softssolutionservice
+tenant_sudarshan_digital_press
+tenant_svs
+tenant_swarup_group
+tenant_swigato
+tenant_tele
+tenant_test
+tenant_testfv
+tenant_thinknew
+tenant_threes
+tenant_trinetra
+tenant_tru
+tenant_twg
+tenant_udified
+tenant_viviana_realty
+tenant_vserve
+=== dump railway ===
+=== dump tenant_ ===
+=== dump tenant_aapli ===
+=== dump tenant_ace ===
+=== dump tenant_ace_marketing ===
+=== dump tenant_ach ===
+=== dump tenant_add ===
+=== dump tenant_adonprint ===
+=== dump tenant_advance_fin_solutions ===
+=== dump tenant_aeroline_fitness ===
+=== dump tenant_algorithms_it ===
+=== dump tenant_amg_baths ===
+=== dump tenant_apna ===
+=== dump tenant_aqua ===
+=== dump tenant_arrow ===
+=== dump tenant_audio ===
+=== dump tenant_basic ===
+=== dump tenant_bhumija ===
+=== dump tenant_bje ===
+=== dump tenant_brand ===
+=== dump tenant_carbolink ===
+=== dump tenant_dm_exports ===
+=== dump tenant_dokt ===
+=== dump tenant_ecs ===
+=== dump tenant_edge ===
+=== dump tenant_elite ===
+=== dump tenant_epoxy ===
+=== dump tenant_fastech ===
+=== dump tenant_fortune ===
+=== dump tenant_gbb ===
+=== dump tenant_gea ===
+=== dump tenant_gharonda_buildcon ===
+=== dump tenant_global_outsourcing_solutions ===
+=== dump tenant_glowee_organics ===
+=== dump tenant_gnk ===
+=== dump tenant_govind ===
+=== dump tenant_gujarat_auto ===
+=== dump tenant_his ===
+=== dump tenant_idigitalpreneur ===
+=== dump tenant_ignify ===
+=== dump tenant_imperial_furn ===
+=== dump tenant_iscdig ===
+=== dump tenant_jay ===
+=== dump tenant_jyoti ===
+=== dump tenant_kaasaa ===
+=== dump tenant_kota_gurukal ===
+=== dump tenant_landmark ===
+=== dump tenant_learnimo ===
+=== dump tenant_leather_goods_repair ===
+=== dump tenant_life_on_tapes ===
+=== dump tenant_mahajan ===
+=== dump tenant_makeboq ===
+=== dump tenant_mangalam_homes ===
+=== dump tenant_manpower ===
+=== dump tenant_mark_engineers ===
+=== dump tenant_mauli ===
+=== dump tenant_meditrix ===
+=== dump tenant_meds ===
+=== dump tenant_ment ===
+=== dump tenant_miga_fashion_institute ===
+=== dump tenant_myow ===
+=== dump tenant_nature ===
+=== dump tenant_navneet ===
+=== dump tenant_nb_visa_world ===
+=== dump tenant_nepc ===
+=== dump tenant_new ===
+=== dump tenant_nextera ===
+=== dump tenant_nityay ===
+=== dump tenant_nkrealty ===
+=== dump tenant_north_east_power_cons ===
+=== dump tenant_opc ===
+=== dump tenant_ozostack ===
+=== dump tenant_ozostack_0s3c ===
+=== dump tenant_pal_financial_services ===
+=== dump tenant_plus_91 ===
+=== dump tenant_pram ===
+=== dump tenant_pramyan ===
+=== dump tenant_premier_enterprise ===
+=== dump tenant_prime ===
+=== dump tenant_puneet ===
+=== dump tenant_quick ===
+=== dump tenant_quintess ===
+=== dump tenant_rama ===
+=== dump tenant_red ===
+=== dump tenant_rktraders ===
+=== dump tenant_royal ===
+=== dump tenant_sa_palss_prop ===
+=== dump tenant_sabharwal ===
+=== dump tenant_safar ===
+=== dump tenant_saharsa ===
+=== dump tenant_sajusnair ===
+=== dump tenant_samstiti ===
+=== dump tenant_samt ===
+=== dump tenant_sansaar ===
+=== dump tenant_sharan ===
+=== dump tenant_shashir ===
+=== dump tenant_shipuncle ===
+=== dump tenant_shivangani_transline ===
+=== dump tenant_showcase ===
+=== dump tenant_showcase_ecommerce ===
+=== dump tenant_showcase_edu ===
+=== dump tenant_showcase_finance ===
+=== dump tenant_showcase_holiday ===
+=== dump tenant_showcase_mfg ===
+=== dump tenant_showcase_re ===
+=== dump tenant_showcase_solar ===
+=== dump tenant_showcase_whatsapp ===
+=== dump tenant_shri ===
+=== dump tenant_shriganpatimarriage ===
+=== dump tenant_sks_realtors ===
+=== dump tenant_smc ===
+=== dump tenant_smcbroking ===
+=== dump tenant_softssolutionservice ===
+=== dump tenant_sudarshan_digital_press ===
+=== dump tenant_svs ===
+=== dump tenant_swarup_group ===
+=== dump tenant_swigato ===
+=== dump tenant_tele ===
+=== dump tenant_test ===
+=== dump tenant_testfv ===
+=== dump tenant_thinknew ===
+=== dump tenant_threes ===
+=== dump tenant_trinetra ===
+=== dump tenant_tru ===
+=== dump tenant_twg ===
+=== dump tenant_udified ===
+=== dump tenant_viviana_realty ===
+=== dump tenant_vserve ===
+3.6G	/dumps/20260802_003429
+=== restore railway ===
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_ ===
+DROP DATABASE
+NOTICE:  database "tenant_" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_aapli ===
+DROP DATABASE
+NOTICE:  database "tenant_aapli" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_ace ===
+NOTICE:  database "tenant_ace" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_ace_marketing ===
+NOTICE:  database "tenant_ace_marketing" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_ach ===
+DROP DATABASE
+NOTICE:  database "tenant_ach" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_add ===
+NOTICE:  database "tenant_add" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_adonprint ===
+NOTICE:  database "tenant_adonprint" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_advance_fin_solutions ===
+NOTICE:  database "tenant_advance_fin_solutions" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_aeroline_fitness ===
+DROP DATABASE
+NOTICE:  database "tenant_aeroline_fitness" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_algorithms_it ===
+DROP DATABASE
+NOTICE:  database "tenant_algorithms_it" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_amg_baths ===
+NOTICE:  database "tenant_amg_baths" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_apna ===
+DROP DATABASE
+NOTICE:  database "tenant_apna" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_aqua ===
+DROP DATABASE
+NOTICE:  database "tenant_aqua" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_arrow ===
+DROP DATABASE
+NOTICE:  database "tenant_arrow" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_audio ===
+DROP DATABASE
+NOTICE:  database "tenant_audio" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_basic ===
+DROP DATABASE
+NOTICE:  database "tenant_basic" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_bhumija ===
+NOTICE:  database "tenant_bhumija" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_bje ===
+DROP DATABASE
+NOTICE:  database "tenant_bje" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_brand ===
+DROP DATABASE
+NOTICE:  database "tenant_brand" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_carbolink ===
+DROP DATABASE
+NOTICE:  database "tenant_carbolink" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_dm_exports ===
+NOTICE:  database "tenant_dm_exports" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_dokt ===
+NOTICE:  database "tenant_dokt" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_ecs ===
+NOTICE:  database "tenant_ecs" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_edge ===
+NOTICE:  database "tenant_edge" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_elite ===
+DROP DATABASE
+NOTICE:  database "tenant_elite" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_epoxy ===
+DROP DATABASE
+NOTICE:  database "tenant_epoxy" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_fastech ===
+DROP DATABASE
+NOTICE:  database "tenant_fastech" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_fortune ===
+DROP DATABASE
+NOTICE:  database "tenant_fortune" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_gbb ===
+NOTICE:  database "tenant_gbb" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_gea ===
+NOTICE:  database "tenant_gea" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_gharonda_buildcon ===
+DROP DATABASE
+NOTICE:  database "tenant_gharonda_buildcon" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_global_outsourcing_solutions ===
+DROP DATABASE
+NOTICE:  database "tenant_global_outsourcing_solutions" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_glowee_organics ===
+DROP DATABASE
+NOTICE:  database "tenant_glowee_organics" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_gnk ===
+DROP DATABASE
+NOTICE:  database "tenant_gnk" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_govind ===
+DROP DATABASE
+NOTICE:  database "tenant_govind" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_gujarat_auto ===
+DROP DATABASE
+NOTICE:  database "tenant_gujarat_auto" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_his ===
+DROP DATABASE
+NOTICE:  database "tenant_his" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_idigitalpreneur ===
+DROP DATABASE
+NOTICE:  database "tenant_idigitalpreneur" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_ignify ===
+NOTICE:  database "tenant_ignify" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_imperial_furn ===
+NOTICE:  database "tenant_imperial_furn" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_iscdig ===
+NOTICE:  database "tenant_iscdig" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_jay ===
+NOTICE:  database "tenant_jay" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_jyoti ===
+DROP DATABASE
+NOTICE:  database "tenant_jyoti" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_kaasaa ===
+NOTICE:  database "tenant_kaasaa" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_kota_gurukal ===
+NOTICE:  database "tenant_kota_gurukal" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_landmark ===
+DROP DATABASE
+NOTICE:  database "tenant_landmark" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_learnimo ===
+NOTICE:  database "tenant_learnimo" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_leather_goods_repair ===
+DROP DATABASE
+NOTICE:  database "tenant_leather_goods_repair" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_life_on_tapes ===
+DROP DATABASE
+NOTICE:  database "tenant_life_on_tapes" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_mahajan ===
+NOTICE:  database "tenant_mahajan" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_makeboq ===
+NOTICE:  database "tenant_makeboq" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_mangalam_homes ===
+DROP DATABASE
+NOTICE:  database "tenant_mangalam_homes" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_manpower ===
+NOTICE:  database "tenant_manpower" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_mark_engineers ===
+DROP DATABASE
+NOTICE:  database "tenant_mark_engineers" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_mauli ===
+NOTICE:  database "tenant_mauli" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_meditrix ===
+NOTICE:  database "tenant_meditrix" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_meds ===
+DROP DATABASE
+NOTICE:  database "tenant_meds" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_ment ===
+NOTICE:  database "tenant_ment" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_miga_fashion_institute ===
+DROP DATABASE
+NOTICE:  database "tenant_miga_fashion_institute" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_myow ===
+NOTICE:  database "tenant_myow" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_nature ===
+DROP DATABASE
+NOTICE:  database "tenant_nature" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_navneet ===
+NOTICE:  database "tenant_navneet" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_nb_visa_world ===
+DROP DATABASE
+NOTICE:  database "tenant_nb_visa_world" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_nepc ===
+NOTICE:  database "tenant_nepc" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_new ===
+DROP DATABASE
+NOTICE:  database "tenant_new" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_nextera ===
+NOTICE:  database "tenant_nextera" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_nityay ===
+NOTICE:  database "tenant_nityay" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_nkrealty ===
+NOTICE:  database "tenant_nkrealty" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_north_east_power_cons ===
+DROP DATABASE
+NOTICE:  database "tenant_north_east_power_cons" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_opc ===
+NOTICE:  database "tenant_opc" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_ozostack ===
+DROP DATABASE
+NOTICE:  database "tenant_ozostack" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_ozostack_0s3c ===
+NOTICE:  database "tenant_ozostack_0s3c" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_pal_financial_services ===
+NOTICE:  database "tenant_pal_financial_services" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_plus_91 ===
+NOTICE:  database "tenant_plus_91" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_pram ===
+NOTICE:  database "tenant_pram" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_pramyan ===
+NOTICE:  database "tenant_pramyan" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_premier_enterprise ===
+NOTICE:  database "tenant_premier_enterprise" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_prime ===
+NOTICE:  database "tenant_prime" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_puneet ===
+NOTICE:  database "tenant_puneet" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_quick ===
+NOTICE:  database "tenant_quick" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_quintess ===
+NOTICE:  database "tenant_quintess" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_rama ===
+NOTICE:  database "tenant_rama" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_red ===
+NOTICE:  database "tenant_red" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_rktraders ===
+DROP DATABASE
+NOTICE:  database "tenant_rktraders" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_royal ===
+NOTICE:  database "tenant_royal" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_sa_palss_prop ===
+NOTICE:  database "tenant_sa_palss_prop" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_sabharwal ===
+NOTICE:  database "tenant_sabharwal" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_safar ===
+DROP DATABASE
+NOTICE:  database "tenant_safar" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_saharsa ===
+DROP DATABASE
+NOTICE:  database "tenant_saharsa" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_sajusnair ===
+DROP DATABASE
+NOTICE:  database "tenant_sajusnair" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_samstiti ===
+NOTICE:  database "tenant_samstiti" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_samt ===
+NOTICE:  database "tenant_samt" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_sansaar ===
+NOTICE:  database "tenant_sansaar" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_sharan ===
+NOTICE:  database "tenant_sharan" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_shashir ===
+NOTICE:  database "tenant_shashir" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_shipuncle ===
+DROP DATABASE
+NOTICE:  database "tenant_shipuncle" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_shivangani_transline ===
+NOTICE:  database "tenant_shivangani_transline" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_showcase ===
+NOTICE:  database "tenant_showcase" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_showcase_ecommerce ===
+NOTICE:  database "tenant_showcase_ecommerce" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_showcase_edu ===
+DROP DATABASE
+NOTICE:  database "tenant_showcase_edu" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_showcase_finance ===
+DROP DATABASE
+NOTICE:  database "tenant_showcase_finance" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_showcase_holiday ===
+DROP DATABASE
+NOTICE:  database "tenant_showcase_holiday" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_showcase_mfg ===
+NOTICE:  database "tenant_showcase_mfg" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_showcase_re ===
+NOTICE:  database "tenant_showcase_re" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_showcase_solar ===
+NOTICE:  database "tenant_showcase_solar" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_showcase_whatsapp ===
+NOTICE:  database "tenant_showcase_whatsapp" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_shri ===
+DROP DATABASE
+NOTICE:  database "tenant_shri" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_shriganpatimarriage ===
+NOTICE:  database "tenant_shriganpatimarriage" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_sks_realtors ===
+DROP DATABASE
+NOTICE:  database "tenant_sks_realtors" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_smc ===
+DROP DATABASE
+NOTICE:  database "tenant_smc" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_smcbroking ===
+DROP DATABASE
+NOTICE:  database "tenant_smcbroking" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_softssolutionservice ===
+NOTICE:  database "tenant_softssolutionservice" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_sudarshan_digital_press ===
+NOTICE:  database "tenant_sudarshan_digital_press" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_svs ===
+NOTICE:  database "tenant_svs" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_swarup_group ===
+DROP DATABASE
+NOTICE:  database "tenant_swarup_group" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_swigato ===
+NOTICE:  database "tenant_swigato" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_tele ===
+NOTICE:  database "tenant_tele" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_test ===
+NOTICE:  database "tenant_test" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_testfv ===
+NOTICE:  database "tenant_testfv" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_thinknew ===
+DROP DATABASE
+NOTICE:  database "tenant_thinknew" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_threes ===
+DROP DATABASE
+NOTICE:  database "tenant_threes" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_trinetra ===
+NOTICE:  database "tenant_trinetra" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_tru ===
+DROP DATABASE
+NOTICE:  database "tenant_tru" does not exist, skipping
+CREATE DATABASE
+=== restore tenant_twg ===
+NOTICE:  database "tenant_twg" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_udified ===
+NOTICE:  database "tenant_udified" does not exist, skipping
+DROP DATABASE
