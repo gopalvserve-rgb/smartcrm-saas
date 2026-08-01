@@ -1,0 +1,26 @@
+NOTICE:  database "tenant_vserve" does not exist, skipping
+CREATE DATABASE
+=== all restored; starting app ===
+[PM2][WARN] Applications smartcrm not running, starting...
+[PM2] App [smartcrm] launched (1 instances)
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 1294833  │ 0      │ 333… │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 1294839  │ 0      │ 333… │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2367     │ 17D    │ 0    │ online    │ 0%       │ 27.9mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 1294848  │ 0s     │ 0    │ online    │ 0%       │ 43.6mb   │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 1213507  │ 26m    │ 37   │ online    │ 0%       │ 58.4mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 3532227  │ online   │ 1    │ 0%       │ 36.0mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+[PM2][WARN] Current process list is not synchronized with saved list. Type 'pm2 save' to synchronize.
+[PM2] Saving current process list...
+[PM2] Successfully saved in /root/.pm2/dump.pm2
+config.json HTTP 000
+---exit=0---
