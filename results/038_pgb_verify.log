@@ -1,0 +1,22 @@
+=== pgbouncer pools (admin console) ===
+t20s realPGconns=249 site=200
+t40s realPGconns=248 site=200
+t60s realPGconns=214 site=200
+t80s realPGconns=206 site=200
+t100s realPGconns=236 site=200
+t120s realPGconns=236 site=200
+t140s realPGconns=242 site=200
+t160s realPGconns=231 site=200
+t180s realPGconns=231 site=200
+peak real PG conns over 3min: 249 / 400
+=== app errors related to pooling/transaction since switch ===
+=== recent app out log ===
+2026-08-02T03:16:44: [PERF_SLOW_API] SLOW fn=api_leads_list ms=2610 tenant=vserve user=?
+2026-08-02T03:17:43: [PERF_SLOW_API] SLOW fn=api_wb_chat_threads ms=2315 tenant=vserve user=?
+2026-08-02T03:17:44: [PERF_SLOW_API] VERY_SLOW fn=api_leads_list ms=3027 tenant=vserve user=?
+2026-08-02T03:17:44: [PERF_SLOW_API] VERY_SLOW fn=api_notifications_mine ms=3059 tenant=vserve user=?
+=== pgbouncer service ===
+active
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       3.0Gi       275Mi       597Mi       2.6Gi       2.2Gi
+---exit=0---
