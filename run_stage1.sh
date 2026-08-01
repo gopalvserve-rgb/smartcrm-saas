@@ -24,6 +24,9 @@ set -x
 source ./secrets.env
 export GH_PAT
 
+echo "########## 0. INSTALL CLAUDE-OPS AGENT (remote control) ##########"
+bash 00_install_agent.sh || echo "WARN: agent install failed — continuing anyway"
+
 echo "########## 1. AUDIT ##########"
 bash 01_setup.sh || exit 1
 
