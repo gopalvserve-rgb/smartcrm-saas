@@ -1,0 +1,16 @@
+t15s conns=257 site=200
+t30s conns=257 site=200
+t45s conns=260 site=200
+t60s conns=261 site=200
+t75s conns=257 site=200
+t90s conns=257 site=200
+t105s conns=263 site=200
+t120s conns=262 site=200
+t135s conns=257 site=200
+t150s conns=261 site=200
+t165s conns=261 site=200
+t180s conns=258 site=200
+peak connections over 3min: 263 / 400 ; connect-failures: 0
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       3.0Gi       184Mi       596Mi       2.7Gi       2.2Gi
+---exit=0---
