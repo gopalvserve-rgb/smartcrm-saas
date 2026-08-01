@@ -1,0 +1,25 @@
+16:    listen 103.139.75.150:443 ssl; # managed by Certbot
+29:    listen 103.139.75.150:80;
+pm2-logrotate online
+server online
+recharge-server online
+app online
+www online
+server errored
+smartcrm stopped
+no 3000 listener
+--- https body sample ---
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.18.0 (Ubuntu)</center>
+</body>
+</html>
+
+--- cert subject ---
+*  subject: CN=crm.smartcrmsolution.com
+*  issuer: C=US; O=Let's Encrypt; CN=YR2
+--- restore progress ---
+restored: 7
+---exit=0---
