@@ -1,0 +1,821 @@
+########## 0. CLAUDE-OPS AGENT ##########
+active
+########## 1+2. AUDIT & INSTALL ##########
+=== AUDIT ===
+OS: Ubuntu 20.04.2 LTS
+CPU: 2 cores | RAM: 5.9Gi | Disk free: 138G
+State  Recv-Q Send-Q                    Local Address:Port    Peer Address:Port Process                                                                         
+LISTEN 0      128                             0.0.0.0:80           0.0.0.0:*     users:(("nginx",pid=1001791,fd=52),("nginx",pid=1001790,fd=52),("nginx",pid=1001789,fd=52))
+LISTEN 0      128                      103.139.75.150:443          0.0.0.0:*     users:(("nginx",pid=1001791,fd=53),("nginx",pid=1001790,fd=53),("nginx",pid=1001789,fd=53))
+LISTEN 0      110                                   *:3306               *:*     users:(("mysqld",pid=1486792,fd=19))                                           
+v16.13.1
+5.1.0
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+=== AUDIT DONE ===
+=== INSTALL ===
+E: Repository 'http://ppa.launchpad.net/ondrej/php/ubuntu focal InRelease' changed its 'Label' value from '***** The main PPA for supported PHP versions with many PECL extensions *****' to 'PPA for PHP'
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://repo.r1soft.com/apt stable Release: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 37B2BAF45650A294
+v20.19.4
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following packages were automatically installed and are no longer required:
+  daemon jsonlint libcgi-fast-perl libcgi-pm-perl libevent-core-2.1-7
+  libevent-pthreads-2.1-7 libfcgi-perl libhtml-template-perl libtcl8.6
+  mecab-ipadic mecab-ipadic-utf8 mecab-utils php-composer-ca-bundle
+  php-composer-semver php-composer-spdx-licenses php-composer-xdebug-handler
+  php-json-schema php-psr-container php-psr-log php-symfony-console
+  php-symfony-filesystem php-symfony-finder php-symfony-process
+  php-symfony-service-contracts selinux-utils squashfs-tools tcl-expect tcl8.6
+Use 'apt autoremove' to remove them.
+The following additional packages will be installed:
+  i965-va-driver intel-media-va-driver libaacs0 libaom0 libass9 libasyncns0
+  libavc1394-0 libavcodec58 libavdevice58 libavfilter7 libavformat58
+  libavresample4 libavutil56 libbdplus0 libbluray2 libbs2b0 libcaca0
+  libcdio-cdda2 libcdio-paranoia2 libcdio18 libchromaprint1 libcodec2-0.9
+  libdc1394-22 libflac8 libflite1 libgme0 libgsm1 libiec61883-0 libigdgmm11
+  libjack-jackd2-0 liblilv-0-0 libmp3lame0 libmpg123-0 libmysofa1 libnorm1
+  libopenal-data libopenal1 libopenmpt0 libopus0 libpgm-5.2-0 libpostproc55
+  libpulse0 libraw1394-11 librubberband2 libsamplerate0 libsdl2-2.0-0
+  libserd-0-0 libshine3 libsnappy1v5 libsndfile1 libsndio7.0 libsord-0-0
+  libsoxr0 libspeex1 libsratom-0-0 libssh-gcrypt-4 libswresample3 libswscale5
+  libtheora0 libtwolame0 libva-drm2 libva-x11-2 libva2 libvdpau1 libvidstab1.1
+  libvorbisenc2 libvpx6 libwavpack1 libx264-155 libx265-179 libxvidcore4
+  libzmq5 libzvbi-common libzvbi0 mesa-va-drivers mesa-vdpau-drivers
+  ocl-icd-libopencl1 va-driver-all vdpau-driver-all
+Suggested packages:
+  ffmpeg-doc i965-va-driver-shaders libbluray-bdj jackd2 libportaudio2
+  opus-tools pulseaudio libraw1394-doc serdi sndiod sordi speex opencl-icd
+  libvdpau-va-gl1 nvidia-vdpau-driver nvidia-legacy-340xx-vdpau-driver
+  nvidia-legacy-304xx-vdpau-driver
+The following NEW packages will be installed:
+  ffmpeg i965-va-driver intel-media-va-driver libaacs0 libaom0 libass9
+  libasyncns0 libavc1394-0 libavcodec58 libavdevice58 libavfilter7
+  libavformat58 libavresample4 libavutil56 libbdplus0 libbluray2 libbs2b0
+  libcaca0 libcdio-cdda2 libcdio-paranoia2 libcdio18 libchromaprint1
+  libcodec2-0.9 libdc1394-22 libflac8 libflite1 libgme0 libgsm1 libiec61883-0
+  libigdgmm11 libjack-jackd2-0 liblilv-0-0 libmp3lame0 libmpg123-0 libmysofa1
+  libnorm1 libopenal-data libopenal1 libopenmpt0 libopus0 libpgm-5.2-0
+  libpostproc55 libpulse0 libraw1394-11 librubberband2 libsamplerate0
+  libsdl2-2.0-0 libserd-0-0 libshine3 libsnappy1v5 libsndfile1 libsndio7.0
+  libsord-0-0 libsoxr0 libspeex1 libsratom-0-0 libssh-gcrypt-4 libswresample3
+  libswscale5 libtheora0 libtwolame0 libva-drm2 libva-x11-2 libva2 libvdpau1
+  libvidstab1.1 libvorbisenc2 libvpx6 libwavpack1 libx264-155 libx265-179
+  libxvidcore4 libzmq5 libzvbi-common libzvbi0 mesa-va-drivers
+  mesa-vdpau-drivers ocl-icd-libopencl1 va-driver-all vdpau-driver-all
+0 upgraded, 80 newly installed, 0 to remove and 669 not upgraded.
+Need to get 49.3 MB of archives.
+After this operation, 219 MB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libaom0 amd64 1.0.0.errata1-3+deb11u1ubuntu0.1 [1,161 kB]
+Get:2 http://archive.ubuntu.com/ubuntu focal/universe amd64 libva2 amd64 2.7.0-2 [53.5 kB]
+Get:3 http://archive.ubuntu.com/ubuntu focal/universe amd64 libva-drm2 amd64 2.7.0-2 [7,044 B]
+Get:4 http://archive.ubuntu.com/ubuntu focal/universe amd64 libva-x11-2 amd64 2.7.0-2 [11.9 kB]
+Get:5 http://archive.ubuntu.com/ubuntu focal/main amd64 libvdpau1 amd64 1.3-1ubuntu2 [25.6 kB]
+Get:6 http://archive.ubuntu.com/ubuntu focal/main amd64 ocl-icd-libopencl1 amd64 2.2.11-1ubuntu1 [30.3 kB]
+Get:7 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libavutil56 amd64 7:4.2.7-0ubuntu0.1 [241 kB]
+Get:8 http://archive.ubuntu.com/ubuntu focal/universe amd64 libcodec2-0.9 amd64 0.9.2-2 [7,886 kB]
+Get:9 http://archive.ubuntu.com/ubuntu focal/universe amd64 libgsm1 amd64 1.0.18-2 [24.4 kB]
+Get:10 http://archive.ubuntu.com/ubuntu focal/main amd64 libmp3lame0 amd64 3.100-3 [133 kB]
+Get:11 http://archive.ubuntu.com/ubuntu focal/main amd64 libopus0 amd64 1.3.1-0ubuntu1 [191 kB]
+Get:12 http://archive.ubuntu.com/ubuntu focal/universe amd64 libshine3 amd64 3.1.1-2 [23.2 kB]
+Get:13 http://archive.ubuntu.com/ubuntu focal/main amd64 libsnappy1v5 amd64 1.1.8-1build1 [16.7 kB]
+Get:14 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libspeex1 amd64 1.2~rc1.2-1.1ubuntu1.20.04.1 [53.2 kB]
+Get:15 http://archive.ubuntu.com/ubuntu focal/main amd64 libsoxr0 amd64 0.1.3-2build1 [78.0 kB]
+Get:16 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libswresample3 amd64 7:4.2.7-0ubuntu0.1 [57.1 kB]
+Get:17 http://archive.ubuntu.com/ubuntu focal/main amd64 libtheora0 amd64 1.1.1+dfsg.1-15ubuntu2 [162 kB]
+Get:18 http://archive.ubuntu.com/ubuntu focal/main amd64 libtwolame0 amd64 0.4.0-2 [47.6 kB]
+Get:19 http://archive.ubuntu.com/ubuntu focal/main amd64 libvorbisenc2 amd64 1.3.6-2ubuntu1 [70.7 kB]
+Get:20 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libvpx6 amd64 1.8.2-1ubuntu0.4 [819 kB]
+Get:21 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libwavpack1 amd64 5.2.0-1ubuntu0.1 [77.3 kB]
+Get:22 http://archive.ubuntu.com/ubuntu focal/universe amd64 libx264-155 amd64 2:0.155.2917+git0a84d98-2 [521 kB]
+Get:23 http://archive.ubuntu.com/ubuntu focal/universe amd64 libx265-179 amd64 3.2.1-1build1 [1,060 kB]
+Get:24 http://archive.ubuntu.com/ubuntu focal/universe amd64 libxvidcore4 amd64 2:1.3.7-1 [201 kB]
+Get:25 http://archive.ubuntu.com/ubuntu focal/universe amd64 libzvbi-common all 0.2.35-17 [32.5 kB]
+Get:26 http://archive.ubuntu.com/ubuntu focal/universe amd64 libzvbi0 amd64 0.2.35-17 [237 kB]
+Get:27 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libavcodec58 amd64 7:4.2.7-0ubuntu0.1 [4,878 kB]
+Get:28 http://archive.ubuntu.com/ubuntu focal/main amd64 libraw1394-11 amd64 2.1.2-1 [30.7 kB]
+Get:29 http://archive.ubuntu.com/ubuntu focal/main amd64 libavc1394-0 amd64 0.5.4-5 [16.2 kB]
+Get:30 http://archive.ubuntu.com/ubuntu focal/universe amd64 libass9 amd64 1:0.14.0-2 [88.0 kB]
+Get:31 http://archive.ubuntu.com/ubuntu focal/universe amd64 libbluray2 amd64 1:1.2.0-1 [138 kB]
+Get:32 http://archive.ubuntu.com/ubuntu focal/universe amd64 libchromaprint1 amd64 1.4.3-3build1 [37.6 kB]
+Get:33 http://archive.ubuntu.com/ubuntu focal/universe amd64 libgme0 amd64 0.6.2-1build1 [123 kB]
+Get:34 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libmpg123-0 amd64 1.25.13-1ubuntu0.2 [124 kB]
+Get:35 http://archive.ubuntu.com/ubuntu focal/universe amd64 libopenmpt0 amd64 0.4.11-1build1 [599 kB]
+Get:36 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libssh-gcrypt-4 amd64 0.9.3-2ubuntu2.5 [202 kB]
+Get:37 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libavformat58 amd64 7:4.2.7-0ubuntu0.1 [985 kB]
+Get:38 http://archive.ubuntu.com/ubuntu focal/universe amd64 libbs2b0 amd64 3.1.0+dfsg-2.2build1 [10.2 kB]
+Get:39 http://archive.ubuntu.com/ubuntu focal/universe amd64 libflite1 amd64 2.1-release-3 [12.8 MB]
+Get:40 http://archive.ubuntu.com/ubuntu focal/universe amd64 libserd-0-0 amd64 0.30.2-1 [46.6 kB]
+Get:41 http://archive.ubuntu.com/ubuntu focal/universe amd64 libsord-0-0 amd64 0.16.4-1 [19.5 kB]
+Get:42 http://archive.ubuntu.com/ubuntu focal/universe amd64 libsratom-0-0 amd64 0.6.4-1 [16.9 kB]
+Get:43 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 liblilv-0-0 amd64 0.24.6-1ubuntu0.1 [40.6 kB]
+Get:44 http://archive.ubuntu.com/ubuntu focal/universe amd64 libmysofa1 amd64 1.0~dfsg0-1 [39.2 kB]
+Get:45 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libpostproc55 amd64 7:4.2.7-0ubuntu0.1 [55.0 kB]
+Get:46 http://archive.ubuntu.com/ubuntu focal/main amd64 libsamplerate0 amd64 0.1.9-2 [939 kB]
+Get:47 http://archive.ubuntu.com/ubuntu focal/universe amd64 librubberband2 amd64 1.8.2-1build1 [89.4 kB]
+Get:48 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libswscale5 amd64 7:4.2.7-0ubuntu0.1 [157 kB]
+Get:49 http://archive.ubuntu.com/ubuntu focal/universe amd64 libvidstab1.1 amd64 1.1.0-2 [35.0 kB]
+Get:50 http://archive.ubuntu.com/ubuntu focal/universe amd64 libnorm1 amd64 1.5.8+dfsg2-2build1 [290 kB]
+Get:51 http://archive.ubuntu.com/ubuntu focal/universe amd64 libpgm-5.2-0 amd64 5.2.122~dfsg-3ubuntu1 [158 kB]
+Get:52 http://archive.ubuntu.com/ubuntu focal/universe amd64 libzmq5 amd64 4.3.2-2ubuntu1 [242 kB]
+Get:53 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libavfilter7 amd64 7:4.2.7-0ubuntu0.1 [1,085 kB]
+Get:54 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libcaca0 amd64 0.99.beta19-2.1ubuntu1.20.04.2 [203 kB]
+Get:55 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libcdio18 amd64 2.0.0-2ubuntu0.2 [59.4 kB]
+Get:56 http://archive.ubuntu.com/ubuntu focal/main amd64 libcdio-cdda2 amd64 10.2+2.0.0-1 [17.6 kB]
+Get:57 http://archive.ubuntu.com/ubuntu focal/main amd64 libcdio-paranoia2 amd64 10.2+2.0.0-1 [16.2 kB]
+Get:58 http://archive.ubuntu.com/ubuntu focal/universe amd64 libdc1394-22 amd64 2.2.5-2.1 [79.6 kB]
+Get:59 http://archive.ubuntu.com/ubuntu focal/main amd64 libiec61883-0 amd64 1.2.0-3 [24.3 kB]
+Get:60 http://archive.ubuntu.com/ubuntu focal/main amd64 libjack-jackd2-0 amd64 1.9.12~dfsg-2ubuntu2 [267 kB]
+Get:61 http://archive.ubuntu.com/ubuntu focal/universe amd64 libopenal-data all 1:1.19.1-1 [162 kB]
+Get:62 http://archive.ubuntu.com/ubuntu focal/universe amd64 libsndio7.0 amd64 1.5.0-3 [24.5 kB]
+Get:63 http://archive.ubuntu.com/ubuntu focal/universe amd64 libopenal1 amd64 1:1.19.1-1 [492 kB]
+Get:64 http://archive.ubuntu.com/ubuntu focal/main amd64 libasyncns0 amd64 0.8-6 [12.1 kB]
+Get:65 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libflac8 amd64 1.3.3-1ubuntu0.2 [103 kB]
+Get:66 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libsndfile1 amd64 1.0.28-7ubuntu0.3 [170 kB]
+Get:67 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libpulse0 amd64 1:13.99.1-1ubuntu3.13 [262 kB]
+Get:68 http://archive.ubuntu.com/ubuntu focal/universe amd64 libsdl2-2.0-0 amd64 2.0.10+dfsg1-3 [407 kB]
+Get:69 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libavdevice58 amd64 7:4.2.7-0ubuntu0.1 [74.3 kB]
+Get:70 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 libavresample4 amd64 7:4.2.7-0ubuntu0.1 [54.2 kB]
+Get:71 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 ffmpeg amd64 7:4.2.7-0ubuntu0.1 [1,453 kB]
+Get:72 http://archive.ubuntu.com/ubuntu focal/universe amd64 libigdgmm11 amd64 20.1.1+ds1-1 [111 kB]
+Get:73 http://archive.ubuntu.com/ubuntu focal/universe amd64 intel-media-va-driver amd64 20.1.1+dfsg1-1 [1,764 kB]
+Get:74 http://archive.ubuntu.com/ubuntu focal/universe amd64 libaacs0 amd64 0.9.0-2 [50.1 kB]
+Get:75 http://archive.ubuntu.com/ubuntu focal/universe amd64 libbdplus0 amd64 0.1.2-3 [47.3 kB]
+Get:76 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 mesa-va-drivers amd64 21.2.6-0ubuntu0.1~20.04.2 [2,970 kB]
+Get:77 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 mesa-vdpau-drivers amd64 21.2.6-0ubuntu0.1~20.04.2 [3,089 kB]
+Get:78 http://archive.ubuntu.com/ubuntu focal/universe amd64 i965-va-driver amd64 2.4.0-0ubuntu1 [924 kB]
+Get:79 http://archive.ubuntu.com/ubuntu focal/universe amd64 va-driver-all amd64 2.7.0-2 [4,020 B]
+Get:80 http://archive.ubuntu.com/ubuntu focal/main amd64 vdpau-driver-all amd64 1.3-1ubuntu2 [4,596 B]
+Auto packing the repository in background for optimum performance.
+See "git help gc" for manual housekeeping.
+[master 0d87f3370] saving uncommitted changes in /etc prior to apt run
+ 306 files changed, 105 insertions(+), 24557 deletions(-)
+ delete mode 100644 awstats/awstats.aileaders.suresuccessacademy.com.conf
+ delete mode 100644 awstats/awstats.blog.comparedth.com.conf
+ delete mode 100644 awstats/awstats.comparedth.in.conf
+ delete mode 100644 awstats/awstats.holisticarehealthservices.com.conf
+ delete mode 100644 awstats/awstats.kalyaneast.in.conf
+ delete mode 100644 awstats/awstats.marketing.enlighteningcareers.com.conf
+ delete mode 100644 awstats/awstats.marketing.godrejvaranya.homes.conf
+ delete mode 100644 awstats/awstats.marketing.myscopecomputers.com.conf
+ delete mode 100644 awstats/awstats.onlineadmissionsconsultancy.in.conf
+ delete mode 100644 awstats/awstats.thefastinternet.online.conf
+ delete mode 100644 awstats/awstats.vestaorelan.com.conf
+ delete mode 120000 awstats/awstats.www.aileaders.suresuccessacademy.com.conf
+ delete mode 120000 awstats/awstats.www.blog.comparedth.com.conf
+ delete mode 120000 awstats/awstats.www.comparedth.in.conf
+ delete mode 120000 awstats/awstats.www.holisticarehealthservices.com.conf
+ delete mode 120000 awstats/awstats.www.kalyaneast.in.conf
+ delete mode 120000 awstats/awstats.www.marketing.enlighteningcareers.com.conf
+ delete mode 120000 awstats/awstats.www.marketing.godrejvaranya.homes.conf
+ delete mode 120000 awstats/awstats.www.marketing.myscopecomputers.com.conf
+ delete mode 120000 awstats/awstats.www.onlineadmissionsconsultancy.in.conf
+ delete mode 120000 awstats/awstats.www.thefastinternet.online.conf
+ delete mode 120000 awstats/awstats.www.vestaorelan.com.conf
+ rewrite logrotate.d/virtualmin.conf (94%)
+ delete mode 100644 nginx/sites-available/aileaders.suresuccessacademy.com.conf
+ rewrite nginx/sites-available/blog.comparedth.com.conf (97%)
+ rewrite nginx/sites-available/comparedth.in.conf (98%)
+ rewrite nginx/sites-available/godrejvaranya.homes.conf (76%)
+ rewrite nginx/sites-available/holisticarehealthservices.com.conf (92%)
+ delete mode 100644 nginx/sites-available/kalyaneast.in.conf
+ delete mode 100644 nginx/sites-available/marketing.bombaymotorworks.in.conf
+ delete mode 100644 nginx/sites-available/marketing.enlighteningcareers.com.conf
+ rewrite nginx/sites-available/marketing.godrejvaranya.homes.conf (85%)
+ delete mode 100644 nginx/sites-available/marketing.myscopecomputers.com.conf
+ delete mode 100644 nginx/sites-available/onlineadmissionsconsultancy.in.conf
+ rename nginx/sites-available/{puneetthakkar.com.conf => puneetthakkar.com.conf-bk} (100%)
+ delete mode 100644 nginx/sites-available/vestaorelan.com.conf
+ delete mode 120000 nginx/sites-enabled/aileaders.suresuccessacademy.com.conf
+ delete mode 120000 nginx/sites-enabled/blog.comparedth.com.conf
+ delete mode 120000 nginx/sites-enabled/comparedth.in.conf
+ delete mode 120000 nginx/sites-enabled/godrejvaranya.homes.conf
+ delete mode 120000 nginx/sites-enabled/holisticarehealthservices.com.conf
+ delete mode 120000 nginx/sites-enabled/kalyaneast.in.conf
+ delete mode 120000 nginx/sites-enabled/marketing.bombaymotorworks.in.conf
+ delete mode 120000 nginx/sites-enabled/marketing.enlighteningcareers.com.conf
+ delete mode 120000 nginx/sites-enabled/marketing.godrejvaranya.homes.conf
+ delete mode 120000 nginx/sites-enabled/marketing.myscopecomputers.com.conf
+ delete mode 120000 nginx/sites-enabled/onlineadmissionsconsultancy.in.conf
+ delete mode 120000 nginx/sites-enabled/puneetthakkar.com.conf
+ delete mode 120000 nginx/sites-enabled/thefastinternet.online.conf
+ delete mode 120000 nginx/sites-enabled/vestaorelan.com.conf
+ create mode 100644 systemd/system/claude-ops.service
+ create mode 120000 systemd/system/multi-user.target.wants/claude-ops.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-aileaders-suresuccessacademy-com.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-comparedth-in.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-holisticarehealthservices-com.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-kalyaneast-in.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-marketing-enlighteningcareers-com.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-marketing-godrejvaranya-homes.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-marketing-myscopecomputers-com.service
+ delete mode 120000 systemd/system/multi-user.target.wants/php-fcgi-onlineadmissionsconsultancy-in.service
+ delete mode 100644 webmin/aileaders.acl
+ delete mode 100644 webmin/at/aileaders.acl
+ delete mode 100644 webmin/at/blog.comparedth.com.acl
+ delete mode 100644 webmin/at/comparedthin.acl
+ delete mode 100644 webmin/at/godrejvaranya.acl
+ delete mode 100644 webmin/at/holisticarehealthservices.acl
+ delete mode 100644 webmin/at/kalyaneast.acl
+ delete mode 100644 webmin/at/marketing.acl
+ delete mode 100644 webmin/at/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/at/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/at/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/at/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/at/thefastinternet.acl
+ delete mode 100644 webmin/at/vestaorelan.acl
+ delete mode 100644 webmin/bind8/aileaders.acl
+ delete mode 100644 webmin/bind8/blog.comparedth.com.acl
+ delete mode 100644 webmin/bind8/comparedthin.acl
+ delete mode 100644 webmin/bind8/godrejvaranya.acl
+ delete mode 100644 webmin/bind8/holisticarehealthservices.acl
+ delete mode 100644 webmin/bind8/kalyaneast.acl
+ delete mode 100644 webmin/bind8/marketing.acl
+ delete mode 100644 webmin/bind8/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/bind8/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/bind8/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/bind8/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/bind8/thefastinternet.acl
+ delete mode 100644 webmin/bind8/vestaorelan.acl
+ rewrite webmin/bind8/zone-names (82%)
+ delete mode 100644 webmin/blog.comparedth.com.acl
+ delete mode 100644 webmin/comparedthin.acl
+ delete mode 100644 webmin/cron/aileaders.acl
+ delete mode 100644 webmin/cron/blog.comparedth.com.acl
+ delete mode 100644 webmin/cron/comparedthin.acl
+ delete mode 100644 webmin/cron/godrejvaranya.acl
+ delete mode 100644 webmin/cron/holisticarehealthservices.acl
+ delete mode 100644 webmin/cron/kalyaneast.acl
+ delete mode 100644 webmin/cron/marketing.acl
+ delete mode 100644 webmin/cron/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/cron/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/cron/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/cron/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/cron/thefastinternet.acl
+ delete mode 100644 webmin/cron/vestaorelan.acl
+ delete mode 100644 webmin/filemin/aileaders.acl
+ delete mode 100644 webmin/filemin/blog.comparedth.com.acl
+ delete mode 100644 webmin/filemin/comparedthin.acl
+ delete mode 100644 webmin/filemin/godrejvaranya.acl
+ delete mode 100644 webmin/filemin/holisticarehealthservices.acl
+ delete mode 100644 webmin/filemin/kalyaneast.acl
+ delete mode 100644 webmin/filemin/marketing.acl
+ delete mode 100644 webmin/filemin/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/filemin/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/filemin/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/filemin/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/filemin/thefastinternet.acl
+ delete mode 100644 webmin/filemin/vestaorelan.acl
+ delete mode 100644 webmin/godrejvaranya.acl
+ delete mode 100644 webmin/holisticarehealthservices.acl
+ delete mode 100644 webmin/htaccess-htpasswd/aileaders.acl
+ delete mode 100644 webmin/htaccess-htpasswd/blog.comparedth.com.acl
+ delete mode 100644 webmin/htaccess-htpasswd/comparedthin.acl
+ delete mode 100644 webmin/htaccess-htpasswd/godrejvaranya.acl
+ delete mode 100644 webmin/htaccess-htpasswd/holisticarehealthservices.acl
+ delete mode 100644 webmin/htaccess-htpasswd/kalyaneast.acl
+ delete mode 100644 webmin/htaccess-htpasswd/marketing.acl
+ delete mode 100644 webmin/htaccess-htpasswd/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/htaccess-htpasswd/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/htaccess-htpasswd/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/htaccess-htpasswd/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/htaccess-htpasswd/thefastinternet.acl
+ delete mode 100644 webmin/htaccess-htpasswd/vestaorelan.acl
+ delete mode 100644 webmin/kalyaneast.acl
+ delete mode 100644 webmin/mailboxes/aileaders.acl
+ delete mode 100644 webmin/mailboxes/blog.comparedth.com.acl
+ delete mode 100644 webmin/mailboxes/comparedthin.acl
+ delete mode 100644 webmin/mailboxes/godrejvaranya.acl
+ delete mode 100644 webmin/mailboxes/holisticarehealthservices.acl
+ delete mode 100644 webmin/mailboxes/kalyaneast.acl
+ delete mode 100644 webmin/mailboxes/marketing.acl
+ delete mode 100644 webmin/mailboxes/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/mailboxes/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/mailboxes/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/mailboxes/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/mailboxes/thefastinternet.acl
+ delete mode 100644 webmin/mailboxes/vestaorelan.acl
+ delete mode 100644 webmin/marketing.acl
+ delete mode 100644 webmin/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/mysql/aileaders.acl
+ delete mode 100644 webmin/mysql/comparedthin.acl
+ delete mode 100644 webmin/mysql/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/mysql/vestaorelan.acl
+ delete mode 100644 webmin/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/passwd/aileaders.acl
+ delete mode 100644 webmin/passwd/blog.comparedth.com.acl
+ delete mode 100644 webmin/passwd/comparedthin.acl
+ delete mode 100644 webmin/passwd/godrejvaranya.acl
+ delete mode 100644 webmin/passwd/holisticarehealthservices.acl
+ delete mode 100644 webmin/passwd/kalyaneast.acl
+ delete mode 100644 webmin/passwd/marketing.acl
+ delete mode 100644 webmin/passwd/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/passwd/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/passwd/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/passwd/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/passwd/thefastinternet.acl
+ delete mode 100644 webmin/passwd/vestaorelan.acl
+ delete mode 100644 webmin/phpini/aileaders.acl
+ delete mode 100644 webmin/phpini/blog.comparedth.com.acl
+ delete mode 100644 webmin/phpini/comparedthin.acl
+ delete mode 100644 webmin/phpini/godrejvaranya.acl
+ delete mode 100644 webmin/phpini/holisticarehealthservices.acl
+ delete mode 100644 webmin/phpini/kalyaneast.acl
+ delete mode 100644 webmin/phpini/marketing.acl
+ delete mode 100644 webmin/phpini/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/phpini/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/phpini/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/phpini/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/phpini/thefastinternet.acl
+ delete mode 100644 webmin/phpini/vestaorelan.acl
+ delete mode 100644 webmin/proc/aileaders.acl
+ delete mode 100644 webmin/proc/blog.comparedth.com.acl
+ delete mode 100644 webmin/proc/comparedthin.acl
+ delete mode 100644 webmin/proc/godrejvaranya.acl
+ delete mode 100644 webmin/proc/holisticarehealthservices.acl
+ delete mode 100644 webmin/proc/kalyaneast.acl
+ delete mode 100644 webmin/proc/marketing.acl
+ delete mode 100644 webmin/proc/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/proc/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/proc/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/proc/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/proc/thefastinternet.acl
+ delete mode 100644 webmin/proc/vestaorelan.acl
+ delete mode 100644 webmin/syslog/aileaders.acl
+ delete mode 100644 webmin/syslog/blog.comparedth.com.acl
+ delete mode 100644 webmin/syslog/comparedthin.acl
+ delete mode 100644 webmin/syslog/godrejvaranya.acl
+ delete mode 100644 webmin/syslog/holisticarehealthservices.acl
+ delete mode 100644 webmin/syslog/kalyaneast.acl
+ delete mode 100644 webmin/syslog/marketing.acl
+ delete mode 100644 webmin/syslog/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/syslog/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/syslog/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/syslog/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/syslog/thefastinternet.acl
+ delete mode 100644 webmin/syslog/vestaorelan.acl
+ delete mode 100644 webmin/telnet/aileaders.acl
+ delete mode 100644 webmin/telnet/blog.comparedth.com.acl
+ delete mode 100644 webmin/telnet/comparedthin.acl
+ delete mode 100644 webmin/telnet/godrejvaranya.acl
+ delete mode 100644 webmin/telnet/holisticarehealthservices.acl
+ delete mode 100644 webmin/telnet/kalyaneast.acl
+ delete mode 100644 webmin/telnet/marketing.acl
+ delete mode 100644 webmin/telnet/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/telnet/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/telnet/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/telnet/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/telnet/thefastinternet.acl
+ delete mode 100644 webmin/telnet/vestaorelan.acl
+ delete mode 100644 webmin/thefastinternet.acl
+ delete mode 100644 webmin/vestaorelan.acl
+ delete mode 100644 webmin/virtual-server/aileaders.acl
+ delete mode 100644 webmin/virtual-server/blog.comparedth.com.acl
+ delete mode 100644 webmin/virtual-server/comparedthin.acl
+ delete mode 100755 webmin/virtual-server/domains/16287783371281803
+ delete mode 100755 webmin/virtual-server/domains/16315609242364884
+ delete mode 100755 webmin/virtual-server/domains/16951177583558708
+ delete mode 100755 webmin/virtual-server/domains/17624308491831065
+ delete mode 100755 webmin/virtual-server/domains/17639594253513233
+ delete mode 100755 webmin/virtual-server/domains/17643048952852806
+ delete mode 100755 webmin/virtual-server/domains/1766579340255866
+ delete mode 100755 webmin/virtual-server/domains/17668109133831219
+ delete mode 100755 webmin/virtual-server/domains/17707230713693727
+ delete mode 100755 webmin/virtual-server/domains/1770877526107829
+ delete mode 100755 webmin/virtual-server/domains/1770905765237046
+ delete mode 100755 webmin/virtual-server/domains/17770069542000226
+ delete mode 100755 webmin/virtual-server/domains/17829893161138963
+ delete mode 100644 webmin/virtual-server/godrejvaranya.acl
+ delete mode 100644 webmin/virtual-server/holisticarehealthservices.acl
+ delete mode 100644 webmin/virtual-server/kalyaneast.acl
+ rewrite webmin/virtual-server/map.alias (100%)
+ rewrite webmin/virtual-server/map.parent (100%)
+ rewrite webmin/virtual-server/map.reseller (100%)
+ rewrite webmin/virtual-server/map.subdom (100%)
+ delete mode 100644 webmin/virtual-server/marketing.acl
+ delete mode 100644 webmin/virtual-server/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/virtual-server/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/virtual-server/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/virtual-server/nospam/16315609242364884
+ delete mode 100644 webmin/virtual-server/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/virtual-server/thefastinternet.acl
+ delete mode 100644 webmin/virtual-server/vestaorelan.acl
+ delete mode 100644 webmin/virtualmin-awstats/aileaders.acl
+ delete mode 100644 webmin/virtualmin-awstats/blog.comparedth.com.acl
+ delete mode 100644 webmin/virtualmin-awstats/comparedthin.acl
+ delete mode 100644 webmin/virtualmin-awstats/holisticarehealthservices.acl
+ delete mode 100644 webmin/virtualmin-awstats/kalyaneast.acl
+ delete mode 100644 webmin/virtualmin-awstats/marketing.enlighteningcareers.com.acl
+ delete mode 100644 webmin/virtualmin-awstats/marketing.godrejvaranya.homes.acl
+ delete mode 100644 webmin/virtualmin-awstats/marketing.myscopecomputers.com.acl
+ delete mode 100644 webmin/virtualmin-awstats/onlineadmissionsconsultancy.acl
+ delete mode 100644 webmin/virtualmin-awstats/thefastinternet.acl
+ delete mode 100644 webmin/virtualmin-awstats/vestaorelan.acl
+ delete mode 100644 webmin/webalizer/blog.comparedth.com.acl
+ delete mode 100644 webmin/webalizer/comparedthin.acl
+ delete mode 100644 webmin/webalizer/var_log_virtualmin_blog.comparedth.com_access_log.conf
+ delete mode 100644 webmin/webalizer/var_log_virtualmin_blog.comparedth.com_access_log.log
+ delete mode 100644 webmin/webalizer/var_log_virtualmin_comparedth.in_access_log.conf
+ delete mode 100644 webmin/webalizer/var_log_virtualmin_comparedth.in_access_log.log
+Fetched 49.3 MB in 5s (10.1 MB/s)
+Selecting previously unselected package libaom0:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 248327 files and directories currently installed.)
+Preparing to unpack .../00-libaom0_1.0.0.errata1-3+deb11u1ubuntu0.1_amd64.deb ...
+Unpacking libaom0:amd64 (1.0.0.errata1-3+deb11u1ubuntu0.1) ...
+Selecting previously unselected package libva2:amd64.
+Preparing to unpack .../01-libva2_2.7.0-2_amd64.deb ...
+Unpacking libva2:amd64 (2.7.0-2) ...
+Selecting previously unselected package libva-drm2:amd64.
+Preparing to unpack .../02-libva-drm2_2.7.0-2_amd64.deb ...
+Unpacking libva-drm2:amd64 (2.7.0-2) ...
+Selecting previously unselected package libva-x11-2:amd64.
+Preparing to unpack .../03-libva-x11-2_2.7.0-2_amd64.deb ...
+Unpacking libva-x11-2:amd64 (2.7.0-2) ...
+Selecting previously unselected package libvdpau1:amd64.
+Preparing to unpack .../04-libvdpau1_1.3-1ubuntu2_amd64.deb ...
+Unpacking libvdpau1:amd64 (1.3-1ubuntu2) ...
+Selecting previously unselected package ocl-icd-libopencl1:amd64.
+Preparing to unpack .../05-ocl-icd-libopencl1_2.2.11-1ubuntu1_amd64.deb ...
+Unpacking ocl-icd-libopencl1:amd64 (2.2.11-1ubuntu1) ...
+Selecting previously unselected package libavutil56:amd64.
+Preparing to unpack .../06-libavutil56_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libavutil56:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libcodec2-0.9:amd64.
+Preparing to unpack .../07-libcodec2-0.9_0.9.2-2_amd64.deb ...
+Unpacking libcodec2-0.9:amd64 (0.9.2-2) ...
+Selecting previously unselected package libgsm1:amd64.
+Preparing to unpack .../08-libgsm1_1.0.18-2_amd64.deb ...
+Unpacking libgsm1:amd64 (1.0.18-2) ...
+Selecting previously unselected package libmp3lame0:amd64.
+Preparing to unpack .../09-libmp3lame0_3.100-3_amd64.deb ...
+Unpacking libmp3lame0:amd64 (3.100-3) ...
+Selecting previously unselected package libopus0:amd64.
+Preparing to unpack .../10-libopus0_1.3.1-0ubuntu1_amd64.deb ...
+Unpacking libopus0:amd64 (1.3.1-0ubuntu1) ...
+Selecting previously unselected package libshine3:amd64.
+Preparing to unpack .../11-libshine3_3.1.1-2_amd64.deb ...
+Unpacking libshine3:amd64 (3.1.1-2) ...
+Selecting previously unselected package libsnappy1v5:amd64.
+Preparing to unpack .../12-libsnappy1v5_1.1.8-1build1_amd64.deb ...
+Unpacking libsnappy1v5:amd64 (1.1.8-1build1) ...
+Selecting previously unselected package libspeex1:amd64.
+Preparing to unpack .../13-libspeex1_1.2~rc1.2-1.1ubuntu1.20.04.1_amd64.deb ...
+Unpacking libspeex1:amd64 (1.2~rc1.2-1.1ubuntu1.20.04.1) ...
+Selecting previously unselected package libsoxr0:amd64.
+Preparing to unpack .../14-libsoxr0_0.1.3-2build1_amd64.deb ...
+Unpacking libsoxr0:amd64 (0.1.3-2build1) ...
+Selecting previously unselected package libswresample3:amd64.
+Preparing to unpack .../15-libswresample3_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libswresample3:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libtheora0:amd64.
+Preparing to unpack .../16-libtheora0_1.1.1+dfsg.1-15ubuntu2_amd64.deb ...
+Unpacking libtheora0:amd64 (1.1.1+dfsg.1-15ubuntu2) ...
+Selecting previously unselected package libtwolame0:amd64.
+Preparing to unpack .../17-libtwolame0_0.4.0-2_amd64.deb ...
+Unpacking libtwolame0:amd64 (0.4.0-2) ...
+Selecting previously unselected package libvorbisenc2:amd64.
+Preparing to unpack .../18-libvorbisenc2_1.3.6-2ubuntu1_amd64.deb ...
+Unpacking libvorbisenc2:amd64 (1.3.6-2ubuntu1) ...
+Selecting previously unselected package libvpx6:amd64.
+Preparing to unpack .../19-libvpx6_1.8.2-1ubuntu0.4_amd64.deb ...
+Unpacking libvpx6:amd64 (1.8.2-1ubuntu0.4) ...
+Selecting previously unselected package libwavpack1:amd64.
+Preparing to unpack .../20-libwavpack1_5.2.0-1ubuntu0.1_amd64.deb ...
+Unpacking libwavpack1:amd64 (5.2.0-1ubuntu0.1) ...
+Selecting previously unselected package libx264-155:amd64.
+Preparing to unpack .../21-libx264-155_2%3a0.155.2917+git0a84d98-2_amd64.deb ...
+Unpacking libx264-155:amd64 (2:0.155.2917+git0a84d98-2) ...
+Selecting previously unselected package libx265-179:amd64.
+Preparing to unpack .../22-libx265-179_3.2.1-1build1_amd64.deb ...
+Unpacking libx265-179:amd64 (3.2.1-1build1) ...
+Selecting previously unselected package libxvidcore4:amd64.
+Preparing to unpack .../23-libxvidcore4_2%3a1.3.7-1_amd64.deb ...
+Unpacking libxvidcore4:amd64 (2:1.3.7-1) ...
+Selecting previously unselected package libzvbi-common.
+Preparing to unpack .../24-libzvbi-common_0.2.35-17_all.deb ...
+Unpacking libzvbi-common (0.2.35-17) ...
+Selecting previously unselected package libzvbi0:amd64.
+Preparing to unpack .../25-libzvbi0_0.2.35-17_amd64.deb ...
+Unpacking libzvbi0:amd64 (0.2.35-17) ...
+Selecting previously unselected package libavcodec58:amd64.
+Preparing to unpack .../26-libavcodec58_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libavcodec58:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libraw1394-11:amd64.
+Preparing to unpack .../27-libraw1394-11_2.1.2-1_amd64.deb ...
+Unpacking libraw1394-11:amd64 (2.1.2-1) ...
+Selecting previously unselected package libavc1394-0:amd64.
+Preparing to unpack .../28-libavc1394-0_0.5.4-5_amd64.deb ...
+Unpacking libavc1394-0:amd64 (0.5.4-5) ...
+Selecting previously unselected package libass9:amd64.
+Preparing to unpack .../29-libass9_1%3a0.14.0-2_amd64.deb ...
+Unpacking libass9:amd64 (1:0.14.0-2) ...
+Selecting previously unselected package libbluray2:amd64.
+Preparing to unpack .../30-libbluray2_1%3a1.2.0-1_amd64.deb ...
+Unpacking libbluray2:amd64 (1:1.2.0-1) ...
+Selecting previously unselected package libchromaprint1:amd64.
+Preparing to unpack .../31-libchromaprint1_1.4.3-3build1_amd64.deb ...
+Unpacking libchromaprint1:amd64 (1.4.3-3build1) ...
+Selecting previously unselected package libgme0:amd64.
+Preparing to unpack .../32-libgme0_0.6.2-1build1_amd64.deb ...
+Unpacking libgme0:amd64 (0.6.2-1build1) ...
+Selecting previously unselected package libmpg123-0:amd64.
+Preparing to unpack .../33-libmpg123-0_1.25.13-1ubuntu0.2_amd64.deb ...
+Unpacking libmpg123-0:amd64 (1.25.13-1ubuntu0.2) ...
+Selecting previously unselected package libopenmpt0:amd64.
+Preparing to unpack .../34-libopenmpt0_0.4.11-1build1_amd64.deb ...
+Unpacking libopenmpt0:amd64 (0.4.11-1build1) ...
+Selecting previously unselected package libssh-gcrypt-4:amd64.
+Preparing to unpack .../35-libssh-gcrypt-4_0.9.3-2ubuntu2.5_amd64.deb ...
+Unpacking libssh-gcrypt-4:amd64 (0.9.3-2ubuntu2.5) ...
+Selecting previously unselected package libavformat58:amd64.
+Preparing to unpack .../36-libavformat58_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libavformat58:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libbs2b0:amd64.
+Preparing to unpack .../37-libbs2b0_3.1.0+dfsg-2.2build1_amd64.deb ...
+Unpacking libbs2b0:amd64 (3.1.0+dfsg-2.2build1) ...
+Selecting previously unselected package libflite1:amd64.
+Preparing to unpack .../38-libflite1_2.1-release-3_amd64.deb ...
+Unpacking libflite1:amd64 (2.1-release-3) ...
+Selecting previously unselected package libserd-0-0:amd64.
+Preparing to unpack .../39-libserd-0-0_0.30.2-1_amd64.deb ...
+Unpacking libserd-0-0:amd64 (0.30.2-1) ...
+Selecting previously unselected package libsord-0-0:amd64.
+Preparing to unpack .../40-libsord-0-0_0.16.4-1_amd64.deb ...
+Unpacking libsord-0-0:amd64 (0.16.4-1) ...
+Selecting previously unselected package libsratom-0-0:amd64.
+Preparing to unpack .../41-libsratom-0-0_0.6.4-1_amd64.deb ...
+Unpacking libsratom-0-0:amd64 (0.6.4-1) ...
+Selecting previously unselected package liblilv-0-0:amd64.
+Preparing to unpack .../42-liblilv-0-0_0.24.6-1ubuntu0.1_amd64.deb ...
+Unpacking liblilv-0-0:amd64 (0.24.6-1ubuntu0.1) ...
+Selecting previously unselected package libmysofa1:amd64.
+Preparing to unpack .../43-libmysofa1_1.0~dfsg0-1_amd64.deb ...
+Unpacking libmysofa1:amd64 (1.0~dfsg0-1) ...
+Selecting previously unselected package libpostproc55:amd64.
+Preparing to unpack .../44-libpostproc55_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libpostproc55:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libsamplerate0:amd64.
+Preparing to unpack .../45-libsamplerate0_0.1.9-2_amd64.deb ...
+Unpacking libsamplerate0:amd64 (0.1.9-2) ...
+Selecting previously unselected package librubberband2:amd64.
+Preparing to unpack .../46-librubberband2_1.8.2-1build1_amd64.deb ...
+Unpacking librubberband2:amd64 (1.8.2-1build1) ...
+Selecting previously unselected package libswscale5:amd64.
+Preparing to unpack .../47-libswscale5_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libswscale5:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libvidstab1.1:amd64.
+Preparing to unpack .../48-libvidstab1.1_1.1.0-2_amd64.deb ...
+Unpacking libvidstab1.1:amd64 (1.1.0-2) ...
+Selecting previously unselected package libnorm1:amd64.
+Preparing to unpack .../49-libnorm1_1.5.8+dfsg2-2build1_amd64.deb ...
+Unpacking libnorm1:amd64 (1.5.8+dfsg2-2build1) ...
+Selecting previously unselected package libpgm-5.2-0:amd64.
+Preparing to unpack .../50-libpgm-5.2-0_5.2.122~dfsg-3ubuntu1_amd64.deb ...
+Unpacking libpgm-5.2-0:amd64 (5.2.122~dfsg-3ubuntu1) ...
+Selecting previously unselected package libzmq5:amd64.
+Preparing to unpack .../51-libzmq5_4.3.2-2ubuntu1_amd64.deb ...
+Unpacking libzmq5:amd64 (4.3.2-2ubuntu1) ...
+Selecting previously unselected package libavfilter7:amd64.
+Preparing to unpack .../52-libavfilter7_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libavfilter7:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libcaca0:amd64.
+Preparing to unpack .../53-libcaca0_0.99.beta19-2.1ubuntu1.20.04.2_amd64.deb ...
+Unpacking libcaca0:amd64 (0.99.beta19-2.1ubuntu1.20.04.2) ...
+Selecting previously unselected package libcdio18:amd64.
+Preparing to unpack .../54-libcdio18_2.0.0-2ubuntu0.2_amd64.deb ...
+Unpacking libcdio18:amd64 (2.0.0-2ubuntu0.2) ...
+Selecting previously unselected package libcdio-cdda2:amd64.
+Preparing to unpack .../55-libcdio-cdda2_10.2+2.0.0-1_amd64.deb ...
+Unpacking libcdio-cdda2:amd64 (10.2+2.0.0-1) ...
+Selecting previously unselected package libcdio-paranoia2:amd64.
+Preparing to unpack .../56-libcdio-paranoia2_10.2+2.0.0-1_amd64.deb ...
+Unpacking libcdio-paranoia2:amd64 (10.2+2.0.0-1) ...
+Selecting previously unselected package libdc1394-22:amd64.
+Preparing to unpack .../57-libdc1394-22_2.2.5-2.1_amd64.deb ...
+Unpacking libdc1394-22:amd64 (2.2.5-2.1) ...
+Selecting previously unselected package libiec61883-0:amd64.
+Preparing to unpack .../58-libiec61883-0_1.2.0-3_amd64.deb ...
+Unpacking libiec61883-0:amd64 (1.2.0-3) ...
+Selecting previously unselected package libjack-jackd2-0:amd64.
+Preparing to unpack .../59-libjack-jackd2-0_1.9.12~dfsg-2ubuntu2_amd64.deb ...
+Unpacking libjack-jackd2-0:amd64 (1.9.12~dfsg-2ubuntu2) ...
+Selecting previously unselected package libopenal-data.
+Preparing to unpack .../60-libopenal-data_1%3a1.19.1-1_all.deb ...
+Unpacking libopenal-data (1:1.19.1-1) ...
+Selecting previously unselected package libsndio7.0:amd64.
+Preparing to unpack .../61-libsndio7.0_1.5.0-3_amd64.deb ...
+Unpacking libsndio7.0:amd64 (1.5.0-3) ...
+Selecting previously unselected package libopenal1:amd64.
+Preparing to unpack .../62-libopenal1_1%3a1.19.1-1_amd64.deb ...
+Unpacking libopenal1:amd64 (1:1.19.1-1) ...
+Selecting previously unselected package libasyncns0:amd64.
+Preparing to unpack .../63-libasyncns0_0.8-6_amd64.deb ...
+Unpacking libasyncns0:amd64 (0.8-6) ...
+Selecting previously unselected package libflac8:amd64.
+Preparing to unpack .../64-libflac8_1.3.3-1ubuntu0.2_amd64.deb ...
+Unpacking libflac8:amd64 (1.3.3-1ubuntu0.2) ...
+Selecting previously unselected package libsndfile1:amd64.
+Preparing to unpack .../65-libsndfile1_1.0.28-7ubuntu0.3_amd64.deb ...
+Unpacking libsndfile1:amd64 (1.0.28-7ubuntu0.3) ...
+Selecting previously unselected package libpulse0:amd64.
+Preparing to unpack .../66-libpulse0_1%3a13.99.1-1ubuntu3.13_amd64.deb ...
+Unpacking libpulse0:amd64 (1:13.99.1-1ubuntu3.13) ...
+Selecting previously unselected package libsdl2-2.0-0:amd64.
+Preparing to unpack .../67-libsdl2-2.0-0_2.0.10+dfsg1-3_amd64.deb ...
+Unpacking libsdl2-2.0-0:amd64 (2.0.10+dfsg1-3) ...
+Selecting previously unselected package libavdevice58:amd64.
+Preparing to unpack .../68-libavdevice58_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libavdevice58:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libavresample4:amd64.
+Preparing to unpack .../69-libavresample4_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking libavresample4:amd64 (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package ffmpeg.
+Preparing to unpack .../70-ffmpeg_7%3a4.2.7-0ubuntu0.1_amd64.deb ...
+Unpacking ffmpeg (7:4.2.7-0ubuntu0.1) ...
+Selecting previously unselected package libigdgmm11:amd64.
+Preparing to unpack .../71-libigdgmm11_20.1.1+ds1-1_amd64.deb ...
+Unpacking libigdgmm11:amd64 (20.1.1+ds1-1) ...
+Selecting previously unselected package intel-media-va-driver:amd64.
+Preparing to unpack .../72-intel-media-va-driver_20.1.1+dfsg1-1_amd64.deb ...
+Unpacking intel-media-va-driver:amd64 (20.1.1+dfsg1-1) ...
+Selecting previously unselected package libaacs0:amd64.
+Preparing to unpack .../73-libaacs0_0.9.0-2_amd64.deb ...
+Unpacking libaacs0:amd64 (0.9.0-2) ...
+Selecting previously unselected package libbdplus0:amd64.
+Preparing to unpack .../74-libbdplus0_0.1.2-3_amd64.deb ...
+Unpacking libbdplus0:amd64 (0.1.2-3) ...
+Selecting previously unselected package mesa-va-drivers:amd64.
+Preparing to unpack .../75-mesa-va-drivers_21.2.6-0ubuntu0.1~20.04.2_amd64.deb ...
+Unpacking mesa-va-drivers:amd64 (21.2.6-0ubuntu0.1~20.04.2) ...
+Selecting previously unselected package mesa-vdpau-drivers:amd64.
+Preparing to unpack .../76-mesa-vdpau-drivers_21.2.6-0ubuntu0.1~20.04.2_amd64.deb ...
+Unpacking mesa-vdpau-drivers:amd64 (21.2.6-0ubuntu0.1~20.04.2) ...
+Selecting previously unselected package i965-va-driver:amd64.
+Preparing to unpack .../77-i965-va-driver_2.4.0-0ubuntu1_amd64.deb ...
+Unpacking i965-va-driver:amd64 (2.4.0-0ubuntu1) ...
+Selecting previously unselected package va-driver-all:amd64.
+Preparing to unpack .../78-va-driver-all_2.7.0-2_amd64.deb ...
+Unpacking va-driver-all:amd64 (2.7.0-2) ...
+Selecting previously unselected package vdpau-driver-all:amd64.
+Preparing to unpack .../79-vdpau-driver-all_1.3-1ubuntu2_amd64.deb ...
+Unpacking vdpau-driver-all:amd64 (1.3-1ubuntu2) ...
+Setting up libgme0:amd64 (0.6.2-1build1) ...
+Setting up libssh-gcrypt-4:amd64 (0.9.3-2ubuntu2.5) ...
+Setting up libraw1394-11:amd64 (2.1.2-1) ...
+Setting up libmpg123-0:amd64 (1.25.13-1ubuntu0.2) ...
+Setting up libspeex1:amd64 (1.2~rc1.2-1.1ubuntu1.20.04.1) ...
+Setting up libshine3:amd64 (3.1.1-2) ...
+Setting up libcaca0:amd64 (0.99.beta19-2.1ubuntu1.20.04.2) ...
+Setting up libtwolame0:amd64 (0.4.0-2) ...
+Setting up libgsm1:amd64 (1.0.18-2) ...
+Setting up libx264-155:amd64 (2:0.155.2917+git0a84d98-2) ...
+Setting up libx265-179:amd64 (3.2.1-1build1) ...
+Setting up libsoxr0:amd64 (0.1.3-2build1) ...
+Setting up libaom0:amd64 (1.0.0.errata1-3+deb11u1ubuntu0.1) ...
+Setting up libnorm1:amd64 (1.5.8+dfsg2-2build1) ...
+Setting up libmysofa1:amd64 (1.0~dfsg0-1) ...
+Setting up libdc1394-22:amd64 (2.2.5-2.1) ...
+Setting up libcdio18:amd64 (2.0.0-2ubuntu0.2) ...
+Setting up libxvidcore4:amd64 (2:1.3.7-1) ...
+Setting up libsnappy1v5:amd64 (1.1.8-1build1) ...
+Setting up libflac8:amd64 (1.3.3-1ubuntu0.2) ...
+Setting up libass9:amd64 (1:0.14.0-2) ...
+Setting up libva2:amd64 (2.7.0-2) ...
+Setting up libigdgmm11:amd64 (20.1.1+ds1-1) ...
+Setting up libcodec2-0.9:amd64 (0.9.2-2) ...
+Setting up libopus0:amd64 (1.3.1-0ubuntu1) ...
+Setting up intel-media-va-driver:amd64 (20.1.1+dfsg1-1) ...
+Setting up libaacs0:amd64 (0.9.0-2) ...
+Setting up libsndio7.0:amd64 (1.5.0-3) ...
+Setting up libbdplus0:amd64 (0.1.2-3) ...
+Setting up libvidstab1.1:amd64 (1.1.0-2) ...
+Setting up libflite1:amd64 (2.1-release-3) ...
+Setting up libva-drm2:amd64 (2.7.0-2) ...
+Setting up ocl-icd-libopencl1:amd64 (2.2.11-1ubuntu1) ...
+Setting up libasyncns0:amd64 (0.8-6) ...
+Setting up libvpx6:amd64 (1.8.2-1ubuntu0.4) ...
+Setting up libvdpau1:amd64 (1.3-1ubuntu2) ...
+Setting up libwavpack1:amd64 (5.2.0-1ubuntu0.1) ...
+Setting up libbs2b0:amd64 (3.1.0+dfsg-2.2build1) ...
+Setting up libtheora0:amd64 (1.1.1+dfsg.1-15ubuntu2) ...
+Setting up libopenal-data (1:1.19.1-1) ...
+Setting up mesa-va-drivers:amd64 (21.2.6-0ubuntu0.1~20.04.2) ...
+Setting up libbluray2:amd64 (1:1.2.0-1) ...
+Setting up libsamplerate0:amd64 (0.1.9-2) ...
+Setting up libva-x11-2:amd64 (2.7.0-2) ...
+Setting up libopenmpt0:amd64 (0.4.11-1build1) ...
+Setting up libzvbi-common (0.2.35-17) ...
+Setting up libmp3lame0:amd64 (3.100-3) ...
+Setting up i965-va-driver:amd64 (2.4.0-0ubuntu1) ...
+Setting up libvorbisenc2:amd64 (1.3.6-2ubuntu1) ...
+Setting up libpgm-5.2-0:amd64 (5.2.122~dfsg-3ubuntu1) ...
+Setting up libiec61883-0:amd64 (1.2.0-3) ...
+Setting up libserd-0-0:amd64 (0.30.2-1) ...
+Setting up libavc1394-0:amd64 (0.5.4-5) ...
+Setting up mesa-vdpau-drivers:amd64 (21.2.6-0ubuntu0.1~20.04.2) ...
+Setting up libzvbi0:amd64 (0.2.35-17) ...
+Setting up libzmq5:amd64 (4.3.2-2ubuntu1) ...
+Setting up libcdio-cdda2:amd64 (10.2+2.0.0-1) ...
+Setting up libcdio-paranoia2:amd64 (10.2+2.0.0-1) ...
+Setting up libopenal1:amd64 (1:1.19.1-1) ...
+Setting up libavutil56:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up va-driver-all:amd64 (2.7.0-2) ...
+Setting up libpostproc55:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up librubberband2:amd64 (1.8.2-1build1) ...
+Setting up libjack-jackd2-0:amd64 (1.9.12~dfsg-2ubuntu2) ...
+Setting up vdpau-driver-all:amd64 (1.3-1ubuntu2) ...
+Setting up libsord-0-0:amd64 (0.16.4-1) ...
+Setting up libsratom-0-0:amd64 (0.6.4-1) ...
+Setting up libswscale5:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up libsndfile1:amd64 (1.0.28-7ubuntu0.3) ...
+Setting up liblilv-0-0:amd64 (0.24.6-1ubuntu0.1) ...
+Setting up libpulse0:amd64 (1:13.99.1-1ubuntu3.13) ...
+Setting up libswresample3:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up libavresample4:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up libavcodec58:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up libsdl2-2.0-0:amd64 (2.0.10+dfsg1-3) ...
+Setting up libchromaprint1:amd64 (1.4.3-3build1) ...
+Setting up libavformat58:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up libavfilter7:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up libavdevice58:amd64 (7:4.2.7-0ubuntu0.1) ...
+Setting up ffmpeg (7:4.2.7-0ubuntu0.1) ...
+Processing triggers for man-db (2.9.1-1) ...
+Processing triggers for libc-bin (2.31-0ubuntu9.2) ...
+Auto packing the repository in background for optimum performance.
+See "git help gc" for manual housekeeping.
+[master c6b6f2171] committing changes in /etc made by "apt-get install -y ffmpeg"
+ 4 files changed, 535 insertions(+)
+ create mode 100644 openal/alsoft.conf
+ create mode 100644 pulse/client.conf
+ create mode 100644 vdpau_wrapper.cfg
+ffmpeg version 4.2.7-0ubuntu0.1 Copyright (c) 2000-2022 the FFmpeg developers
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+Unable to find image 'postgres:18' locally
+18: Pulling from library/postgres
+062e450697fa: Pulling fs layer
+e3c65694cb28: Pulling fs layer
+06a631795f5e: Pulling fs layer
+a632e7483988: Pulling fs layer
+52af3c214b7b: Pulling fs layer
+7cf8b58a241c: Pulling fs layer
+0d2c3ff0a211: Pulling fs layer
+e054976ad965: Pulling fs layer
+c18f93e1ec1f: Pulling fs layer
+6a60906f2b21: Pulling fs layer
+dd2767cd407a: Pulling fs layer
+5024aded4649: Pulling fs layer
+c8530932e756: Pulling fs layer
+a632e7483988: Waiting
+52af3c214b7b: Waiting
+7cf8b58a241c: Waiting
+0d2c3ff0a211: Waiting
+e054976ad965: Waiting
+c18f93e1ec1f: Waiting
+6a60906f2b21: Waiting
+dd2767cd407a: Waiting
+5024aded4649: Waiting
+c8530932e756: Waiting
+e3c65694cb28: Verifying Checksum
+e3c65694cb28: Download complete
+06a631795f5e: Verifying Checksum
+06a631795f5e: Download complete
+062e450697fa: Verifying Checksum
+062e450697fa: Download complete
+a632e7483988: Verifying Checksum
+a632e7483988: Download complete
+52af3c214b7b: Verifying Checksum
+52af3c214b7b: Download complete
+7cf8b58a241c: Download complete
+0d2c3ff0a211: Verifying Checksum
+0d2c3ff0a211: Download complete
+e054976ad965: Verifying Checksum
+e054976ad965: Download complete
+6a60906f2b21: Verifying Checksum
+6a60906f2b21: Download complete
+dd2767cd407a: Verifying Checksum
+dd2767cd407a: Download complete
+5024aded4649: Verifying Checksum
+5024aded4649: Download complete
+c8530932e756: Verifying Checksum
+c8530932e756: Download complete
+c18f93e1ec1f: Verifying Checksum
+c18f93e1ec1f: Download complete
+062e450697fa: Pull complete
+e3c65694cb28: Pull complete
+06a631795f5e: Pull complete
+a632e7483988: Pull complete
+52af3c214b7b: Pull complete
+7cf8b58a241c: Pull complete
+0d2c3ff0a211: Pull complete
+e054976ad965: Pull complete
+c18f93e1ec1f: Pull complete
+6a60906f2b21: Pull complete
+dd2767cd407a: Pull complete
+5024aded4649: Pull complete
+c8530932e756: Pull complete
+Digest: sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+Status: Downloaded newer image for postgres:18
+f0308e040ee0dcd6e3662b8f5ef12a6a4704fcbfef4d6f97235129de8179d447
+docker: Error response from daemon: driver failed programming external connectivity on endpoint smartcrm-pg (4727ae274092ddeb06ecdbd3532e9f27a61053d6ab3a3e0ea023cb6962d9fdd7):  (dbus: connection closed by user).
