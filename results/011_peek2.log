@@ -1,0 +1,31 @@
+ok tenant_shriganpatimarriage (77 tables)
+ok tenant_sks_realtors (140 tables)
+ok tenant_smcbroking (136 tables)
+=== restore tenant_smc (exists=1 tables=0) ===
+DROP DATABASE
+CREATE DATABASE
+ok tenant_softssolutionservice (159 tables)
+ok tenant_sudarshan_digital_press (153 tables)
+ok tenant_svs (136 tables)
+ok tenant_swarup_group (157 tables)
+ok tenant_swigato (151 tables)
+ok tenant_tele (141 tables)
+ok tenant_test (150 tables)
+ok tenant_testfv (128 tables)
+ok tenant_thinknew (136 tables)
+ok tenant_threes (138 tables)
+ok tenant_trinetra (147 tables)
+ok tenant_tru (143 tables)
+ok tenant_twg (174 tables)
+=== restore tenant_udified (exists=1 tables=0) ===
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_viviana_realty (exists= tables=0) ===
+NOTICE:  database "tenant_viviana_realty" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+=== restore tenant_vserve (exists= tables=0) ===
+DROP DATABASE
+NOTICE:  database "tenant_vserve" does not exist, skipping
+CREATE DATABASE
+---exit=0---
