@@ -1,0 +1,18 @@
+--- any OTHER vhost claiming crm.smartcrmsolution.com? ---
+1495:# configuration file /etc/nginx/sites-enabled/crm.smartcrmsolution.com.conf:
+1497:    server_name crm.smartcrmsolution.com;
+1512:    ssl_certificate /etc/letsencrypt/live/crm.smartcrmsolution.com/fullchain.pem; # managed by Certbot
+1513:    ssl_certificate_key /etc/letsencrypt/live/crm.smartcrmsolution.com/privkey.pem; # managed by Certbot
+1519:    if ($host = crm.smartcrmsolution.com) {
+1525:    server_name crm.smartcrmsolution.com;
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+--- external-style tests ---
+http  HTTP 502
+https HTTP 200
+--- restore progress ---
+databases restored so far: 3
+NOTICE:  database "railway" does not exist, skipping
+restored railway
+restored tenant_vserve
+---exit=0---
