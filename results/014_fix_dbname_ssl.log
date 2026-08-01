@@ -1,0 +1,41 @@
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+DROP DATABASE
+NOTICE:  database "control" does not exist, skipping
+ALTER DATABASE
+urls updated: 2
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [smartcrm](ids: [ 6 ])
+[PM2] [smartcrm](6) ✓
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 1336223  │ 0s     │ 333… │ online    │ 54.5%    │ 35.3mb   │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 1336216  │ 0s     │ 333… │ online    │ 36.4%    │ 39.1mb   │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2367     │ 17D    │ 0    │ online    │ 0%       │ 28.6mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 1336231  │ 0s     │ 0    │ online    │ 0%       │ 6.8mb    │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 1213507  │ 38m    │ 37   │ online    │ 0%       │ 59.0mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 3532227  │ online   │ 1    │ 0%       │ 37.3mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+waiting for boot (control-plane migration on first start)...
+direct config.json HTTP 200 after ~5s
+via-nginx HTTP 200
+tenant vserve HTTP 200
+tenants in control DB: 128
+2026-08-02T01:51:40: [reminderSweep] worker started — 60s tick
+2026-08-02T01:51:40: [wbCampaign] campaign sender started — 30s tick
+2026-08-02T01:51:40: [ai-summary] SaaS-aware Gemini call-summary worker started
+2026-08-02T01:51:40: [gconv] Google Ads conversion export daily worker started (restored)
+2026-08-02T01:51:40: [tradeindia] marketplace inquiry pull worker started
+2026-08-02T01:51:40: [tradeindia] catch-all discovery sweep started (hourly)
+2026-08-02T01:51:40: [gconv] public export routes registered (restored)
+2026-08-02T01:51:42: [tenant-bootstrap] applied=0 defaults=8 errors=1
+---exit=0---
