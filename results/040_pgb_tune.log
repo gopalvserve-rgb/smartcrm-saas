@@ -1,0 +1,14 @@
+active
+=== monitor 3 min: latency + slow count + PG conns ===
+t20s vserve=0.000674s realPGconns=129
+t40s vserve=0.004947s realPGconns=148
+t60s vserve=0.000592s realPGconns=233
+t80s vserve=0.007275s realPGconns=165
+t100s vserve=0.000569s realPGconns=99
+t120s vserve=0.000602s realPGconns=246
+t140s vserve=0.006526s realPGconns=151
+t160s vserve=0.003210s realPGconns=86
+t180s vserve=0.002404s realPGconns=242
+new slow-API entries during window: 47
+final site HTTP 200
+---exit=0---
