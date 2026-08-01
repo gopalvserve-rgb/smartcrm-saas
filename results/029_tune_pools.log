@@ -1,0 +1,28 @@
+smartcrm-pg
+cf5b9caec2b0b787a0a2060794120b6dc0837f0026235a0ee0c7d908ac2224a8
+400
+[PM2] Applying action restartProcessId on app [smartcrm](ids: [ 6 ])
+[PM2] [smartcrm](6) ✓
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 1488705  │ 0s     │ 334… │ online    │ 0%       │ 31.4mb   │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 1488694  │ 0s     │ 334… │ online    │ 0%       │ 39.2mb   │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2367     │ 17D    │ 0    │ online    │ 0%       │ 38.4mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 1488712  │ 0s     │ 2    │ online    │ 0%       │ 4.0kb    │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 1213507  │ 90m    │ 37   │ online    │ 1.1%     │ 53.1mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 3532227  │ online   │ 1    │ 1.1%     │ 38.1mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+app HTTP 200
+connections used / max: 238|400
+--- .env pool lines ---
+PG_POOL_LRU_MAX=50
+PG_POOL_PER_TENANT_MAX=3
+PG_POOL_MAX=8
+---exit=0---
