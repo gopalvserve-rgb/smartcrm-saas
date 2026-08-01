@@ -1,0 +1,38 @@
+########## 0. CLAUDE-OPS AGENT ##########
+active
+########## 1+2. AUDIT & INSTALL ##########
+=== AUDIT ===
+OS: Ubuntu 20.04.2 LTS
+CPU: 2 cores | RAM: 5.9Gi | Disk free: 137G
+State  Recv-Q Send-Q                     Local Address:Port   Peer Address:Port Process                                                                         
+LISTEN 0      128                              0.0.0.0:80          0.0.0.0:*     users:(("nginx",pid=1071120,fd=52),("nginx",pid=1071115,fd=52),("nginx",pid=1001789,fd=52))
+LISTEN 0      128                       103.139.75.150:443         0.0.0.0:*     users:(("nginx",pid=1071120,fd=53),("nginx",pid=1071115,fd=53),("nginx",pid=1001789,fd=53))
+LISTEN 0      110                                    *:3306              *:*     users:(("mysqld",pid=1486792,fd=19))                                           
+v16.13.1
+5.1.0
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+=== AUDIT DONE ===
+=== INSTALL ===
+E: The repository 'https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 InRelease' is no longer signed.
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://repo.r1soft.com/apt stable Release: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 37B2BAF45650A294
+v20.19.4
+ffmpeg version 4.2.7-0ubuntu0.1 Copyright (c) 2000-2022 the FFmpeg developers
+Docker version 20.10.12, build 20.10.12-0ubuntu2~20.04.1
+349973d986641ba16407bcc1040ac50f0c7ffa952427437b605a9c6d39e7c720
+Error response from daemon: Container 349973d986641ba16407bcc1040ac50f0c7ffa952427437b605a9c6d39e7c720 is restarting, wait until the container is running
+=== INSTALL DONE ===
+########## 3. DEPLOY CODE ##########
+From https://github.com/gopalvserve-rgb/smartcrm-saas
+ * branch            main       -> FETCH_HEAD
+HEAD is now at b3208b6 TRADEINDIA_DIAG_v1: super-admin live diagnostic for a tenant's TradeIndia pull
+deployed commit: b3208b6 TRADEINDIA_DIAG_v1: super-admin live diagnostic for a tenant's TradeIndia pull
+env vars: 28
+  npm audit fix --force
+
+Run `npm audit` for details.
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+VHOST=nginx OK (/etc/nginx/sites-available/crm.smartcrmsolution.com.conf)
+=== DEPLOY DONE (app starts after DB restore) ===
+########## 4. TRIAL DB COPY (Railway stays live) ##########
+Error response from daemon: Container 349973d986641ba16407bcc1040ac50f0c7ffa952427437b605a9c6d39e7c720 is restarting, wait until the container is running
