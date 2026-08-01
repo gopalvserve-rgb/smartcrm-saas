@@ -1,0 +1,44 @@
+=== TRUE MEMORY ===
+MemTotal:        6145576 kB
+virt: xen
+--- cgroup memory limit (VPS cap shows here) ---
+9223372036854771712
+--- physical DIMMs (needs dmidecode) ---
+--- nproc ---
+2
+=== APPLY: cover 128-tenant sweep, no container mem cap ===
+detected 5GB usable
+using shared_buffers=384MB effective_cache=1536MB max_connections=400
+smartcrm-pg
+d0219dff6bca4dd08892ea879498fb32397a3c028e8253efe6d3b43d8e92969a
+400
+384MB
+[PM2] Applying action restartProcessId on app [smartcrm](ids: [ 6 ])
+[PM2] [smartcrm](6) ✓
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 18089    │ 0s     │ 475  │ online    │ 0%       │ 38.4mb   │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 18083    │ 0s     │ 469  │ online    │ 0%       │ 40.1mb   │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2123     │ 6m     │ 0    │ online    │ 1.5%     │ 53.1mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 18101    │ 0s     │ 2    │ online    │ 0%       │ 10.0mb   │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 2268     │ 6m     │ 0    │ online    │ 1.5%     │ 59.3mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 2015     │ online   │ 0    │ 1.5%     │ 50.0mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+conns: 140
+conns: 259
+conns: 261
+too-many errors since restart:
+PG reachable OK
+LIVE HTTP 200
+tenant HTTP 200
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       2.8Gi        66Mi       595Mi       3.0Gi       2.4Gi
+DONE
+---exit=0---
