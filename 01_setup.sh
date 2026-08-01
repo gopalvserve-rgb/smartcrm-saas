@@ -1,49 +1,61 @@
 #!/bin/bash
-# SmartCRM SaaS migration — stage 1: audit + install stack (safe / non-destructive)
+# SmartCRM SaaS migration — stage 1: audit + install stack
+# v2: tuned for Ubuntu 20.04 Virtualmin box with broken third-party repos.
+#  - apt update failures tolerated
+#  - Node 20 as standalone tarball in /opt/node20 (system Node 16 untouched)
+#  - PostgreSQL 18 as Docker container on 127.0.0.1:5433 (nothing else touched)
 set -e
 echo "=== AUDIT ==="
 . /etc/os-release && echo "OS: $PRETTY_NAME"
 echo "CPU: $(nproc) cores | RAM: $(free -h | awk '/Mem:/{print $2}') | Disk free: $(df -h / | awk 'NR==2{print $4}')"
-echo "--- listening ports ---"
-ss -tlnp | awk 'NR==1 || /:(80|443|3000|5432|8080|3306)\s/'
-echo "--- existing web server ---"
-systemctl is-active nginx 2>/dev/null && nginx -v 2>&1 || true
-systemctl is-active apache2 2>/dev/null && apache2 -v 2>&1 | head -1 || true
-systemctl is-active httpd 2>/dev/null || true
-echo "--- existing node/pg ---"
-node -v 2>/dev/null || echo "node: none"
-psql --version 2>/dev/null || echo "psql: none"
-pm2 -v 2>/dev/null || echo "pm2: none"
-ls /etc/nginx/sites-enabled/ 2>/dev/null || true
-ls /etc/apache2/sites-enabled/ 2>/dev/null || true
+ss -tlnp | awk 'NR==1 || /:(80|443|3000|5432|5433|8080|3306)\s/' || true
+node -v 2>/dev/null || true; pm2 -v 2>/dev/null || true
+docker --version 2>/dev/null || echo "docker: none"
 echo "=== AUDIT DONE ==="
-
-if [ "$1" != "install" ]; then exit 0; fi
+[ "$1" != "install" ] && exit 0
 
 echo "=== INSTALL ==="
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
+apt-get update -y 2>&1 | tail -2 || true   # broken 3rd-party repos are fine
 
-# Node 20 (NodeSource) if missing or < 20
-if ! command -v node >/dev/null || [ "$(node -v | cut -c2-3 | tr -d .)" -lt 20 ]; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt-get install -y nodejs
+# --- Node 20 standalone (does NOT touch system node16) ---
+if [ ! -x /opt/node20/bin/node ]; then
+  NV=v20.19.4
+  curl -fsSL "https://nodejs.org/dist/${NV}/node-${NV}-linux-x64.tar.xz" -o /tmp/node20.tar.xz
+  mkdir -p /opt/node20
+  tar -xJf /tmp/node20.tar.xz -C /opt/node20 --strip-components=1
+  rm -f /tmp/node20.tar.xz
 fi
+/opt/node20/bin/node -v
 
-# PostgreSQL 18 from PGDG (matches Railway's postgres:18)
-if ! command -v psql >/dev/null || ! psql --version | grep -qE ' 1[89]'; then
-  apt-get install -y curl ca-certificates gnupg lsb-release
-  install -d /usr/share/postgresql-common/pgdg
-  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
-  echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
-  apt-get update -y
-  apt-get install -y postgresql-18
+# --- ffmpeg ---
+command -v ffmpeg >/dev/null || apt-get install -y ffmpeg || true
+ffmpeg -version 2>/dev/null | head -1 || echo "WARN: ffmpeg missing (recording playback transcode only)"
+
+# --- Docker (repo already configured on this box) ---
+if ! command -v docker >/dev/null; then
+  apt-get install -y docker-ce docker-ce-cli containerd.io 2>&1 | tail -1 \
+    || curl -fsSL https://get.docker.com | sh 2>&1 | tail -1
 fi
-systemctl enable --now postgresql
+systemctl enable --now docker
+docker --version
 
-apt-get install -y ffmpeg git nginx certbot python3-certbot-nginx
-npm install -g pm2 >/dev/null
+# --- PostgreSQL 18 container on 127.0.0.1:5433 ---
+source /root/smartcrm-migration/secrets.env
+mkdir -p /opt/smartcrm-pgdata /root/smartcrm-migration/dumps
+if ! docker ps -a --format '{{.Names}}' | grep -q '^smartcrm-pg$'; then
+  docker run -d --name smartcrm-pg --restart unless-stopped \
+    -e POSTGRES_PASSWORD="$LOCAL_PG_PASS" -e POSTGRES_DB=railway \
+    -v /opt/smartcrm-pgdata:/var/lib/postgresql/data \
+    -v /root/smartcrm-migration/dumps:/dumps \
+    -p 127.0.0.1:5433:5432 postgres:18
+else
+  docker start smartcrm-pg >/dev/null 2>&1 || true
+fi
+sleep 6
+docker exec smartcrm-pg pg_isready -U postgres && echo "PG18 container ready on 127.0.0.1:5433"
 
-echo "=== VERSIONS ==="
-node -v; psql --version; ffmpeg -version | head -1; nginx -v 2>&1; pm2 -v
+# --- certbot (apache plugin; Virtualmin-friendly, used only at cutover) ---
+command -v certbot >/dev/null || apt-get install -y certbot python3-certbot-apache 2>&1 | tail -1 || true
+
 echo "=== INSTALL DONE ==="
