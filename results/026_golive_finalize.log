@@ -1,0 +1,20 @@
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 1465451  │ 0s     │ 0    │ online    │ 0%       │ 47.0mb   │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 1213507  │ 83m    │ 37   │ online    │ 0%       │ 58.0mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 3532227  │ online   │ 1    │ 0%       │ 37.8mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+direct HTTP 200
+nginx HTTP 404
+CUTOVER_APP_UP
+--- live checks over real HTTPS ---
+https config.json HTTP 200
+tenant vserve HTTP 200
+http->https redirect HTTP 301
+--- enable autodeploy (push to main = live in ~20s) ---
+autodeploy ON
+GOLIVE_FINALIZED
+---exit=0---
