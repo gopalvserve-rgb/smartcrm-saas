@@ -1,0 +1,30 @@
+smartcrm-pg
+c802518ec47695fd901bfcbfe7bb4fc4e296d31534a2a5041be7c2ae01e900f4
+300
+512MB
+[PM2] Applying action restartProcessId on app [smartcrm](ids: [ 6 ])
+[PM2] [smartcrm](6) ✓
+┌─────┬────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id  │ name               │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├─────┼────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 3   │ app                │ default     │ N/A     │ fork    │ 1480597  │ 0s     │ 334… │ online    │ 0%       │ 38.7mb   │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 1480607  │ 0s     │ 334… │ online    │ 0%       │ 35.2mb   │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2367     │ 17D    │ 0    │ online    │ 0%       │ 38.6mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 1480615  │ 0s     │ 1    │ online    │ 0%       │ 10.1mb   │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 1213507  │ 87m    │ 37   │ online    │ 0%       │ 55.8mb   │ root     │ enabled  │
+└─────┴────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+Module
+┌────┬──────────────────────────────┬───────────────┬──────────┬──────────┬──────┬──────────┬──────────┬──────────┐
+│ id │ module                       │ version       │ pid      │ status   │ ↺    │ cpu      │ mem      │ user     │
+├────┼──────────────────────────────┼───────────────┼──────────┼──────────┼──────┼──────────┼──────────┼──────────┤
+│ 0  │ pm2-logrotate                │ 2.7.0         │ 3532227  │ online   │ 1    │ 0%       │ 38.2mb   │ root     │
+└────┴──────────────────────────────┴───────────────┴──────────┴──────────┴──────┴──────────┴──────────┴──────────┘
+local app HTTP 200
+current connections: 87
+2026-08-02T02:40:49: [tenant-bootstrap] applied=0 defaults=8 errors=0
+2026-08-02T02:40:49: [tenant-bootstrap] applied=0 defaults=8 errors=0
+2026-08-02T02:40:49: [tenant-bootstrap] applied=0 defaults=8 errors=0
+2026-08-02T02:40:49: [tenant-bootstrap] applied=0 defaults=8 errors=0
+2026-08-02T02:40:49: [tenant-bootstrap] applied=0 defaults=8 errors=0
+---exit=0---
