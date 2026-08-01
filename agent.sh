@@ -1,7 +1,7 @@
 #!/bin/bash
 REPO_DIR=/opt/claude-ops/repo
 BRANCH=claude-ops
-APPDIR=/opt/smartcrm-saas
+APPDIR=/home/crm.smartcrmsolution.com/app
 
 sanitize() { # redact secrets so GitHub push-protection never blocks
   local f="$1"; [ -f "$f" ] || return 0

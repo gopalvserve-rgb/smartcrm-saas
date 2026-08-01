@@ -46,7 +46,7 @@ echo "########## 4. TRIAL DB COPY (Railway stays live) ##########"
 bash 03_db_sync.sh || exit 1
 
 echo "########## 5. START APP ##########"
-cd /opt/smartcrm-saas
+cd /home/crm.smartcrmsolution.com/app
 export PATH=/opt/node20/bin:$PATH
 pm2 delete smartcrm >/dev/null 2>&1 || true
 pm2 start pm2.config.js

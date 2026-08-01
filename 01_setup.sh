@@ -42,18 +42,24 @@ docker --version
 
 # --- PostgreSQL 18 container on 127.0.0.1:5433 ---
 source /root/smartcrm-migration/secrets.env
-mkdir -p /opt/smartcrm-pgdata /root/smartcrm-migration/dumps
-if ! docker ps -a --format '{{.Names}}' | grep -q '^smartcrm-pg$'; then
+mkdir -p /home/crm.smartcrmsolution.com/pgdata /root/smartcrm-migration/dumps
+if ! docker ps --format '{{.Names}}' | grep -q '^smartcrm-pg$'; then
+  docker rm -f smartcrm-pg >/dev/null 2>&1 || true
   docker run -d --name smartcrm-pg --restart unless-stopped \
     -e POSTGRES_PASSWORD="$LOCAL_PG_PASS" -e POSTGRES_DB=railway \
-    -v /opt/smartcrm-pgdata:/var/lib/postgresql/data \
+    -v /home/crm.smartcrmsolution.com/pgdata:/var/lib/postgresql/data \
     -v /root/smartcrm-migration/dumps:/dumps \
-    -p 127.0.0.1:5433:5432 postgres:18
-else
-  docker start smartcrm-pg >/dev/null 2>&1 || true
+    -p 127.0.0.1:5433:5432 postgres:18 \
+  || { echo "bridge-net failed — using host network fallback"; docker rm -f smartcrm-pg >/dev/null 2>&1;
+       docker run -d --name smartcrm-pg --restart unless-stopped --network host \
+         -e POSTGRES_PASSWORD="$LOCAL_PG_PASS" -e POSTGRES_DB=railway \
+         -v /home/crm.smartcrmsolution.com/pgdata:/var/lib/postgresql/data \
+         -v /root/smartcrm-migration/dumps:/dumps \
+         postgres:18 -c port=5433 -c listen_addresses=127.0.0.1 ; }
 fi
-sleep 6
-docker exec smartcrm-pg pg_isready -U postgres && echo "PG18 container ready on 127.0.0.1:5433"
+sleep 8
+docker exec smartcrm-pg pg_isready -U postgres >/dev/null 2>&1 && echo "PG18 ready (bridge 127.0.0.1:5433)" \
+ || { docker exec smartcrm-pg pg_isready -U postgres -p 5433 && echo "PG18 ready (host-net 127.0.0.1:5433)"; }
 
 # --- certbot (apache plugin; Virtualmin-friendly, used only at cutover) ---
 command -v certbot >/dev/null || apt-get install -y certbot python3-certbot-apache 2>&1 | tail -1 || true

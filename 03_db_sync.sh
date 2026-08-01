@@ -9,6 +9,10 @@ RHOST="metro.proxy.rlwy.net"; RPORT="26133"; RUSER="postgres"
 TS=$(date +%Y%m%d_%H%M%S)
 docker exec smartcrm-pg mkdir -p /dumps/$TS
 
+# container may run PG on 5432 (bridge mode) or 5433 (host-network mode)
+PEXTRA=""
+docker exec smartcrm-pg psql -U postgres -Atc 'select 1' >/dev/null 2>&1 || PEXTRA="-p 5433"
+
 echo "--- databases on Railway ---"
 DBS=$(docker exec -e PGPASSWORD="$PGPASSWORD_RAILWAY" smartcrm-pg \
   psql -h $RHOST -p $RPORT -U $RUSER -d railway -Atc \
@@ -24,17 +28,17 @@ docker exec smartcrm-pg du -sh /dumps/$TS
 
 for DB in $DBS; do
   echo "=== restore $DB ==="
-  docker exec smartcrm-pg psql -U postgres -d postgres -c \
+  docker exec smartcrm-pg psql $PEXTRA -U postgres -d postgres -c \
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB' AND pid<>pg_backend_pid();" >/dev/null || true
-  docker exec smartcrm-pg psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS \"$DB\";"
-  docker exec smartcrm-pg psql -U postgres -d postgres -c "CREATE DATABASE \"$DB\";"
-  docker exec smartcrm-pg pg_restore -U postgres -d "$DB" --no-owner --no-acl "/dumps/$TS/$DB.dump"
+  docker exec smartcrm-pg psql $PEXTRA -U postgres -d postgres -c "DROP DATABASE IF EXISTS \"$DB\";"
+  docker exec smartcrm-pg psql $PEXTRA -U postgres -d postgres -c "CREATE DATABASE \"$DB\";"
+  docker exec smartcrm-pg pg_restore $PEXTRA -U postgres -d "$DB" --no-owner --no-acl "/dumps/$TS/$DB.dump"
 done
 
 echo "=== verify tenants count (control DB) ==="
 R=$(docker exec -e PGPASSWORD="$PGPASSWORD_RAILWAY" smartcrm-pg \
   psql -h $RHOST -p $RPORT -U $RUSER -d railway -Atc "SELECT count(*) FROM tenants;" 2>/dev/null || echo "?")
-L=$(docker exec smartcrm-pg psql -U postgres -d railway -Atc "SELECT count(*) FROM tenants;" 2>/dev/null || echo "?")
+L=$(docker exec smartcrm-pg psql $PEXTRA -U postgres -d railway -Atc "SELECT count(*) FROM tenants;" 2>/dev/null || echo "?")
 echo "tenants: railway=$R local=$L"
 [ "$R" = "$L" ] && echo "MATCH_OK" || echo "MISMATCH_CHECK"
 echo "=== DB SYNC DONE (dumps in /root/smartcrm-migration/dumps/$TS) ==="

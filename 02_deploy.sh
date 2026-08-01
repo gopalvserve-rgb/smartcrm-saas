@@ -2,7 +2,7 @@
 # SmartCRM SaaS migration — stage 2: deploy code (Node 20, PM2, Apache vhost)
 set -e
 : "${GH_PAT:?set GH_PAT}"
-APPDIR=/opt/smartcrm-saas
+APPDIR=/home/crm.smartcrmsolution.com/app
 export PATH=/opt/node20/bin:$PATH
 
 if [ -d "$APPDIR/.git" ]; then
@@ -24,7 +24,7 @@ npm install 2>&1 | tail -3
 cat > "$APPDIR/pm2.config.js" <<'EOF'
 module.exports = { apps: [{
   name: "smartcrm",
-  cwd: "/opt/smartcrm-saas",
+  cwd: "/home/crm.smartcrmsolution.com/app",
   script: "server.js",
   interpreter: "/opt/node20/bin/node",
   env: { NODE_ENV: "production" },
