@@ -1,0 +1,15 @@
+=== node version ===
+v20.19.4
+=== does Node global fetch reach Meta? (curl said 400=reachable) ===
+node fetch OK http 400
+=== IPv4 vs IPv6 to graph.facebook.com ===
+curl -4 HTTP 400
+curl -6 HTTP 000
+v6 fail/none
+=== does server have IPv6? ===
+global IPv6 addrs: 0
+=== node resolve order test (undici happy-eyeballs) ===
+[{"address":"57.144.80.141","family":4},{"address":"2a03:2880:f31f:8d:face:b00c:0:2","family":6}]
+=== direct media-style fetch test through node (temp meta host) ===
+fbsbx node fetch http 400
+---exit=0---
