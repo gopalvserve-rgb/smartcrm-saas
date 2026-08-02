@@ -1,0 +1,24 @@
+=== media CDN hosts Meta hands back for media (IPv6-heavy) ===
+--- lookaside.fbsbx.com ---
+2a03:2880:f31f:80:face:b00c:0:3
+57.144.80.128
+--- scontent.xx.fbcdn.net ---
+2a03:2880:f31f:80:face:b00c:0:3
+57.144.80.128
+
+=== default node fetch to media CDN, 6 tries (catch intermittent v6 pick) ===
+0 OK 204
+1 OK 204
+2 OK 204
+3 OK 204
+4 OK 204
+5 OK 204
+
+=== SAME with ipv4-first (the proposed fix, tested only — no app change) ===
+0 OK 204
+1 OK 204
+2 OK 204
+3 OK 204
+4 OK 204
+5 OK 204
+---exit=0---
