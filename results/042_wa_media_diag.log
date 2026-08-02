@@ -1,0 +1,20 @@
+=== 1. outbound connectivity from server to Meta Graph ===
+graph.facebook.com HTTP 400 (connect 0.032846s)
+=== 2. connectivity to R2 (outbound media store) ===
+R2_ENDPOINT=https://7f6024570a7440985b7004590c9dcf9f.r2.cloudflarestorage.com
+R2 endpoint HTTP 400
+=== 3. recent WA media errors in app log ===
+[/api/wa/media] error: fetch failed
+=== 4. does a busy tenant have a WA token + recent media rows? (vserve) ===
+vserve 7d [with_media unknown total]: 10|0|1458
+vserve WA token: present(len=32) present(len=389)
+=== 5. message_type distribution last 7d (is 'unknown' spiking or normal?) ===
+text=793
+template=232
+interactive_buttons=130
+unsupported=120
+interactive_flow=93
+interactive=78
+image=10
+reaction=2
+---exit=0---
