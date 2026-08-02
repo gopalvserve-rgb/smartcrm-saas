@@ -1,0 +1,12 @@
+=== recent INBOUND image messages (real media_ids) ===
+19129|28148047011492576|2026-08-02 06:00:15.058748+00
+18998|1017257774432580|2026-08-01 07:24:21.457446+00
+18785|1624308739251764|2026-07-30 17:32:59.086029+00
+testing media_id=28148047011492576
+=== outbound media store (wa_chat_media) present + migrated? ===
+wa_chat_media: ERROR: relation wa_chat_media does not exist LINE 1: ...pretty(coalesce(sum(octet_length(bytes)),0)) FROM wa_chat_me... ^
+=== live 2-step Meta media resolve with the tenant's REAL token ===
+token len: 389
+STEP1 OK mime=image/jpeg size=64907 url_host=lookaside.fbsbx.com
+STEP2 bytes http=200 len=64907
+---exit=0---
