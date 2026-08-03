@@ -1,0 +1,37 @@
+=== load average (2 cores) ===
+7.38 7.04 6.78 8/839 1315004
+=== top CPU eaters ===
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root     1267178 42.0  6.1 12020048 378620 ?     Rsl  09:45   8:18 node /home/crm.smartcrmsolution.com/app/server.js
+root        1837 16.4  1.2 941600 74960 ?        Rsl  Aug02 308:09 PM2 v5.1.0: God Daemon (/root/.pm2)
+mysql       1640 11.2 17.3 4743140 1067200 ?     Sl   Aug02 209:55 /usr/sbin/mysqld --daemonize --pid-file=/var/run/mysqld/mysqld.pid
+postgres   55840  4.9  0.0  16892  4224 ?        Sl   Aug02  92:27 /usr/sbin/pgbouncer -d /etc/pgbouncer/pgbouncer.ini
+root       17318  3.4  0.1 1593088 7720 ?        Sl   Aug02  63:58 /usr/bin/docker-proxy -proto tcp -host-ip 127.0.0.1 -host-port 5433 -container-ip 172.17.0.2 -container-port 5432
+systemd+ 1314885  3.0  0.3 542904 20464 ?        Ss   10:04   0:00 postgres: postgres tenant_gharonda_buildcon 172.17.0.1(52710) idle
+systemd+ 1314053  2.4  2.1 543604 129276 ?       Ss   10:04   0:00 postgres: postgres tenant_vserve 172.17.0.1(51854) idle
+root        1190  2.1  1.4 456416 89916 ?        SNsl Aug02  40:14 /usr/sbin/r1soft/bin/cdp -s -c /usr/sbin/r1soft/conf/agent_config
+systemd+ 1314914  2.0  0.3 542024 21368 ?        Ss   10:04   0:00 postgres: postgres tenant_kota_gurukal 172.17.0.1(52744) idle
+systemd+ 1314297  1.7  1.3 549156 82560 ?        Ss   10:04   0:00 postgres: postgres tenant_vserve 172.17.0.1(52036) idle
+root          42  1.6  0.0      0     0 ?        S    Aug02  30:50 [kswapd0]
+=== pm2 apps with restart counts ===
+│ 3   │ app                │ default     │ N/A     │ fork    │ 1315050  │ 0s     │ 187… │ online    │ 0%       │ 772.0kb  │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ 1315039  │ 0s     │ 187… │ online    │ 4.5%     │ 35.2mb   │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2123     │ 31h    │ 0    │ online    │ 0%       │ 48.1mb   │ root     │ disabled │
+│ 5   │ server             │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ errored   │ 0%       │ 0b       │ root     │ disabled │
+│ 6   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 1267178  │ 19m    │ 5    │ online    │ 0%       │ 370.9mb  │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 380377   │ 5h     │ 3    │ online    │ 0%       │ 60.4mb   │ root     │ enabled  │
+=== what do 'app' and 'recharge-server' point at? ===
+│ status            │ stopped                                                            │
+│ script path       │ /home/comparedth.co/public_html/webpushserver-master/server/app.js │
+│ exec cwd          │ /root                                                              │
+│ status            │ online                                                                                  │
+│ script path       │ /home/comparedth/domains/recharge.comparedth.com/public_html/backend/recharge-server.js │
+│ exec cwd          │ /root                                                                                   │
+=== their recent error (why crash-looping) ===
+  code: 'MODULE_NOT_FOUND',
+  requireStack: []
+}
+  code: 'MODULE_NOT_FOUND',
+  requireStack: []
+}
+---exit=0---
