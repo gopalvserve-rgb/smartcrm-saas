@@ -1,0 +1,15 @@
+│ status            │ online                                       │
+│ restarts          │ 1                                            │
+│ uptime            │ 3m                                           │
+listener: DOWN
+2026-08-03T11:50:31:     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+2026-08-03T11:50:31:     at async Object.migrate (/home/crm.smartcrmsolution.com/app/control/db.js:136:7)
+2026-08-03T11:50:31:     at async boot (/home/crm.smartcrmsolution.com/app/server.js:2962:3)
+2026-08-03T11:50:31: [COPILOT_KB_BUILTIN_OFF_v1] init failed: pgbouncer cannot connect to server
+2026-08-03T11:50:56: [tenant-bootstrap] migration 2026_06_13_lead_scoring_tables_v2 failed (continuing): column "code" does not exist
+config 5.112392s http=502 / vserve 0.095011s http=502
+config 0.018787s http=502 / vserve 0.024493s http=502
+config 0.023472s http=502 / vserve 0.037646s http=502
+PG conns: 10
+load: 1.89 2.89 3.09
+---exit=0---
