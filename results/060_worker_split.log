@@ -1,0 +1,1 @@
+[placeholder — 060 restarts the claude-ops agent at its end, which kills the agent mid-command; this file prevents an infinite re-run loop. Real verification done via 061.]
