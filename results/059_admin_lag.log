@@ -1,0 +1,28 @@
+=== admin page + assets timing ===
+admin html 8.636240s http=200 size=929
+admin html 14.570070s http=200 size=929
+admin html 9.357107s http=200 size=929
+admin.js 18.070581s http=200 size=929
+=== what is the Node process doing? ===
+│ status            │ online                                       │
+│ uptime            │ 15m                                          │
+│ km:cpu:profiling:start │
+│ km:cpu:profiling:stop  │
+    PID %CPU %MEM     ELAPSED CMD
+  46624  133  1.4       15:47 node /home/crm.smartcrmsolution.com/app/server.js
+=== event-loop pressure: sample 5 quick pings to a trivial endpoint ===
+7.562619s 10.852835s 11.933626s 11.804024s 8.592370s 
+=== what ran in the last 2 min (worker correlation) ===
+2026-08-03T12:12:22: [/api/call_event_native] iscdig phone= +919205178838 event= incoming_ringing → lead_id= null · lookup= unmatched
+2026-08-03T12:12:24: [/api/call_event_native] navneet phone=  event= call_ended → lead_id= null · lookup= unmatched
+=== slow APIs last 2 min ===
+2026-08-03T12:12:28: [PERF_SLOW_API] VERY_SLOW fn=api_notifications_mine ms=4056 tenant=plus-91 user=?
+2026-08-03T12:12:28: [PERF_SLOW_API] VERY_SLOW fn=api_leads_list ms=3641 tenant=test user=?
+2026-08-03T12:12:29: [PERF_SLOW_API] VERY_SLOW fn=api_notifications_mine ms=4191 tenant=plus-91 user=?
+2026-08-03T12:12:29: [PERF_SLOW_API] SLOW fn=api_team_liveStatus ms=1547 tenant=vserve user=?
+2026-08-03T12:12:29: [PERF_SLOW_API] SLOW fn=api_wb_chat_threads ms=2652 tenant=vserve user=?
+2026-08-03T12:12:29: [PERF_SLOW_API] SLOW fn=api_wb_chat_threads ms=1154 tenant=shashir user=?
+2026-08-03T12:12:29: [PERF_SLOW_API] VERY_SLOW fn=api_wb_chat_threads ms=4930 tenant=plus-91 user=?
+2026-08-03T12:12:29: [PERF_SLOW_API] VERY_SLOW fn=api_wb_chat_threads ms=4879 tenant=plus-91 user=?
+load: 4.23 4.33 4.07
+---exit=0---
