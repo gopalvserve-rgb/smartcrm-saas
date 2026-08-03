@@ -1,0 +1,34 @@
+=== CPU ===
+CPU(s):                          16
+Thread(s) per core:              16
+Core(s) per socket:              1
+Socket(s):                       1
+Model name:                      Intel(R) Xeon(R) CPU E5-2673 v3 @ 2.40GHz
+CPU MHz:                         2394.454
+=== MEMORY ===
+MemTotal:       32872344 kB
+SwapTotal:       2162680 kB
+              total        used        free      shared  buff/cache   available
+Mem:           31Gi       3.9Gi       5.4Gi       677Mi        22Gi        26Gi
+Swap:         2.1Gi          0B       2.1Gi
+=== DISK ===
+/dev/xvda1      246G  114G  121G  49% /
+NAME   SIZE TYPE
+hcp1   250G disk
+xvda1  250G disk
+xvda2   64M disk
+zram0    2G disk
+=== VIRTUALIZATION ===
+xen
+=== CURRENT LOAD (2 cores) ===
+4.98 3.54 3.15 3/1332 40766
+ 11:47:34 up 38 min,  2 users,  load average: 4.98, 3.54, 3.15
+=== crash-loop apps state (cmd 053 outcome) ===
+│ 3   │ app                │ default     │ N/A     │ fork    │ N/A      │ 0      │ 187… │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 2   │ recharge-server    │ default     │ N/A     │ fork    │ N/A      │ 0      │ 187… │ stopped   │ 0%       │ 0b       │ root     │ disabled │
+│ 1   │ server             │ default     │ N/A     │ fork    │ 2711     │ 38m    │ 0    │ online    │ 0%       │ 55.0mb   │ root     │ disabled │
+│ 5   │ smartcrm           │ default     │ 0.1.0   │ fork    │ 2779     │ 38m    │ 0    │ online    │ 100%     │ 472.4mb  │ root     │ disabled │
+│ 4   │ www                │ default     │ 0.0.0   │ fork    │ 2768     │ 38m    │ 0    │ online    │ 0%       │ 60.5mb   │ root     │ enabled  │
+=== site health ===
+config 13.281593s http=200 / vserve 3.516457s http=200
+---exit=0---
