@@ -1,0 +1,28 @@
+=== total leads in vserve ===
+leads: 3579
+=== time a 5000-row fetch with typical joins (what export does) ===
+Planning:
+Planning Time: 8.675 ms
+Execution Time: 12.533 ms
+--- wall clock of the raw 5000 fetch ---
+raw 5000 id fetch: 956 ms
+=== recent api_leads_list slow/errors in app log ===
+2026-08-03T00:13:57: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:24:38: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:24:40: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:25:12: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:26:04: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:26:34: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:26:34: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:29:09: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:29:39: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:29:39: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:29:39: [tenantApi] api_leads_list timeout exceeded when trying to connect
+2026-08-03T09:34:42: [tenantApi] api_leads_list timeout exceeded when trying to connect
+=== nginx limits for the vhost ===
+    client_max_body_size 100M;
+        proxy_read_timeout 300s;
+=== app statement_timeout? ===
+945:// SET LOCAL statement_timeout only persists inside a tx, so we open
+956:    await client.query(`SET LOCAL statement_timeout = ${Math.max(100, Math.floor(Number(timeoutMs) || 5000))}`);
+---exit=0---
