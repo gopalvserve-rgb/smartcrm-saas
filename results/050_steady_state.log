@@ -1,0 +1,20 @@
+=== uptime since last restart ===
+│ restarts          │ 5                                            │
+│ uptime            │ 6m                                           │
+=== steady-state latency (no restart) ===
+config.json 41.235944s / vserve 40.564946s http=200
+config.json 23.705085s / vserve 29.746809s http=200
+config.json 15.707676s / vserve 35.886100s http=200
+config.json 22.992331s / vserve 50.889003s http=200
+config.json 22.378868s / vserve 22.957553s http=200
+=== real PG conns (3 samples) ===
+210
+219
+209
+=== bootstrap still running? (recent log) ===
+2026-08-03T09:57:18: [PERF_SLOW_API] SLOW fn=api_team_liveStatus ms=2967 tenant=plus-91 user=?
+2026-08-03T09:57:19: [heat] inbound lead=1514 phone=919609595153 score=0 label=none signal= text=আপনাকে একবার dakiachi
+2026-08-03T09:57:19: [PERF_SLOW_API] SLOW fn=api_wb_chat_threads ms=1665 tenant=ace-marketing user=?
+=== pool timeouts last 2 min ===
+new timeouts in 60s: 0
+---exit=0---
