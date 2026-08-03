@@ -1,0 +1,7 @@
+vserve 40.679106s http=200
+PG conns: 168
+│ restarts          │ 5                                            │
+│ uptime            │ 14m                                          │
+2026-08-03T09:59:27: [PERF_SLOW_API] SLOW fn=api_admin_brand ms=1915 tenant=vserve user=?
+2026-08-03T09:59:27: [PERF_SLOW_API] SLOW fn=api_team_liveStatus ms=1652 tenant=plus-91 user=?
+---exit=0---
