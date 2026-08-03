@@ -1,0 +1,17 @@
+=== warmup: repeat vserve load 4x (should drop after 1st) ===
+vserve load HTTP 200 in 9.736401s
+vserve load HTTP 200 in 27.726327s
+vserve load HTTP 504 in 60.112714s
+vserve load HTTP 200 in 39.344582s
+=== pool timeouts in last 3 min ===
+watching 90s...
+new pool-timeout errors in 90s: 0
+=== real PG conns settling (3 samples) ===
+247
+303
+321
+=== site + mem ===
+site HTTP 200
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       3.8Gi       175Mi       562Mi       1.9Gi       1.5Gi
+---exit=0---
