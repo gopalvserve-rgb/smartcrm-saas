@@ -1,0 +1,23 @@
+=== recreate PG container tuned for 32GB/16 cores ===
+smartcrm-pg
+425e6979fc0248e43714cd7dd4bc0e0003f6abe440c7e7ad44fc9e4ff64413cf
+4GB
+16GB
+400
+=== restore generous app pools (plenty of RAM now) ===
+PG_POOL_LRU_MAX=130
+PG_POOL_PER_TENANT_MAX=4
+PG_POOL_MAX=10
+PG_POOL_CONN_TIMEOUT_MS=15000
+restarted; warming 45s...
+=== verification ===
+config 0.019987s http=502
+vserve 0.018674s http=502
+vserve 0.017966s http=502
+vserve 0.032678s http=502
+PG conns: 9
+load: 2.93 3.72 3.35
+              total        used        free      shared  buff/cache   available
+Mem:           31Gi       2.7Gi       344Mi       420Mi        28Gi        27Gi
+RETUNE_DONE
+---exit=0---
