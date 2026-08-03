@@ -1,0 +1,20 @@
+=== app pool config ===
+PG_POOL_LRU_MAX=30
+PG_POOL_PER_TENANT_MAX=5
+PG_POOL_MAX=10
+PG_POOL_CONN_TIMEOUT_MS=15000
+waiting 40s for warmup + idle release...
+=== real PG conns (should settle LOW & stable, not climb) ===
+97
+128
+177
+172
+=== vserve latency (target ~2s like before) ===
+vserve HTTP 200 in 21.516199s
+vserve HTTP 200 in 38.301799s
+vserve HTTP 200 in 36.724589s
+=== pool timeouts last 60s ===
+new timeouts: 0
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       3.4Gi       411Mi       562Mi       2.1Gi       1.9Gi
+---exit=0---
