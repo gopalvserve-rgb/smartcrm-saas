@@ -28,7 +28,14 @@ const tenantDb = require('./db/pg');
 const tenantApi = require('./routes/saas/tenantApi');
 const r2 = require('./utils/r2');  // R2_RECORDINGS_v2 — zero-egress recording storage
 // SAAS_AUTO_INVOICE_v1 — start the auto-invoice sweep (gated on AUTO_INVOICE_DAYS_BEFORE>=1)
-try { require('./utils/saasInvoiceAutoGen').startSweep(); } catch (e) { console.warn('[saasInvoiceAutoGen] start failed:', e.message); }
+// WORKER_SPLIT_v1 (2026-08-03) — multi-core: web processes run with WORKERS=off so
+// background senders/sweeps (WhatsApp campaigns, reminders, TradeIndia, retention…)
+// run EXACTLY ONCE in the dedicated smartcrm-worker process. Guard-prefix only;
+// no job logic changed. Default 'on' keeps single-process behaviour identical.
+const WORKERS_ON = String(process.env.WORKERS || 'on').toLowerCase() !== 'off';
+if (!WORKERS_ON) console.log('[worker-split] background workers DISABLED in this process (WORKERS=off)');
+
+try { WORKERS_ON && require('./utils/saasInvoiceAutoGen').startSweep(); } catch (e) { console.warn('[saasInvoiceAutoGen] start failed:', e.message); }
 try { require('./utils/showcaseFollowupSeed').startSweep(); } catch (e) { console.warn('[showcaseFollowupSeed] start failed:', e.message); }
 try { require('./utils/invoicingModuleBackfill').startSweep(); } catch (e) { console.warn('[invoicingModuleBackfill] start failed:', e.message); }
 
@@ -50,7 +57,7 @@ try { require('./utils/invoicingModuleBackfill').startSweep(); } catch (e) { con
 /* COPILOT_KB_VIDEOS_SEED_v1 (2026-07-05) — seed the 12 Smart CRM video
  * tutorials into the Copilot KB so users can ask "how do I connect
  * WhatsApp" / "how do I import leads" / etc and get the right video link. */
-setTimeout(() => {
+WORKERS_ON && setTimeout(() => {
   try { require('./utils/copilotKbSeedVideos').seed().catch(() => {}); }
   catch (e) { console.warn('[copilotKbSeedVideos] not loaded:', e.message); }
 }, 8000);
@@ -113,28 +120,28 @@ require('./routes/packs/whatsapp'); // WHATSAPP_PACK_v1 (2026-07-18)
 try {
   const social = require('./routes/social');
   if (social && typeof social._runScheduledPosts === 'function') {
-    setInterval(() => social._runScheduledPosts().catch(() => {}), 60_000);
+    WORKERS_ON && setInterval(() => social._runScheduledPosts().catch(() => {}), 60_000);
   }
   // Phase S4 — Pull ad insights every hour. Updates today's + yesterday's
   // snapshot rows and regenerates alerts. Cheap on the API quota since
   // we only fetch 2 days at a time.
   if (social && typeof social._runAdDailySnapshot === 'function') {
-    setInterval(() => social._runAdDailySnapshot().catch(() => {}), 60 * 60 * 1000);
+    WORKERS_ON && setInterval(() => social._runAdDailySnapshot().catch(() => {}), 60 * 60 * 1000);
     // First snapshot after 90 seconds (let the server settle)
-    setTimeout(() => social._runAdDailySnapshot().catch(() => {}), 90_000);
+    WORKERS_ON && setTimeout(() => social._runAdDailySnapshot().catch(() => {}), 90_000);
   }
   // TKT_AUTOCLOSE_v1 — support tickets: remind tenant at 24h, auto-close at 48h.
   try {
     if (tickets && typeof tickets.sweepStaleTickets === 'function') {
-      setInterval(() => tickets.sweepStaleTickets().catch(() => {}), 60 * 60 * 1000);
-      setTimeout(() => tickets.sweepStaleTickets().catch(() => {}), 120_000);
+      WORKERS_ON && setInterval(() => tickets.sweepStaleTickets().catch(() => {}), 60 * 60 * 1000);
+      WORKERS_ON && setTimeout(() => tickets.sweepStaleTickets().catch(() => {}), 120_000);
     }
   } catch (_) {}
   // ERRLOG_RETENTION_v1 — keep only the last 7 days of super-admin error logs.
   try {
     if (errorLogs && typeof errorLogs.purgeOldErrorLogs === 'function') {
-      setInterval(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 24 * 60 * 60 * 1000);
-      setTimeout(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 150_000);
+      WORKERS_ON && setInterval(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 24 * 60 * 60 * 1000);
+      WORKERS_ON && setTimeout(() => errorLogs.purgeOldErrorLogs().catch(() => {}), 150_000);
     }
   } catch (_) {}
 } catch (_) {}
@@ -343,8 +350,8 @@ if (String(process.env.RECORDINGS_RETENTION_CRON || 'on').toLowerCase() !== 'off
   const _runRecRetention = () => require('./routes/saas/recordingsRetention').runDailyForAllTenants()
     .then(s => { if (s && s.totalDeleted) console.log('[rec-retention] daily purge:', JSON.stringify(s).slice(0, 400)); })
     .catch(e => console.warn('[rec-retention] daily run failed:', e.message));
-  setInterval(_runRecRetention, 24 * 60 * 60 * 1000);
-  setTimeout(_runRecRetention, 5 * 60 * 1000);
+  WORKERS_ON && setInterval(_runRecRetention, 24 * 60 * 60 * 1000);
+  WORKERS_ON && setTimeout(_runRecRetention, 5 * 60 * 1000);
   console.log('[rec-retention] daily retention cron active (set RECORDINGS_RETENTION_CRON=off to disable)');
 }
 
@@ -3013,7 +3020,7 @@ app.post('/hook/sheet/:token', async (req, res) => {
 });
 
 // Background: run sheet syncs and native pulls every 5 minutes
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   try { integrations.runDueSheetSyncs(); } catch(e) { console.error('[bg] sheet sync error:', e.message); }
   try { integrations.runDueNativePulls(); } catch(e) { console.error('[bg] native pull error:', e.message); }
 }, 5 * 60 * 1000);
@@ -3045,11 +3052,11 @@ async function _runReminderForAllTenants() {
     } catch (e) { console.warn(`[reminders] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runReminderForAllTenants().catch(e => console.error('[reminders] cycle failed:', e.message));
 }, Number(process.env.REMINDER_INTERVAL_MS || 60_000));
 // Initial run after boot settles
-setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
+WORKERS_ON && setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
 console.log('[reminders] SaaS-aware follow-up scheduler started');
 // ── Background: per-tenant AI re-engagement worker ───────────────────────
 // Walks every active tenant and sends scheduled soft-follow-up pings the
@@ -3077,10 +3084,10 @@ async function _runReengageForAllTenants() {
     } catch (e) { console.warn(`[reengage] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runReengageForAllTenants().catch(e => console.error('[reengage] cycle failed:', e.message));
 }, Number(process.env.REENGAGE_INTERVAL_MS || 60_000));
-setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
+WORKERS_ON && setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
 // ── Background: per-tenant Nurture sequence worker ──────────────────────
@@ -3110,10 +3117,10 @@ async function _runNurtureForAllTenants() {
     } catch (e) { console.warn(`[nurture] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runNurtureForAllTenants().catch(e => console.error('[nurture] cycle failed:', e.message));
 }, Number(process.env.NURTURE_INTERVAL_MS || 5 * 60_000));
-setTimeout(() => _runNurtureForAllTenants().catch(() => {}), 45_000);
+WORKERS_ON && setTimeout(() => _runNurtureForAllTenants().catch(() => {}), 45_000);
 console.log('[nurture] sequence worker started');
 
 // ── Background: per-tenant Education fee-reminder worker ────────────────
@@ -3144,10 +3151,10 @@ async function _runEduRemindersForAllTenants() {
     } catch (e) { console.warn(`[eduReminder] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runEduRemindersForAllTenants().catch(e => console.error('[eduReminder] cycle failed:', e.message));
 }, Number(process.env.EDU_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
-setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
+WORKERS_ON && setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
 console.log('[eduReminder] worker started — hourly tick');
 
 // ── Background: per-tenant Follow-up Reminder sweep ─────────────────────
@@ -3180,10 +3187,10 @@ async function _runReminderSweepForAllTenants() {
     } catch (e) { console.warn(`[reminderSweep] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runReminderSweepForAllTenants().catch(e => console.error('[reminderSweep] cycle failed:', e.message));
 }, Number(process.env.REMINDER_SWEEP_INTERVAL_MS || 60_000));   // 60s
-setTimeout(() => _runReminderSweepForAllTenants().catch(() => {}), 75_000);
+WORKERS_ON && setTimeout(() => _runReminderSweepForAllTenants().catch(() => {}), 75_000);
 console.log('[reminderSweep] worker started — 60s tick');
 
 // ── Background: per-tenant WhatsApp Campaign sender ─────────────────────
@@ -3219,10 +3226,10 @@ async function _runCampaignsForAllTenants() {
     } catch (e) { console.warn(`[wbCampaign] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runCampaignsForAllTenants().catch(e => console.error('[wbCampaign] cycle failed:', e.message));
 }, Number(process.env.WB_CAMPAIGN_TICK_MS || 30_000));
-setTimeout(() => _runCampaignsForAllTenants().catch(() => {}), 60_000);
+WORKERS_ON && setTimeout(() => _runCampaignsForAllTenants().catch(() => {}), 60_000);
 console.log('[wbCampaign] campaign sender started — 30s tick');
 
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
@@ -3255,18 +3262,18 @@ async function _runAiCallSummaryForAllTenants() {
     } catch (e) { console.warn(`[ai-summary] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runAiCallSummaryForAllTenants().catch(e => console.error('[ai-summary] cycle failed:', e.message));
 }, Number(process.env.AI_CALL_SUMMARY_INTERVAL_MS || 60_000));
 // Initial pass 45s after boot to let the AI key + DB pools warm up.
-setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
+WORKERS_ON && setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
 console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
 
 
   
 // WA_CATALOGUE_v1 (2026-07-06) — auto-enable on vserve at boot.
 // Runs after a short delay so tenant pools are ready.
-setTimeout(() => {
+WORKERS_ON && setTimeout(() => {
   try { require('./utils/waCatalogueVserveAutoEnable').autoEnableOnVserve(); }
   catch (e) { console.warn('[WA_CATALOGUE_v1] auto-enable hook skipped:', e && e.message); }
 }, 8000);
@@ -3333,10 +3340,10 @@ async function _runGoogleConvForAllTenants() {
     } catch (e) { console.warn(`[gconv] ${row.slug} tick failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runGoogleConvForAllTenants().catch(e => console.error('[gconv] cycle failed:', e.message));
 }, 3 * 60_000);
-setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
+WORKERS_ON && setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started (restored)');
 
 /* ── TRADEINDIA_API_v1 — marketplace inquiry pull ──────────────────────────
@@ -3379,10 +3386,10 @@ async function _runTradeIndiaForAllTenants() {
     } catch (e) { console.warn(`[tradeindia] ${slug} sync failed:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runTradeIndiaForAllTenants().catch(e => console.error('[tradeindia] cycle failed:', e.message));
 }, 5 * 60_000);
-setTimeout(() => _runTradeIndiaForAllTenants().catch(() => {}), 90_000);
+WORKERS_ON && setTimeout(() => _runTradeIndiaForAllTenants().catch(() => {}), 90_000);
 console.log('[tradeindia] marketplace inquiry pull worker started');
 
 /* TRADEINDIA_CATCHALL_v1 (2026-07-29) — the registry-based sweep above only
@@ -3412,10 +3419,10 @@ async function _runTradeIndiaCatchAll() {
     } catch (e) { console.warn(`[tradeindia-catchall] ${row.slug}:`, e.message); }
   }
 }
-setInterval(() => {
+WORKERS_ON && setInterval(() => {
   _runTradeIndiaCatchAll().catch(e => console.error('[tradeindia-catchall] cycle failed:', e.message));
 }, 60 * 60_000);   // hourly — the per-tenant slot logic still limits actual pulls to 8/1/5 IST
-setTimeout(() => _runTradeIndiaCatchAll().catch(() => {}), 120_000);
+WORKERS_ON && setTimeout(() => _runTradeIndiaCatchAll().catch(() => {}), 120_000);
 console.log('[tradeindia] catch-all discovery sweep started (hourly)');
 
 /* Public per-tenant CSV endpoints — the URL shown in the tenant's export settings.
