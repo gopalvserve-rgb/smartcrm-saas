@@ -1,0 +1,17 @@
+t15s vserve=4.513954s config=200
+t30s vserve=4.579957s config=200
+t45s vserve=0.290667s config=200
+t60s vserve=2.905224s config=200
+t75s vserve=7.729678s config=200
+t90s vserve=6.951204s config=200
+t105s vserve=6.451621s config=200
+t120s vserve=11.158603s config=200
+t135s vserve=12.319826s config=200
+t150s vserve=16.326206s config=200
+failures: 0/10
+load: 5.72 4.62 3.91
+PG conns: 245
+pool-timeout total (baseline 128)
+              total        used        free      shared  buff/cache   available
+Mem:           31Gi       3.9Gi        23Gi       1.3Gi       4.0Gi        25Gi
+---exit=0---
