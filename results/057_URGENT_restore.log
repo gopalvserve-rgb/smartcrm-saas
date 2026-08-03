@@ -1,0 +1,15 @@
+=== backend port reachable? ===
+Up 5 minutes 127.0.0.1:5433->5432/tcp
+5433 OPEN
+=== restart pgbouncer cleanly ===
+active
+6432 OPEN
+=== restart app ===
+waiting for boot (up to 150s)...
+APP UP after 5s
+LIVE config 0.385815s http=200
+LIVE vserve 0.317600s http=200
+2026-08-03T11:55:55: [tenantApi] api_chat_recent_unread Team chat is not enabled for your role. Ask your admin.
+2026-08-03T11:55:57: [tenantApi] api_edu_enrollment_byLead Education pack is not active for this workspace
+2026-08-03T11:55:59: [tenant-bootstrap] migration 2026_06_13_lead_scoring_tables_v2 failed (continuing): column "code" does not exist
+---exit=0---
