@@ -1,0 +1,19 @@
+=== before ===
+PG_POOL_LRU_MAX=130
+PG_POOL_PER_TENANT_MAX=2
+PG_POOL_MAX=10
+=== after ===
+PG_POOL_LRU_MAX=130
+PG_POOL_PER_TENANT_MAX=6
+PG_POOL_MAX=10
+PG_POOL_CONN_TIMEOUT_MS=15000
+=== verify site + a heavy vserve leads fetch ===
+site HTTP 200
+vserve leads page HTTP 200 in 7.543877s
+=== any NEW pool timeouts after restart? (watch 30s) ===
+new pool-timeout errors in last 30s: 0
+=== real PG conns (pgbouncer keeps this low) ===
+real PG conns: 174
+              total        used        free      shared  buff/cache   available
+Mem:          5.9Gi       3.3Gi       592Mi       562Mi       1.9Gi       1.9Gi
+---exit=0---
