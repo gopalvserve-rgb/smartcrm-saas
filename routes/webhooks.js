@@ -427,6 +427,8 @@ async function websiteHook(req, res) {
     let tags = '';
     if (Array.isArray(b.tags)) tags = b.tags.join(',');
     else if (b.tags) tags = String(b.tags);
+    else if (Array.isArray(b.tag)) tags = b.tag.join(',');
+    else if (b.tag) tags = String(b.tag);
     else if (Array.isArray(b.labels)) tags = b.labels.join(',');
     else if (b.labels) tags = String(b.labels);
 

@@ -841,6 +841,7 @@ function _apiDocsHtml(host) {
     <tr><td>phone</td><td>string</td><td>Phone number (optional)</td></tr>
     <tr><td>message</td><td>string</td><td>Message or notes (optional)</td></tr>
     <tr><td>source</td><td>string</td><td>Lead source label (optional)</td></tr>
+    <tr><td>tag</td><td>string</td><td>Tag/label for the lead. Use a comma-separated list for multiple tags, e.g. <code>vip,website</code> (optional)</td></tr>
     <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via header)</td></tr>
   </table>
 
@@ -861,7 +862,8 @@ function _apiDocsHtml(host) {
     "email":   "priya@example.com",
     "phone":   "+91 98765 43210",
     "message": "Interested in the enterprise plan",
-    "source":  "website"
+    "source":  "website",
+    "tag":     "vip,website"
   }'</code></pre>
   </div>
 
@@ -873,7 +875,8 @@ function _apiDocsHtml(host) {
   --data-urlencode "email=priya@example.com" \
   --data-urlencode "phone=+91 98765 43210" \
   --data-urlencode "message=Interested in the enterprise plan" \
-  --data-urlencode "source=website"</code></pre>
+  --data-urlencode "source=website" \
+  --data-urlencode "tag=vip,website"</code></pre>
     <p style="color:#94a3b8;font-size:.85rem;margin-top:.5rem">Or with <code>-d</code> (URL-encoded string):</p>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -887,6 +890,7 @@ function _apiDocsHtml(host) {
   &lt;input type="text"   name="name"    placeholder="Your name"&gt;
   &lt;input type="email"  name="email"   placeholder="Email"&gt;
   &lt;input type="tel"    name="phone"   placeholder="Phone"&gt;
+  &lt;input type="text"   name="tag"     placeholder="Tag (e.g. vip,website)"&gt;
   &lt;textarea            name="message" placeholder="Message"&gt;&lt;/textarea&gt;
   &lt;button type="submit"&gt;Send&lt;/button&gt;
 &lt;/form&gt;</code></pre>
