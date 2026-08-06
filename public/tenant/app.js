@@ -8667,8 +8667,54 @@ async function deleteAllDuplicates() {
 //   • "Select all N matching" active → re-fetch every matching lead (all pages)
 //   • some rows ticked              → export exactly those
 //   • nothing ticked                → export the current page (and say so)
+// LEADS_EXPORT_CUSTOMFIELDS_v1 — before downloading, let the user tick which
+// custom fields to add to the sheet alongside the standard columns. Values come
+// from each lead's extra_json, exposed as row.extra by api_leads_list.
 async function exportCSV() {
-  const headers = ['id', 'name', 'phone', 'email', 'whatsapp', 'source', 'product_name', 'status_name', 'assigned_name', 'tags', 'city', 'next_followup_at', 'last_status_change_at', 'notes', 'created_at'];
+  const cfList = ((CRM.cache && CRM.cache.customFields) || [])
+    .filter(c => Number(c.is_active) !== 0 && c.key);
+  if (!cfList.length) return _doExportCSV([]);   // no custom fields defined → standard export
+
+  const remembered = new Set(CRM._exportCfKeys || []);
+  const modal = h('div', { class: 'modal-backdrop' });
+  const boxes = cfList.map(cf => {
+    const cb = h('input', { type: 'checkbox', value: cf.key });
+    if (remembered.has(cf.key)) cb.checked = true;
+    return { cf, cb };
+  });
+  const selAll = h('input', { type: 'checkbox' });
+  selAll.checked = boxes.length > 0 && boxes.every(b => b.cb.checked);
+  selAll.onchange = () => boxes.forEach(b => { b.cb.checked = selAll.checked; });
+  const list = h('div', { style: { maxHeight: '300px', overflow: 'auto', border: '1px solid var(--border,#e2e8f0)', borderRadius: '8px', padding: '.5rem', marginTop: '.5rem' } },
+    ...boxes.map(b => h('label', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', padding: '.35rem .2rem', cursor: 'pointer', borderBottom: '1px dashed #eee' } },
+      b.cb,
+      h('span', {}, (b.cf.label || b.cf.key),
+        h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.78rem' } }, b.cf.key)))));
+  modal.appendChild(h('div', { class: 'modal' },
+    h('h3', {}, '⬇️ Download leads — choose custom fields'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Standard columns (name, phone, email, status, etc.) are always included. Tick any custom fields you also want in the sheet.'),
+    h('label', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', fontWeight: 600, fontSize: '.85rem', marginTop: '.3rem' } },
+      selAll, 'Select all custom fields'),
+    list,
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem', marginTop: '.8rem', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: () => {
+        const keys = boxes.filter(b => b.cb.checked).map(b => b.cf.key);
+        CRM._exportCfKeys = keys;   // remember for next time this session
+        modal.remove();
+        _doExportCSV(keys);
+      } }, '⬇️ Download')
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
+async function _doExportCSV(cfKeys) {
+  cfKeys = cfKeys || [];
+  const cfDefs = ((CRM.cache && CRM.cache.customFields) || []).filter(c => cfKeys.includes(c.key));
+  const baseHeaders = ['id', 'name', 'phone', 'email', 'whatsapp', 'source', 'product_name', 'status_name', 'assigned_name', 'tags', 'city', 'next_followup_at', 'last_status_change_at', 'notes', 'created_at'];
+  const headers = baseHeaders.concat(cfDefs.map(c => c.label || c.key));
   const page  = CRM.cache.lastLeads || [];
   const total = Number(CRM.cache.lastTotal || 0);
   let rows = [];
@@ -8697,17 +8743,26 @@ async function exportCSV() {
   }
 
   if (!rows.length) return toast('No leads to export', 'warn');
-  const csv = [headers.join(',')].concat(rows.map(r => headers.map(k => {
-    const v = r[k] == null ? '' : String(r[k]).replace(/"/g, '""');
+  const esc = v => {
+    v = v == null ? '' : String(v).replace(/"/g, '""');
     return /[",\n]/.test(v) ? `"${v}"` : v;
-  }).join(','))).join('\n');
+  };
+  const cfVal = (r, key) => {
+    let ex = r.extra;
+    if (!ex && r.extra_json) { try { ex = typeof r.extra_json === 'string' ? JSON.parse(r.extra_json) : r.extra_json; } catch (_) { ex = {}; } }
+    const v = ex ? ex[key] : '';
+    return v == null ? '' : (Array.isArray(v) ? v.join(', ') : v);
+  };
+  const csv = [headers.join(',')].concat(rows.map(r =>
+    baseHeaders.map(k => esc(r[k])).concat(cfDefs.map(c => esc(cfVal(r, c.key)))).join(',')
+  )).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
-  toast(msg, 'ok');
+  toast(msg + (cfDefs.length ? ' (+' + cfDefs.length + ' custom field' + (cfDefs.length > 1 ? 's' : '') + ')' : ''), 'ok');
 }
 
 // ─────────────────────────────────────────────────────────────────────
