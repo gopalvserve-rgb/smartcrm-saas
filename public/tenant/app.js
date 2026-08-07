@@ -1929,6 +1929,8 @@ const NAV_GROUPS = [
     { id: 'invList',      label: 'Invoices',              icon: '🧾', module: 'invoicing', search: 'invoice bill billing tax invoice' },
     { id: 'invCompanies', label: 'My Companies',          icon: '🏢', module: 'invoicing', search: 'company companies billing entity' },
     { id: 'invCustomers', label: 'Bill-To Customers',     icon: '👤', module: 'invoicing', search: 'bill to billing customer customer billing' },
+    { id: 'invParty',     label: 'Party-wise Report',     icon: '👥', module: 'invoicing', search: 'party wise customer wise outstanding balance report receivables' },
+    { id: 'invLedger',    label: 'Party Ledger',          icon: '📒', module: 'invoicing', search: 'ledger party statement account statement khata' },
     { id: 'invGstr1',     label: 'GSTR-1 Export',         icon: '📤', module: 'invoicing', search: 'gstr gst gstr-1 gst export' },
     { id: 'invSettings',  label: 'Billing Settings & T&C', icon: '⚙️', module: 'invoicing', search: 'billing settings terms terms and conditions t&c' }
   ] },
@@ -2062,7 +2064,7 @@ const NAV_PERM = {
   quotations: 'quotations.view',
   invDashboard: 'invoicing.view', invList: 'invoicing.view',
   invCompanies: 'invoicing.view', invCustomers: 'invoicing.view', invItems: 'invoicing.view',
-  invReports: 'invoicing.view', invSettings: 'invoicing.settings',
+  invReports: 'invoicing.view', invParty: 'invoicing.view', invLedger: 'invoicing.view', invSettings: 'invoicing.settings',
   products: 'products.view',
   customers: 'customers.view',
   campaigns: 'campaigns.view',
@@ -58764,8 +58766,29 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     const compSel = _sel('company_id', companies.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') })), (companies.find(c => c.is_default) || companies[0]).id);
     const from = _txt('from', daysAgo(30), { type:'date' });
     const to   = _txt('to',   today(),     { type:'date' });
-    const filters = h('div', { style: { display:'grid', gridTemplateColumns:'2fr 1fr 1fr auto', gap:'.7rem', alignItems:'end', marginBottom:'1rem' } },
+    // GSTR1_QUICK_RANGE_v1 — This/Last month + quarter + FY presets.
+    function _presetRange(kind) {
+      const d = new Date(), y = d.getFullYear(), m = d.getMonth();
+      const fmt = x => x.toISOString().slice(0, 10);
+      const first = (yy, mm) => fmt(new Date(Date.UTC(yy, mm, 1)));
+      const last  = (yy, mm) => fmt(new Date(Date.UTC(yy, mm + 1, 0)));
+      if (kind === 'this_month') return { from: first(y, m), to: last(y, m) };
+      if (kind === 'last_month') { const pm = (m + 11) % 12, py = m === 0 ? y - 1 : y; return { from: first(py, pm), to: last(py, pm) }; }
+      if (kind === 'this_quarter') { const q = Math.floor(m / 3); return { from: first(y, q * 3), to: last(y, q * 3 + 2) }; }
+      if (kind === 'this_fy') { const fy = m >= 3 ? y : y - 1; return { from: first(fy, 3), to: last(fy + 1, 2) }; }
+      return null;
+    }
+    const presetSel = _sel('gstr_preset', [
+      { value:'this_month',   label:'This Month' },
+      { value:'last_month',   label:'Last Month' },
+      { value:'this_quarter', label:'This Quarter' },
+      { value:'this_fy',      label:'This Financial Year' },
+      { value:'',             label:'Custom range' }
+    ], '');
+    presetSel.addEventListener('change', () => { const r = _presetRange(presetSel.value); if (r) { from.value = r.from; to.value = r.to; } });
+    const filters = h('div', { style: { display:'grid', gridTemplateColumns:'1.6fr 1.2fr 1fr 1fr auto', gap:'.7rem', alignItems:'end', marginBottom:'1rem' } },
       _field('Seller Company', compSel),
+      _field('Quick range', presetSel),
       _field('From', from),
       _field('To', to),
       _btn('Preview', { onclick: runPreview })
@@ -58872,6 +58895,16 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     card.appendChild(h('label', { style:{ fontSize:'.8rem', fontWeight:600, color:'#475569', display:'block', marginBottom:'.2rem' } }, '⭐ Google Review URL'));
     card.appendChild(grUrl);
 
+    // ---- Invoice theme (INV_THEME_v1) ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '🎨 Invoice theme'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Choose the look of your printed invoice PDF. Your brand colour, logo and signature are used in every theme. (This is only for invoices — it does not change your CRM theme.)'));
+    const themeSel = _sel('invoice_theme', [
+      { value:'classic', label:'Classic — accent bar on top (default)' },
+      { value:'modern',  label:'Modern — coloured header band' },
+      { value:'minimal', label:'Minimal — clean lines, lots of white space' }
+    ], s.invoice_theme || 'classic');
+    card.appendChild(themeSel);
+
     // ---- Footer ----
     card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '🦶 Invoice Footer'));
     card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Optional footer text printed at the bottom of every PDF (e.g. company tagline, registration numbers, fine print).'));
@@ -58910,6 +58943,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
           enable_qr:        qr.querySelector('input').checked ? 1 : 0,
           instagram_url:    igUrl.value.trim(),
           google_review_url: grUrl.value.trim(),
+          invoice_theme:    themeSel.value || 'classic',
         });
         toast('Settings saved — they will apply to your next new invoice', 'ok');
       } catch (e) { toast(e.message, 'err'); }
@@ -58920,6 +58954,122 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
 
     pg.appendChild(card);
     view.appendChild(pg);
+  });
+
+  // ==================== PARTY-WISE REPORT + LEDGER (INV_PARTY_REPORTS_v1) ====================
+  const _rA = { textAlign: 'right' };
+  function _dlCsv(name, csv) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }
+  const _csvCell = v => { v = v == null ? '' : String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? '"' + v + '"' : v; };
+
+  VIEWS.invParty = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('👥 Party-wise Report');
+    const companies = await api('api_invoicing_companies_list');
+    const compSel = _sel('company_id', [{ value: '', label: 'All companies' }].concat((companies || []).map(c => ({ value: c.id, label: c.name }))), '');
+    const from = _txt('from', '', { type: 'date' });
+    const to = _txt('to', '', { type: 'date' });
+    pg.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr auto', gap: '.7rem', alignItems: 'end', marginBottom: '1rem' } },
+      _field('Company', compSel), _field('From (optional)', from), _field('To (optional)', to), _btn('Load', { onclick: load })));
+    const out = h('div'); pg.appendChild(out); view.appendChild(pg);
+    async function load() {
+      out.innerHTML = '';
+      try {
+        const r = await api('api_invoicing_party_summary', { company_id: compSel.value || undefined, from: from.value || undefined, to: to.value || undefined });
+        const t = r.totals || {};
+        out.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: '.8rem', marginBottom: '1rem' } },
+          _kpi('Parties', (r.rows || []).length, '#6366f1'),
+          _kpi('Invoiced', fmtINR(t.invoiced), '#0ea5e9'),
+          _kpi('Received', fmtINR(t.paid), '#10b981'),
+          _kpi('Outstanding', fmtINR(t.balance), '#ef4444')));
+        out.appendChild(_btn('⬇ Download CSV', { kind: 'ghost', onclick: () => {
+          const head = ['Party', 'Invoices', 'Invoiced', 'Received', 'Outstanding', 'Last invoice'];
+          const lines = [head.join(',')].concat((r.rows || []).map(x => [x.customer_name, x.invoices, Number(x.invoiced).toFixed(2), Number(x.paid).toFixed(2), Number(x.balance).toFixed(2), String(x.last_invoice || '').slice(0, 10)].map(_csvCell).join(',')));
+          _dlCsv('party-wise-' + today() + '.csv', lines.join('\n'));
+        } }));
+        if (!(r.rows || []).length) { out.appendChild(h('p', { class: 'muted', style: { marginTop: '.8rem' } }, 'No invoices in this range.')); return; }
+        const tbl = h('table', { class: 'mini-table', style: { width: '100%', marginTop: '.8rem' } },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Party'), h('th', {}, 'Invoices'), h('th', { style: _rA }, 'Invoiced'), h('th', { style: _rA }, 'Received'), h('th', { style: _rA }, 'Outstanding'), h('th', {}, 'Last invoice'), h('th', {}, ''))),
+          h('tbody', {}, ...r.rows.map(x => h('tr', {},
+            h('td', {}, h('b', {}, x.customer_name || '—')),
+            h('td', {}, String(x.invoices)),
+            h('td', { style: _rA }, fmtINR(x.invoiced)),
+            h('td', { style: { textAlign: 'right', color: '#059669' } }, fmtINR(x.paid)),
+            h('td', { style: { textAlign: 'right', color: Number(x.balance) > 0 ? '#b91c1c' : '#64748b', fontWeight: '600' } }, fmtINR(x.balance)),
+            h('td', {}, String(x.last_invoice || '').slice(0, 10)),
+            h('td', {}, h('button', { class: 'btn sm ghost', onclick: () => _openLedgerModal({ customer_id: x.customer_id, customer_name: x.customer_name, company_id: compSel.value || undefined }) }, '📒 Ledger'))))));
+        out.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+      } catch (e) { toast(e.message, 'err'); }
+    }
+    load();
+  });
+
+  function _ledgerTable(data) {
+    return h('table', { class: 'mini-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Date'), h('th', {}, 'Type'), h('th', {}, 'Reference'), h('th', { style: _rA }, 'Debit'), h('th', { style: _rA }, 'Credit'), h('th', { style: _rA }, 'Balance'))),
+      h('tbody', {}, ...(data.entries || []).map(e => h('tr', {},
+        h('td', {}, String(e.date || '').slice(0, 10)),
+        h('td', {}, e.type),
+        h('td', {}, e.ref || ''),
+        h('td', { style: _rA }, e.debit ? fmtINR(e.debit) : ''),
+        h('td', { style: { textAlign: 'right', color: '#059669' } }, e.credit ? fmtINR(e.credit) : ''),
+        h('td', { style: { textAlign: 'right', fontWeight: '600' } }, fmtINR(e.balance)))),
+        h('tr', { style: { borderTop: '2px solid #e2e8f0', fontWeight: '700' } },
+          h('td', { colspan: 3 }, 'Totals / Closing'),
+          h('td', { style: _rA }, fmtINR(data.total_invoiced)),
+          h('td', { style: { textAlign: 'right', color: '#059669' } }, fmtINR(data.total_paid)),
+          h('td', { style: _rA }, fmtINR(data.closing_balance)))));
+  }
+  function _ledgerCsv(data) {
+    const lines = [['Date', 'Type', 'Reference', 'Debit', 'Credit', 'Balance'].join(',')]
+      .concat((data.entries || []).map(e => [String(e.date || '').slice(0, 10), e.type, e.ref || '', e.debit ? Number(e.debit).toFixed(2) : '', e.credit ? Number(e.credit).toFixed(2) : '', Number(e.balance).toFixed(2)].map(_csvCell).join(',')));
+    lines.push(['', '', 'Closing', Number(data.total_invoiced).toFixed(2), Number(data.total_paid).toFixed(2), Number(data.closing_balance).toFixed(2)].map(_csvCell).join(','));
+    return lines.join('\n');
+  }
+  async function _openLedgerModal(opts) {
+    const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+    const card = h('div', { class: 'modal', style: { maxWidth: '760px' } });
+    card.appendChild(h('h3', {}, '📒 Ledger — ' + (opts.customer_name || '')));
+    const body = h('div', {}, h('p', { class: 'muted' }, 'Loading…'));
+    card.appendChild(body); modal.appendChild(card); document.body.appendChild(modal);
+    try {
+      const data = await api('api_invoicing_party_ledger', opts);
+      body.innerHTML = '';
+      body.appendChild(h('div', { style: { marginBottom: '.6rem' } }, h('b', {}, 'Outstanding: '), h('span', { style: { color: Number(data.closing_balance) > 0 ? '#b91c1c' : '#059669', fontWeight: '700' } }, fmtINR(data.closing_balance))));
+      body.appendChild(h('div', { style: { overflowX: 'auto' } }, _ledgerTable(data)));
+      body.appendChild(h('div', { style: { marginTop: '.8rem', textAlign: 'right' } }, _btn('⬇ Download CSV', { kind: 'ghost', onclick: () => _dlCsv('ledger-' + String(opts.customer_name || 'party').replace(/[^a-z0-9]+/gi, '-') + '.csv', _ledgerCsv(data)) })));
+    } catch (e) { body.innerHTML = ''; body.appendChild(h('p', { style: { color: '#b91c1c' } }, e.message)); }
+  }
+
+  VIEWS.invLedger = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('📒 Party Ledger');
+    const [companies, customers] = await Promise.all([api('api_invoicing_companies_list'), api('api_invoicing_customers_list')]);
+    if (!(customers || []).length) { pg.appendChild(h('p', { class: 'muted' }, 'No parties yet. Create an invoice or add a Bill-To customer first.')); view.appendChild(pg); return; }
+    const custSel = _sel('customer_id', (customers || []).map(c => ({ value: c.id, label: c.name })), (customers[0] || {}).id);
+    const compSel = _sel('company_id', [{ value: '', label: 'All companies' }].concat((companies || []).map(c => ({ value: c.id, label: c.name }))), '');
+    const from = _txt('from', '', { type: 'date' });
+    const to = _txt('to', '', { type: 'date' });
+    pg.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1.4fr 1.2fr 1fr 1fr auto', gap: '.7rem', alignItems: 'end', marginBottom: '1rem' } },
+      _field('Party', custSel), _field('Company', compSel), _field('From', from), _field('To', to), _btn('Load', { onclick: load })));
+    const out = h('div'); pg.appendChild(out); view.appendChild(pg);
+    async function load() {
+      out.innerHTML = '';
+      try {
+        const data = await api('api_invoicing_party_ledger', { customer_id: custSel.value, company_id: compSel.value || undefined, from: from.value || undefined, to: to.value || undefined });
+        const label = (custSel.selectedOptions[0] || {}).textContent || '';
+        out.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem', flexWrap: 'wrap', gap: '.5rem' } },
+          h('div', {}, h('b', {}, label), '  ·  Outstanding: ', h('span', { style: { color: Number(data.closing_balance) > 0 ? '#b91c1c' : '#059669', fontWeight: '700' } }, fmtINR(data.closing_balance))),
+          _btn('⬇ Download CSV', { kind: 'ghost', onclick: () => _dlCsv('ledger-' + label.replace(/[^a-z0-9]+/gi, '-') + '.csv', _ledgerCsv(data)) })));
+        if (!(data.entries || []).length) { out.appendChild(h('p', { class: 'muted' }, 'No transactions for this party in range.')); return; }
+        out.appendChild(h('div', { style: { overflowX: 'auto' } }, _ledgerTable(data)));
+      } catch (e) { toast(e.message, 'err'); }
+    }
+    load();
   });
 
   window.INV = INV;

@@ -113,6 +113,8 @@ async function _ensureTables() {
   // INVOICE_SOCIAL_QR_v1 — Instagram + Google Review links printed as QR codes.
   try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS instagram_url TEXT`); } catch (_) {}
   try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS google_review_url TEXT`); } catch (_) {}
+  // INV_THEME_v1 — selectable invoice theme (classic | modern | minimal).
+  try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS invoice_theme TEXT NOT NULL DEFAULT 'classic'`); } catch (_) {}
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -853,9 +855,23 @@ async function api_invoicing_invoices_pdf_html(token, id) {
   .stamp.draft { color:#b45309; border-color:#b45309; }
   @page { size:A4; margin:11mm; }
   @media print { body { background:#fff; font-size:11px; } .sheet { max-width:none; } .pad { padding:0; } }
+  /* INV_THEME_v1 — Modern (coloured header band) + Minimal (clean lines) */
+  .theme-modern .accent-bar { display:none; }
+  .theme-modern .top { background:linear-gradient(135deg,${accent},${accentDark}); margin:-24px -30px 18px; padding:22px 30px; }
+  .theme-modern .brand h1 { color:#fff; }
+  .theme-modern .brand .sub, .theme-modern .brand .sub b { color:rgba(255,255,255,.85); }
+  .theme-modern .inv-panel .ttl, .theme-modern .inv-panel .no { color:#fff; }
+  .theme-modern .inv-panel .row, .theme-modern .inv-panel .row b { color:rgba(255,255,255,.85); }
+  .theme-modern .logo-fallback { background:rgba(255,255,255,.25); }
+  .theme-minimal .accent-bar { display:none; }
+  .theme-minimal .pad { padding:26px 30px; }
+  .theme-minimal table.lines thead th { background:#fff; color:#0f172a; border-bottom:2px solid ${accent}; }
+  .theme-minimal table.lines tbody tr:nth-child(even) td { background:#fff; }
+  .theme-minimal .party { background:#fff; border:0; border-bottom:1px solid #e5e7eb; border-radius:0; padding:11px 2px; }
+  .theme-minimal .tot tr.grand td { background:#fff; border-top:2px solid ${accent}; }
 </style>
 </head><body>
-  <div class="sheet">
+  <div class="sheet theme-${String(settings.invoice_theme || 'classic').toLowerCase()}">
     <div class="accent-bar"></div>
     <div class="pad">
       <div class="top">
@@ -1174,7 +1190,7 @@ async function api_invoicing_settings_save(token, payload) {
   payload = payload || {};
   const allowed = ['default_gst_pct','currency_symbol','currency_code','date_format',
     'b2cl_threshold','fy_start_month','default_terms','default_notes','invoice_footer',
-    'enable_qr','enable_round_off','instagram_url','google_review_url'];
+    'enable_qr','enable_round_off','instagram_url','google_review_url','invoice_theme'];
   const sets = []; const vals = []; let i = 1;
   allowed.forEach(k => {
     if (payload[k] !== undefined) { sets.push(`${k} = $${i++}`); vals.push(payload[k]); }
@@ -1318,7 +1334,72 @@ async function api_invoicing_invoices_convertToTax(token, payload) {
   }
 }
 
+// ============================================================
+// INV_PARTY_REPORTS_v1 — Party-wise (customer) summary + ledger
+// ============================================================
+async function api_invoicing_party_summary(token, opts) {
+  await _ctx(token);
+  opts = opts || {};
+  const wh = ["status <> 'cancelled'"]; const vals = []; let i = 1;
+  if (opts.company_id) { wh.push(`company_id = $${i++}`); vals.push(Number(opts.company_id)); }
+  if (opts.from) { wh.push(`invoice_date >= $${i++}`); vals.push(opts.from); }
+  if (opts.to)   { wh.push(`invoice_date <= $${i++}`); vals.push(opts.to); }
+  const rows = (await db.query(
+    `SELECT COALESCE(customer_id,0) AS customer_id,
+            MAX(customer_name) AS customer_name,
+            COUNT(*)::int AS invoices,
+            COALESCE(SUM(total),0) AS invoiced,
+            COALESCE(SUM(amount_paid),0) AS paid,
+            COALESCE(SUM(total - amount_paid),0) AS balance,
+            MAX(invoice_date) AS last_invoice
+       FROM invoices_inv
+      WHERE ${wh.join(' AND ')}
+      GROUP BY COALESCE(customer_id,0), lower(customer_name)
+      ORDER BY balance DESC, invoiced DESC`, vals)).rows;
+  const totals = rows.reduce((a, r) => ({
+    invoiced: a.invoiced + Number(r.invoiced), paid: a.paid + Number(r.paid),
+    balance: a.balance + Number(r.balance), invoices: a.invoices + Number(r.invoices)
+  }), { invoiced: 0, paid: 0, balance: 0, invoices: 0 });
+  return { rows, totals };
+}
+
+async function api_invoicing_party_ledger(token, opts) {
+  await _ctx(token);
+  opts = opts || {};
+  const byId = opts.customer_id !== undefined && opts.customer_id !== null && opts.customer_id !== '';
+  const invWh = [byId ? 'customer_id = $1' : 'lower(customer_name) = lower($1)', "status <> 'cancelled'"];
+  const vals = [byId ? Number(opts.customer_id) : String(opts.customer_name || '')]; let i = 2;
+  if (opts.company_id) { invWh.push(`company_id = $${i++}`); vals.push(Number(opts.company_id)); }
+  if (opts.from) { invWh.push(`invoice_date >= $${i++}`); vals.push(opts.from); }
+  if (opts.to)   { invWh.push(`invoice_date <= $${i++}`); vals.push(opts.to); }
+  const invs = (await db.query(
+    `SELECT id, invoice_no, invoice_date AS dt, total, customer_name
+       FROM invoices_inv WHERE ${invWh.join(' AND ')} ORDER BY invoice_date, id`, vals)).rows;
+  const invIds = invs.map(r => r.id);
+  let pays = [];
+  if (invIds.length) {
+    pays = (await db.query(
+      `SELECT p.invoice_id, p.pay_date AS dt, p.amount, p.mode, p.reference, i.invoice_no
+         FROM invoice_payments_inv p JOIN invoices_inv i ON i.id = p.invoice_id
+        WHERE p.invoice_id = ANY($1) ORDER BY p.pay_date, p.id`, [invIds])).rows;
+  }
+  const entries = [];
+  invs.forEach(r => entries.push({ date: r.dt, type: 'Invoice', ref: r.invoice_no, debit: Number(r.total), credit: 0 }));
+  pays.forEach(p => entries.push({ date: p.dt, type: 'Payment' + (p.mode ? ' (' + p.mode + ')' : ''), ref: p.invoice_no + (p.reference ? ' · ' + p.reference : ''), debit: 0, credit: Number(p.amount) }));
+  entries.sort((a, b) => (String(a.date) < String(b.date) ? -1 : String(a.date) > String(b.date) ? 1 : (b.debit - a.debit)));
+  let bal = 0;
+  entries.forEach(e => { bal += e.debit - e.credit; e.balance = bal; });
+  return {
+    customer_name: (invs[0] && invs[0].customer_name) || opts.customer_name || '',
+    entries, closing_balance: bal,
+    total_invoiced: entries.reduce((a, e) => a + e.debit, 0),
+    total_paid: entries.reduce((a, e) => a + e.credit, 0)
+  };
+}
+
 module.exports = {
+  api_invoicing_party_summary,
+  api_invoicing_party_ledger,
   api_invoicing_dashboard,
   api_invoicing_companies_list,
   api_invoicing_companies_get,
