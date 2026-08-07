@@ -19076,7 +19076,7 @@ async function wbTemplates() {
   wrap.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Name'), h('th', {}, 'Lang'), h('th', {}, 'Category'),
-      h('th', {}, 'Status'), h('th', {}, 'Body params'), h('th', {}, 'Body preview'), h('th', {}, ''))),
+      h('th', {}, 'Status'), h('th', {}, 'Created'), h('th', {}, 'Body params'), h('th', {}, 'Body preview'), h('th', {}, ''))),
     h('tbody', {}, ...list.map(t => h('tr', {},
       h('td', {}, h('code', {}, t.name)),
       h('td', {}, t.language),
@@ -19086,10 +19086,12 @@ async function wbTemplates() {
           style: t.status === 'APPROVED' ? { background: '#10b981', color: '#fff' } : (t.status === 'PENDING' ? { background: '#f59e0b', color: '#fff' } : null)
         }, t.status)
       ),
+      h('td', { style: { whiteSpace: 'nowrap', fontSize: '.8rem' } }, t.created_at ? new Date(t.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'),
       h('td', {}, t.body_params),
       h('td', { style: { maxWidth: '420px' }, title: t.body_text || '' }, (t.body_text || '').slice(0, 100) + ((t.body_text || '').length > 100 ? '\u2026' : '')),
       h('td', { style: { whiteSpace: 'nowrap' } },
         h('button', { class: 'btn sm ghost', title: 'View full template', style: { marginRight: '.3rem' }, onclick: () => _viewWaTemplate(t) }, '👁 View'),
+        h('button', { class: 'btn sm ghost', title: 'Edit the content and resubmit to Meta', style: { marginRight: '.3rem' }, onclick: () => openCreateTemplateModal(t.status === 'APPROVED' ? Object.assign({}, t, { name: (t.name + '_v2').slice(0, 512) }) : t) }, '✏️ Edit'),
         h('button', { class: 'btn sm ghost danger', title: 'Delete from Meta + here', onclick: async () => {
           if (!await confirmDialog('Delete template "' + t.name + '"? It will be removed from Meta as well.')) return;
           try { await api('api_wb_templates_delete', { name: t.name, language: t.language }); toast('Deleted'); showWbTab('templates'); }
@@ -19104,12 +19106,12 @@ async function wbTemplates() {
 // ============================================================
 // Create Template modal — author a template + submit to Meta
 // ============================================================
-function openCreateTemplateModal() {
+function openCreateTemplateModal(seed) {
   const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
   const card = h('div', { class: 'modal', style: { maxWidth: '720px' } });
   m.appendChild(card);
 
-  card.appendChild(h('h3', { style: { marginTop: 0 } }, '\ud83d\udccb Create WhatsApp Template'));
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, seed ? '\u270f\ufe0f Edit & Resubmit Template' : '\ud83d\udccb Create WhatsApp Template'));
   card.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
     'After submission, Meta typically reviews the template within a few minutes. Use ',
     h('code', {}, '{{1}}, {{2}}'),
@@ -19223,6 +19225,37 @@ function openCreateTemplateModal() {
   const addBtn = h('button', { class: 'btn sm ghost', type: 'button', onclick: () => addButtonRow(), style: { marginTop: '.4rem' } }, '+ Add button');
   buttonsWrap.appendChild(addBtn);
   card.appendChild(buttonsWrap);
+
+  // ---- Prefill for Edit & Resubmit (WA_TPL_EDIT_RESUBMIT_v1) ----
+  if (seed) {
+    try {
+      nameInp.value = seed.name || '';
+      langSel.value = seed.language || 'en_US';
+      catSel.value  = String(seed.category || 'UTILITY').toUpperCase();
+      const comps = Array.isArray(seed.components) ? seed.components : [];
+      const byType = t => comps.find(c => String(c.type || '').toUpperCase() === t) || null;
+      const bodyC = byType('BODY');
+      bodyArea.value = (bodyC && bodyC.text) || seed.body_text || '';
+      const footC = byType('FOOTER');
+      if (footC && footC.text) footerInp.value = footC.text;
+      const hdrC = byType('HEADER');
+      if (hdrC) {
+        hdrFmt.value = String(hdrC.format || 'TEXT').toUpperCase();
+        syncHeader();
+        if (hdrFmt.value === 'TEXT') hdrText.value = hdrC.text || '';
+      }
+      const btnC = byType('BUTTONS');
+      if (btnC && Array.isArray(btnC.buttons)) {
+        btnC.buttons.forEach(b => addButtonRow({ type: b.type, text: b.text, url: b.url, phone_number: b.phone_number }));
+      }
+      card.insertBefore(
+        h('div', { class: 'muted', style: { fontSize: '.8rem', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '.5rem .7rem', margin: '0 0 .6rem' } },
+          seed.status === 'APPROVED'
+            ? 'This is an approved template — WhatsApp does not allow editing approved templates in place, so this will submit a NEW version (name auto-suffixed). Change the name if you like.'
+            : 'Edit the content below and submit again to Meta for review. Resubmitting keeps the same name.'),
+        card.children[2]);
+    } catch (_) {}
+  }
 
   // ---- Actions ----
   const submitBtn = h('button', { class: 'btn primary' }, 'Submit to Meta');
@@ -58011,7 +58044,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
         lines.forEach((ln, idx) => {
           const tr = h('tr', { style: { borderBottom:'1px solid #f1f5f9' } });
 
-          const itemSel = _sel('item', [{ value:'', label:'— pick item —' }, { value:'__new__', label:'➕ Create new item…' }].concat(items.map(it => ({ value: it.id, label: it.name }))), ln.item_id || '');
+          const itemSel = _sel('item', [{ value:'', label:'— pick item —' }, { value:'__new__', label:'➕ Create new item…' }].concat(items.map(it => ({ value: it.id, label: it.name + (Number(it.rate) ? '  —  ₹' + Number(it.rate).toLocaleString('en-IN') : '') }))), ln.item_id || '');
           itemSel.style.fontSize = '.78rem';
           itemSel.addEventListener('change', () => {
             if (itemSel.value === '__new__') {

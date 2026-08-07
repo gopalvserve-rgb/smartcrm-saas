@@ -533,8 +533,10 @@ CREATE TABLE IF NOT EXISTS wa_templates (
   header_type     TEXT,
   has_buttons     INTEGER NOT NULL DEFAULT 0,
   refreshed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (name, language)
 );
+ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- Outbound campaigns (broadcast a template to many recipients)
 CREATE TABLE IF NOT EXISTS wa_campaigns (

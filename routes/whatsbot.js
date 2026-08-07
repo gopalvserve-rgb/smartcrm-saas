@@ -950,7 +950,8 @@ async function api_wb_templates_list(token) {
       category: r.category, body_text: r.body_text, body_params: r.body_params,
       header_type: r.header_type, has_buttons: !!r.has_buttons,
       components: typeof r.components_json === 'string' ? safeJson(r.components_json) : (r.components_json || []),
-      refreshed_at: r.refreshed_at
+      refreshed_at: r.refreshed_at,
+      created_at: r.created_at || r.refreshed_at
     }))
     .sort((a, b) => (a.status === 'APPROVED' ? -1 : 1) - (b.status === 'APPROVED' ? -1 : 1) || String(a.name).localeCompare(String(b.name)));
 }

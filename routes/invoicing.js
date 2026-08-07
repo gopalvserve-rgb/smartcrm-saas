@@ -780,7 +780,7 @@ async function api_invoicing_invoices_pdf_html(token, id) {
       </div>` : '';
 
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
-<title>${esc(inv.invoice_no)}</title>
+<title>${esc((inv.customer_name ? String(inv.customer_name).trim() + ' - ' : '') + inv.invoice_no)}</title>
 <style>
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; }
