@@ -58819,15 +58819,13 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     async function downloadCsv() {
       try {
         const r = await api('api_invoicing_gstr1_csv', { company_id: Number(compSel.value), from: from.value, to: to.value });
-        Object.entries(r.sheets).forEach(([name, csv]) => {
-          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = `gstr1_${name}_${from.value}_to_${to.value}.csv`;
-          document.body.appendChild(a); a.click(); a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 4000);
+        const entries = Object.entries(r.sheets || {}).filter(([, csv]) => csv && String(csv).trim());
+        if (!entries.length) { toast('No GST-filable invoices in this range (proforma & cancelled invoices are excluded).', 'warn'); return; }
+        // Download one at a time — browsers block multiple simultaneous downloads.
+        entries.forEach(([name, csv], idx) => {
+          setTimeout(() => _dlCsv(`gstr1_${name}_${from.value}_to_${to.value}.csv`, csv), idx * 600);
         });
-        toast('CSV sheets downloaded', 'ok');
+        toast('Downloading ' + entries.length + ' GSTR-1 sheet' + (entries.length > 1 ? 's' : '') + '…', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     }
   });
@@ -58958,11 +58956,20 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
 
   // ==================== PARTY-WISE REPORT + LEDGER (INV_PARTY_REPORTS_v1) ====================
   const _rA = { textAlign: 'right' };
-  function _dlCsv(name, csv) {
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = name; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  function _dlCsv(name, csv, mime) {
+    mime = mime || 'text/csv;charset=utf-8';
+    try {
+      const blob = new Blob([csv], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 6000);
+    } catch (_) {}
+    // ANDROID APP WEBVIEW ignores blob downloads — also open the content as a
+    // data URL so it can be viewed/saved/shared from inside the app.
+    if (window.LeadCRMNative) {
+      try { window.open('data:' + mime + ';charset=utf-8,' + encodeURIComponent(csv), '_blank'); } catch (_) {}
+    }
   }
   const _csvCell = v => { v = v == null ? '' : String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? '"' + v + '"' : v; };
 
