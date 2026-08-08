@@ -1784,6 +1784,7 @@ tr:hover .lv2-actions { opacity: 1; }
       h('button', { style: bulkBtn(), title: 'Share with user', onclick: () => bulkAction('share') }, '🤝 Share'),
       h('button', { style: bulkBtn(), title: 'Send WA template via API', onclick: () => bulkAction('waapi') }, '💬 WA API'),
       h('button', { style: bulkBtn(), title: 'Export CSV', onclick: () => bulkAction('export') }, '↓ Export'),
+      _lv2CanFlag() ? h('button', { style: bulkBtn(), title: 'Mark selected leads for quality review (Manager)', onclick: () => { const ids = Array.from(S.bulkSel || []); if (ids.length && window.markReviewPrompt) window.markReviewPrompt(ids); } }, '⚑ Review') : null,
       h('button', { style: bulkBtn('danger'), title: 'Delete', onclick: () => bulkAction('delete') }, '🗑 Delete'),
       h('button', { style: { background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '0 4px' }, title: 'Clear selection', onclick: () => { S.bulkSel.clear(); document.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false); renderBulkBar(); } }, '✕')
     );
@@ -1880,6 +1881,8 @@ tr:hover .lv2-actions { opacity: 1; }
     } catch (e) { toast(e.message, 'err'); }
   }
 
+  // QUALITY_FLAG_LV2_v1 — who can mark a lead for review (admin/manager).
+  function _lv2CanFlag(){ try { const r=String((window.CRM&&window.CRM.user&&window.CRM.user.role)||'').toLowerCase(); return ['admin','manager','owner','superadmin'].includes(r); } catch(_){ return false; } }
   function renderModernRow(l) {
     const name = l.name || l.phone || '—';
     const stat = statusClass(l.status_name);
@@ -1972,7 +1975,8 @@ tr:hover .lv2-actions { opacity: 1; }
             h('button', { class: 'lv2-act api', title: 'Send via WhatsApp Cloud API (SmartCRM chat)', onclick: () => doWaApi(l) },
               h('span', { html: '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 0C7.2 0 0 7.2 0 16c0 2.8.7 5.5 2.1 7.9L0 32l8.3-2.2c2.3 1.3 4.9 1.9 7.7 1.9 8.8 0 16-7.2 16-16S24.8 0 16 0zm0 29.3c-2.5 0-4.9-.7-7-1.9l-.5-.3-5.2 1.4 1.4-5.1-.3-.5C3.2 20.7 2.7 18.4 2.7 16 2.7 8.7 8.7 2.7 16 2.7s13.3 6 13.3 13.3-6 13.3-13.3 13.3zm7.3-9.9c-.4-.2-2.4-1.2-2.7-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.2 1.5-.2.2-.4.3-.8.1-2.4-1.2-3.9-2.1-5.5-4.8-.4-.7.4-.7 1.2-2.2.1-.2.1-.5 0-.7-.1-.2-.9-2.2-1.3-3-.3-.8-.7-.7-.9-.7-.2 0-.5 0-.8 0-.3 0-.7.1-1.1.5-.4.4-1.4 1.4-1.4 3.4 0 2 1.5 3.9 1.7 4.2.2.3 2.9 4.5 7.1 6.3 2.6 1.1 3.6 1.2 4.9 1 .8-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9 0-.2-.3-.3-.7-.5z"/></svg>', style: { display: 'inline-flex' } })),
             h('button', { class: 'lv2-act ai', title: 'AI Quick Note — type status + remark + follow-up time', onclick: () => aiQuickNote(l) }, '🤖'),
-            h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋')))));
+            h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋'),
+            _lv2CanFlag() ? h('button', { class: 'lv2-act', style: { color: '#c2410c' }, title: 'Mark this lead for quality review (Manager)', onclick: () => { if (window.markReviewPrompt) window.markReviewPrompt([l.id]); } }, '⚑') : null))));
     }
     if (vc.has('source')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
     if (vc.has('status')) {
