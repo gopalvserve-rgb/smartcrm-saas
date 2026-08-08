@@ -1147,17 +1147,23 @@ async function api_invoicing_gstr1_csv(token, opts) {
   if (!opts.from || !opts.to) throw new Error('from and to dates required');
   const d = await _gstr1Data(Number(opts.company_id), opts.from, opts.to);
 
+  // GSTR1_CSV_NUMCOERCE_v1 — Postgres returns numeric columns as strings, so
+  // r.taxable/cess/qty/cgst/sgst/igst arrive as strings. Calling .toFixed() on a
+  // string throws "toFixed is not a function", and "+" would string-concatenate.
+  // Coerce every amount through N() before formatting/adding.
+  const N = v => Number(v || 0);
+
   const b2b = [_csvLine(['GSTIN/UIN of Recipient','Receiver Name','Invoice Number','Invoice Date','Invoice Value','Place Of Supply','Reverse Charge','Invoice Type','Rate','Taxable Value','Cess Amount'])]
-    .concat(d.b2b.map(r => _csvLine([r.gstin, r.name, r.invoice_no, r.invoice_date, r.invoice_value, r.place_of_supply, r.reverse_charge, r.invoice_type, r.rate, r.taxable.toFixed(2), (r.cess||0).toFixed(2)])));
+    .concat(d.b2b.map(r => _csvLine([r.gstin, r.name, r.invoice_no, r.invoice_date, r.invoice_value, r.place_of_supply, r.reverse_charge, r.invoice_type, r.rate, N(r.taxable).toFixed(2), N(r.cess).toFixed(2)])));
 
   const b2cl = [_csvLine(['Invoice Number','Invoice Date','Invoice Value','Place Of Supply','Rate','Taxable Value','Cess Amount'])]
-    .concat(d.b2cl.map(r => _csvLine([r.invoice_no, r.invoice_date, r.invoice_value, r.place_of_supply, r.rate, r.taxable.toFixed(2), (r.cess||0).toFixed(2)])));
+    .concat(d.b2cl.map(r => _csvLine([r.invoice_no, r.invoice_date, r.invoice_value, r.place_of_supply, r.rate, N(r.taxable).toFixed(2), N(r.cess).toFixed(2)])));
 
   const b2cs = [_csvLine(['Type','Place Of Supply','Rate','Taxable Value','Cess Amount'])]
-    .concat(d.b2cs.map(r => _csvLine([r.type, r.place_of_supply, r.rate, r.taxable.toFixed(2), (r.cess||0).toFixed(2)])));
+    .concat(d.b2cs.map(r => _csvLine([r.type, r.place_of_supply, r.rate, N(r.taxable).toFixed(2), N(r.cess).toFixed(2)])));
 
   const hsn = [_csvLine(['HSN','Description','UQC','Total Quantity','Total Value','Rate','Taxable Value','Integrated Tax','Central Tax','State Tax','Cess'])]
-    .concat(d.hsn.map(r => _csvLine([r.hsn, '', r.unit, r.qty.toFixed(2), (r.taxable + r.cgst + r.sgst + r.igst + (r.cess||0)).toFixed(2), r.rate, r.taxable.toFixed(2), r.igst.toFixed(2), r.cgst.toFixed(2), r.sgst.toFixed(2), (r.cess||0).toFixed(2)])));
+    .concat(d.hsn.map(r => _csvLine([r.hsn, '', r.unit, N(r.qty).toFixed(2), (N(r.taxable) + N(r.cgst) + N(r.sgst) + N(r.igst) + N(r.cess)).toFixed(2), r.rate, N(r.taxable).toFixed(2), N(r.igst).toFixed(2), N(r.cgst).toFixed(2), N(r.sgst).toFixed(2), N(r.cess).toFixed(2)])));
 
   const docs = [_csvLine(['Nature of Document','Sr. No. From','Sr. No. To','Total Number','Cancelled','Net Issued'])]
     .concat([_csvLine(['Invoices for outward supply','','', d.docs.issued, d.docs.cancelled, d.docs.net])]);
