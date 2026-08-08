@@ -7940,7 +7940,14 @@ function renderCell(col, l, statuses) {
               class: 'btn icon', title: 'Send Calendly meeting link via WhatsApp',
               onclick: ev => { ev.stopPropagation(); sendCalendlyLink(l); }
             }, '📅')
-        ) : null
+        ) : null,
+        // QUALITY_FLAG_ROW_v1 — managers/admins get a per-row ⚑ flag so they can
+        // mark THIS lead for quality review without opening it or bulk-selecting.
+        _canFlag() ? h('button', {
+          class: 'btn icon', title: 'Mark this lead for quality review (Manager)',
+          style: { color: '#c2410c' },
+          onclick: ev => { ev.stopPropagation(); markReviewPrompt([l.id]); }
+        }, '⚑') : null
       );
     }
     case 'email':    return h('td', {}, l.email || '');
