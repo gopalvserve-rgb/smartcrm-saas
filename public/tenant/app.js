@@ -9833,6 +9833,11 @@ async function openLeadModal(id) {
     Number(lead.qualified) === 1 ? h('span', { class: 'qual-pill ok' }, '✓ Qualified') : null,
     // SHARE_LEAD_v1: 🤝 Share button + co-owner chips. Visible on existing leads only.
     id ? h('span', { class: 'share-row', id: 'share-row-' + id }, '') : null,
+    // QUALITY_FLAG_PERLEAD_v1 — managers/admins can flag THIS lead for review
+    // straight from its detail header (mirrors the bulk ⚑ Review button).
+    (id && CRM.user && ['admin','manager'].includes(CRM.user.role))
+      ? h('button', { class: 'btn sm', style: { marginLeft: 'auto', background: '#fff7ed', color: '#c2410c', borderColor: '#fed7aa', fontWeight: '700' }, title: 'Mark this lead for quality review (Manager)', onclick: () => markReviewPrompt([id]) }, '⚑ Review')
+      : null,
     h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
   ));
 
@@ -55847,8 +55852,12 @@ VIEWS.aimanager = async (view) => {
 function _qsev(s){ return s==='high'?'#b91c1c':s==='medium'?'#b45309':'#64748b'; }
 function _qwhen(t){ try{ return new Date(t).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(_){ return String(t||'').slice(0,16); } }
 
-async function markReviewPrompt() {
-  const ids = selectedIds(); if (!ids.length) { toast('Select at least one lead to mark'); return; }
+async function markReviewPrompt(presetIds) {
+  // presetIds: optional array of lead ids (per-lead ⚑ Review). Falls back to the
+  // current bulk selection when called from the bulk bar.
+  const preset = Array.isArray(presetIds) && presetIds.length;
+  const ids = preset ? presetIds.map(Number) : selectedIds();
+  if (!ids.length) { toast('Select at least one lead to mark'); return; }
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
   const typeSel = h('select', { class: 'input', style: { width: '100%' } },
     ...['Bad Call','Improper Follow-up','Missed Follow-up','Wrong Info Given','No Update','Other'].map(t => h('option', { value: t }, t)));
@@ -55861,7 +55870,7 @@ async function markReviewPrompt() {
     try {
       for (const id of ids) { await api('api_leadFlags_create', { lead_id: Number(id), type: typeSel.value, severity: sevSel.value, comment: cmt.value }); }
       toast('Flagged ' + ids.length + ' lead(s) for review', 'ok'); modal.remove();
-      try { clearSelection(); } catch (_) {}
+      if (!preset) { try { clearSelection(); } catch (_) {} }
     } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '⚑ Save & notify agent'; }
   };
   modal.appendChild(h('div', { class: 'modal' },
