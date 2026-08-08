@@ -6330,7 +6330,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
     h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
     h('button', { class: 'btn sm', onclick: bulkNurturePrompt, title: 'Enroll selected leads in a nurture sequence' }, '🌱 Nurture'),
-    (window.CRM && CRM.user && ['admin','manager'].includes(CRM.user.role)) ? h('button', { class: 'btn sm', onclick: markReviewPrompt, title: 'Mark selected leads for quality review (Manager)' }, '⚑ Review') : null,
+    _canFlag() ? h('button', { class: 'btn sm', onclick: markReviewPrompt, title: 'Mark selected leads for quality review (Manager)' }, '⚑ Review') : null,
     h('button', { class: 'btn sm', onclick: bulkMergePrompt, title: 'Merge selected leads into one' }, '🔀 Merge'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
     h('button', { class: 'btn sm ghost', onclick: () => clearSelection() }, 'Clear')
@@ -9835,7 +9835,7 @@ async function openLeadModal(id) {
     id ? h('span', { class: 'share-row', id: 'share-row-' + id }, '') : null,
     // QUALITY_FLAG_PERLEAD_v1 — managers/admins can flag THIS lead for review
     // straight from its detail header (mirrors the bulk ⚑ Review button).
-    (id && CRM.user && ['admin','manager'].includes(CRM.user.role))
+    (id && _canFlag())
       ? h('button', { class: 'btn sm', style: { marginLeft: 'auto', background: '#fff7ed', color: '#c2410c', borderColor: '#fed7aa', fontWeight: '700' }, title: 'Mark this lead for quality review (Manager)', onclick: () => markReviewPrompt([id]) }, '⚑ Review')
       : null,
     h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
@@ -55851,6 +55851,9 @@ VIEWS.aimanager = async (view) => {
 // ============================================================
 function _qsev(s){ return s==='high'?'#b91c1c':s==='medium'?'#b45309':'#64748b'; }
 function _qwhen(t){ try{ return new Date(t).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(_){ return String(t||'').slice(0,16); } }
+// Who may mark leads for quality review — admins & managers (owner/superadmin
+// treated as admin). Case-insensitive so a differently-cased role still works.
+function _canFlag(){ const r=String((window.CRM&&CRM.user&&CRM.user.role)||'').toLowerCase(); return ['admin','manager','owner','superadmin'].includes(r); }
 
 async function markReviewPrompt(presetIds) {
   // presetIds: optional array of lead ids (per-lead ⚑ Review). Falls back to the
@@ -59971,5 +59974,35 @@ VIEWS.ecorders = async (view) => {
   );
   view.appendChild(tbl);
 };
+
+// AUTO_UPDATE_v1 — the CRM is a long-lived single page, so a freshly deployed
+// app.js only reaches a browser on a full reload. Users kept running stale code
+// (missing new buttons, "x is not a function" on new download handlers). This
+// watcher reads the version the page loaded with from its own <script> tag,
+// then periodically re-reads index.html; if the deployed app.js version changed
+// it reloads once so everyone silently moves to the latest build.
+(function _autoUpdate(){
+  try {
+    var tag = Array.prototype.slice.call(document.scripts).find(function(s){ return /app\.js\?v=/.test(s.src||''); });
+    var MY = tag ? (tag.src.match(/[?&]v=([^&]+)/)||[])[1] : null;
+    if (!MY) return;
+    var reloading = false;
+    async function check(){
+      if (reloading) return;
+      try {
+        var html = await fetch('./', { cache: 'no-store' }).then(function(r){ return r.text(); });
+        var m = html.match(/app\.js\?v=([^"'&]+)/i);
+        if (m && m[1] && m[1] !== MY) {
+          reloading = true;
+          try { if (typeof toast === 'function') toast('Updating to the latest version…', 'ok'); } catch(_){}
+          setTimeout(function(){ location.reload(true); }, 900);
+        }
+      } catch(_){}
+    }
+    setInterval(check, 5 * 60 * 1000);       // every 5 min
+    window.addEventListener('focus', check);  // and whenever they return to the tab
+    setTimeout(check, 15000);                 // one early check after load
+  } catch(_){}
+})();
 
 // Stub views — other pack sidebar items show "com
