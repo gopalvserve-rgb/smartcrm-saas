@@ -1077,6 +1077,11 @@ async function _gstr1Data(companyId, from, to) {
 
     ls.forEach(ln => {
       const rate = num(ln.gst_pct, 0);
+      // GSTR1_NUMCOERCE_v1 — PG numeric columns arrive as strings, so "0 + '15000'"
+      // string-concatenates and multi-line HSN/B2CS totals became "0150005 00" → NaN.
+      // Coerce every line amount to a real number here, at the source.
+      const _tx = num(ln.taxable_value, 0), _cg = num(ln.cgst, 0), _sg = num(ln.sgst, 0),
+            _ig = num(ln.igst, 0), _ce = num(ln.cess, 0);
       if (isB2B) {
         b2b.push({
           gstin: inv.customer_gstin, name: inv.customer_name,
@@ -1084,27 +1089,27 @@ async function _gstr1Data(companyId, from, to) {
           invoice_value: totalValue, place_of_supply: inv.place_of_supply || inv.customer_state,
           reverse_charge: inv.is_reverse_charge ? 'Y' : 'N',
           invoice_type: 'Regular', rate,
-          taxable: ln.taxable_value, cgst: ln.cgst, sgst: ln.sgst, igst: ln.igst, cess: ln.cess
+          taxable: _tx, cgst: _cg, sgst: _sg, igst: _ig, cess: _ce
         });
       } else if (isInterState && totalValue > b2cl_threshold) {
         b2cl.push({
           invoice_no: inv.invoice_no, invoice_date: inv.invoice_date,
           invoice_value: totalValue, place_of_supply: inv.place_of_supply || inv.customer_state,
-          rate, taxable: ln.taxable_value, igst: ln.igst, cess: ln.cess
+          rate, taxable: _tx, igst: _ig, cess: _ce
         });
       } else {
         const key = (inv.place_of_supply || inv.customer_state || '') + '|' + rate.toFixed(2) +
                     '|' + (isInterState ? 'INTER' : 'INTRA');
         const cur = b2cs.get(key) || { type: isInterState ? 'OE' : 'OE', place_of_supply: inv.place_of_supply || inv.customer_state, rate, taxable: 0, cgst:0, sgst:0, igst:0, cess:0 };
-        cur.taxable += ln.taxable_value; cur.cgst += ln.cgst; cur.sgst += ln.sgst; cur.igst += ln.igst; cur.cess += (ln.cess || 0);
+        cur.taxable += _tx; cur.cgst += _cg; cur.sgst += _sg; cur.igst += _ig; cur.cess += _ce;
         b2cs.set(key, cur);
       }
 
       const hkey = (ln.hsn_sac || '') + '|' + rate.toFixed(2);
       const h = hsn.get(hkey) || { hsn: ln.hsn_sac || '', unit: ln.unit || '', rate, qty: 0, taxable: 0, cgst:0, sgst:0, igst:0, cess:0 };
       h.qty += num(ln.qty, 0);
-      h.taxable += ln.taxable_value;
-      h.cgst += ln.cgst; h.sgst += ln.sgst; h.igst += ln.igst; h.cess += (ln.cess || 0);
+      h.taxable += _tx;
+      h.cgst += _cg; h.sgst += _sg; h.igst += _ig; h.cess += _ce;
       hsn.set(hkey, h);
     });
   });
