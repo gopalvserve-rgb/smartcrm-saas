@@ -125,7 +125,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-08-08-quality-v4" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-08-08-flag-v5" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -166,7 +166,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-08-08-quality-v4';
+          s.src = 'app.js?v=2026-08-08-flag-v5';
           document.body.appendChild(s);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
@@ -180,7 +180,7 @@
           hol.src = 'holiday.js?v=2026-07-18-pkg-builder-v2';
           document.body.appendChild(hol);
           var wap = document.createElement('script');   // WHATSAPP_PACK_v1
-          wap.src = 'whatsapp.js?v=2026-08-08-quality-v4';
+          wap.src = 'whatsapp.js?v=2026-08-08-flag-v5';
           document.body.appendChild(wap);
           // RE_PACK_v2 (2026-06-27) — isolated pack SPA
           var re = document.createElement('script');
@@ -249,7 +249,7 @@
           cp.src = 'copilotProactive.js?v=2026-06-27-restore-v1'; cp.defer = true;
           document.body.appendChild(cp);
           var lv = document.createElement('script');          // LEADS_VIEW_V2 — Modern + Inbox lead page theme
-          lv.src = 'leadsV2.js?v=2026-08-08-quality-flag-v1'; lv.defer = true;
+          lv.src = 'leadsV2.js?v=2026-08-08-flag-v5'; lv.defer = true;
           document.body.appendChild(lv);
           var av = document.createElement('script');          // AICALL_v1 — VAPI AI calling config
           av.src = 'aicallVapi.js?v=2026-06-27-restore-v1'; av.defer = true;

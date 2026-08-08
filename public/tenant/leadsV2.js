@@ -2775,7 +2775,8 @@ tr:hover .lv2-actions { opacity: 1; }
         h('div', { style: { fontSize: '18px', fontWeight: '700', color: '#0f172a' } }, name,
           score ? h('span', { style: { fontSize: '10px', background: bucket === 'hot' ? '#fef2f2' : bucket === 'warm' ? '#fffbeb' : '#eff6ff', color: bucket === 'hot' ? '#b91c1c' : bucket === 'warm' ? '#b45309' : '#1e40af', padding: '2px 7px', borderRadius: '4px', fontWeight: '700', marginLeft: '8px' } }, score + ' · ' + (l.smart_category || bucket.toUpperCase())) : null),
         h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px' } }, (l.phone || '') + (l.email ? ' · ' + l.email : '') + ' · ' + (l.source || ''))),
-      h('button', { style: { padding: '8px 14px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }, onclick: () => doViewFull(l) }, '✏ Open')));
+      h('button', { style: { padding: '8px 14px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }, onclick: () => doViewFull(l) }, '✏ Open'),
+      _lv2CanFlag() ? h('button', { style: { padding: '8px 14px', background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }, title: 'Mark this lead for quality review (Manager)', onclick: () => { if (window.markReviewPrompt) window.markReviewPrompt([l.id]); } }, '⚑ Review') : null));
 
     const body = h('div', { class: 'lv2-so-body', id: 'lv2-so-body', style: { flex: '1', overflowY: 'auto', padding: '16px 22px' } });
     host.appendChild(body);
