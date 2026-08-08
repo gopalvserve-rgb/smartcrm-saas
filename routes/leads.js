@@ -3817,7 +3817,143 @@ async function api_leads_waPhoneOptions(token) {
   });
 }
 
+// ============================================================
+// MANAGER_QUALITY_FLAGS_v1 — a Manager/Admin marks a lead for review
+// (Bad Call, Improper Follow-up, etc.); the assigned agent (caller)
+// reverts/responds; the manager sees the revert; a Quality report
+// aggregates everything. Per config: the agent can mark it resolved.
+// ============================================================
+async function _ensureLeadFlags() {
+  // Idempotent + cheap; runs per-call because each tenant has its own DB
+  // (a per-process cache would skip table creation for other tenants).
+  await db.query(`CREATE TABLE IF NOT EXISTS lead_flags (
+    id SERIAL PRIMARY KEY,
+    lead_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'medium',
+    comment TEXT,
+    manager_id INTEGER, manager_name TEXT,
+    agent_id INTEGER, agent_name TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    agent_revert TEXT, reverted_at TIMESTAMPTZ,
+    resolved_at TIMESTAMPTZ, resolved_by INTEGER, resolved_by_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_lead_flags_lead ON lead_flags(lead_id)`); } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_lead_flags_agent ON lead_flags(agent_id)`); } catch (_) {}
+}
+function _isMgr(me) { return ['admin', 'manager'].includes(me.role); }
+
+async function api_leadFlags_create(token, payload) {
+  const me = await authUser(token);
+  if (!_isMgr(me)) throw new Error('Only a Manager or Admin can mark a lead for review');
+  await _ensureLeadFlags();
+  const p = payload || {};
+  const leadId = Number(p.lead_id); if (!leadId) throw new Error('lead_id required');
+  const lead = await db.findById('leads', leadId); if (!lead) throw new Error('Lead not found');
+  const type = String(p.type || 'Other').slice(0, 60);
+  const severity = ['low', 'medium', 'high'].includes(String(p.severity)) ? p.severity : 'medium';
+  const comment = String(p.comment || '').slice(0, 2000);
+  let agentId = lead.assigned_to ? Number(lead.assigned_to) : null;
+  let agentName = '';
+  if (agentId) { const u = await db.findById('users', agentId).catch(() => null); agentName = u ? (u.name || u.email || '') : ''; }
+  await db.insert('lead_flags', {
+    lead_id: leadId, type, severity, comment,
+    manager_id: me.id, manager_name: me.name || me.email || '',
+    agent_id: agentId, agent_name: agentName, status: 'open'
+  });
+  if (agentId) {
+    try {
+      await db.insert('notifications', {
+        user_id: agentId, type: 'lead_flag',
+        title: '⚑ Manager review: ' + type,
+        body: severity.toUpperCase() + ' — ' + (comment || 'Please review this lead'),
+        link: '#/myreviews', is_read: 0
+      });
+    } catch (_) {}
+  }
+  return { ok: true };
+}
+
+async function api_leadFlags_forLead(token, leadId) {
+  await authUser(token);
+  await _ensureLeadFlags();
+  const rows = (await db.query(`SELECT * FROM lead_flags WHERE lead_id=$1 ORDER BY created_at DESC`, [Number(leadId)])).rows;
+  return rows;
+}
+
+async function api_leadFlags_mine(token) {
+  const me = await authUser(token);
+  await _ensureLeadFlags();
+  const rows = (await db.query(
+    `SELECT f.*, l.name AS lead_name, l.phone AS lead_phone
+       FROM lead_flags f LEFT JOIN leads l ON l.id=f.lead_id
+      WHERE f.agent_id=$1 ORDER BY (f.status='open') DESC, f.created_at DESC LIMIT 500`, [me.id])).rows;
+  return { rows };
+}
+
+async function api_leadFlags_revert(token, payload) {
+  const me = await authUser(token);
+  await _ensureLeadFlags();
+  const p = payload || {};
+  const id = Number(p.flag_id); if (!id) throw new Error('flag_id required');
+  const revert = String(p.revert || '').slice(0, 2000);
+  const f = (await db.query(`SELECT * FROM lead_flags WHERE id=$1`, [id])).rows[0];
+  if (!f) throw new Error('Flag not found');
+  if (!_isMgr(me) && Number(f.agent_id) !== Number(me.id)) throw new Error('Only the assigned agent can respond to this flag');
+  await db.query(`UPDATE lead_flags SET agent_revert=$1, reverted_at=NOW() WHERE id=$2`, [revert, id]);
+  if (f.manager_id) {
+    try {
+      await db.insert('notifications', {
+        user_id: f.manager_id, type: 'lead_flag_revert',
+        title: '↩ Agent responded to your review',
+        body: (me.name || me.email || 'Agent') + ': ' + revert, link: '#/quality', is_read: 0
+      });
+    } catch (_) {}
+  }
+  return { ok: true };
+}
+
+async function api_leadFlags_resolve(token, payload) {
+  const me = await authUser(token);
+  await _ensureLeadFlags();
+  const p = payload || {};
+  const id = Number(p.flag_id); if (!id) throw new Error('flag_id required');
+  const f = (await db.query(`SELECT * FROM lead_flags WHERE id=$1`, [id])).rows[0];
+  if (!f) throw new Error('Flag not found');
+  if (!_isMgr(me) && Number(f.agent_id) !== Number(me.id)) throw new Error('Not allowed');
+  if (p.reopen) {
+    await db.query(`UPDATE lead_flags SET status='open', resolved_at=NULL, resolved_by=NULL, resolved_by_name=NULL WHERE id=$1`, [id]);
+  } else {
+    await db.query(`UPDATE lead_flags SET status='resolved', resolved_at=NOW(), resolved_by=$1, resolved_by_name=$2 WHERE id=$3`,
+      [me.id, me.name || me.email || '', id]);
+  }
+  return { ok: true };
+}
+
+async function api_leadFlags_report(token, filters) {
+  const me = await authUser(token);
+  if (!_isMgr(me)) throw new Error('Manager or Admin only');
+  await _ensureLeadFlags();
+  filters = filters || {};
+  const wh = []; const vals = []; let i = 1;
+  if (filters.from)     { wh.push(`f.created_at >= $${i++}`); vals.push(filters.from); }
+  if (filters.to)       { wh.push(`f.created_at < ($${i++}::date + 1)`); vals.push(filters.to); }
+  if (filters.agent_id) { wh.push(`f.agent_id = $${i++}`); vals.push(Number(filters.agent_id)); }
+  if (filters.type)     { wh.push(`f.type = $${i++}`); vals.push(filters.type); }
+  if (filters.status)   { wh.push(`f.status = $${i++}`); vals.push(filters.status); }
+  const where = wh.length ? 'WHERE ' + wh.join(' AND ') : '';
+  const rows = (await db.query(
+    `SELECT f.*, l.name AS lead_name, l.phone AS lead_phone
+       FROM lead_flags f LEFT JOIN leads l ON l.id=f.lead_id
+       ${where} ORDER BY f.created_at DESC LIMIT 3000`, vals)).rows;
+  const byType = {}, byAgent = {}; let open = 0;
+  rows.forEach(r => { byType[r.type] = (byType[r.type] || 0) + 1; const a = r.agent_name || 'Unassigned'; byAgent[a] = (byAgent[a] || 0) + 1; if (r.status !== 'resolved') open++; });
+  return { rows, total: rows.length, open, byType, byAgent };
+}
+
 module.exports = {
+  api_leadFlags_create, api_leadFlags_forLead, api_leadFlags_mine, api_leadFlags_revert, api_leadFlags_resolve, api_leadFlags_report,
   api_leads_list,
   api_leads_waPhoneOptions,   /* WA_NUMBER_FILTER_v1 */ api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_recoverDeleted, api_leads_recoverFromWebhookLog, api_leads_recoverFromArchive, api_leads_reassignByActivity, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,

@@ -1797,6 +1797,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Sales CRM', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',                icon: '🎯', search: 'lead enquiry inquiry prospect customer lead new lead' },
+    { id: 'quality',    label: 'Quality Review',       icon: '⚑', search: 'quality review violation flag bad call improper follow up manager mark caller revert response report resolved' },
     { id: 'pipeline',   label: 'Pipeline',             icon: '📈', search: 'pipeline funnel stage deal stage lead stage' },
     { id: 'kanban',     label: 'Kanban Board',         icon: '🗂️', search: 'kanban board stage board card view' },
     { id: 'followups',  label: 'Follow-ups',           icon: '🔔', search: 'follow up follow-up reminder callback next action' },
@@ -6329,6 +6330,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
     h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
     h('button', { class: 'btn sm', onclick: bulkNurturePrompt, title: 'Enroll selected leads in a nurture sequence' }, '🌱 Nurture'),
+    (window.CRM && CRM.user && ['admin','manager'].includes(CRM.user.role)) ? h('button', { class: 'btn sm', onclick: markReviewPrompt, title: 'Mark selected leads for quality review (Manager)' }, '⚑ Review') : null,
     h('button', { class: 'btn sm', onclick: bulkMergePrompt, title: 'Merge selected leads into one' }, '🔀 Merge'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
     h('button', { class: 'btn sm ghost', onclick: () => clearSelection() }, 'Clear')
@@ -55837,6 +55839,136 @@ VIEWS.aimanager = async (view) => {
     setTimeout(() => { if (document.body.contains(card)) dismiss(); }, 45_000);
   }
 })();
+
+// ============================================================
+// MANAGER_QUALITY_FLAGS_v1 — mark modal + role-adaptive Quality view
+// ============================================================
+function _qsev(s){ return s==='high'?'#b91c1c':s==='medium'?'#b45309':'#64748b'; }
+function _qwhen(t){ try{ return new Date(t).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(_){ return String(t||'').slice(0,16); } }
+
+async function markReviewPrompt() {
+  const ids = selectedIds(); if (!ids.length) { toast('Select at least one lead to mark'); return; }
+  const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+  const typeSel = h('select', { class: 'input', style: { width: '100%' } },
+    ...['Bad Call','Improper Follow-up','Missed Follow-up','Wrong Info Given','No Update','Other'].map(t => h('option', { value: t }, t)));
+  const sevSel = h('select', { class: 'input', style: { width: '100%' } },
+    ...[['high','High'],['medium','Medium'],['low','Low']].map(([v,l]) => h('option', { value: v, selected: v==='high'?'selected':null }, l)));
+  const cmt = h('textarea', { class: 'input', rows: 3, style: { width: '100%' }, placeholder: 'What went wrong / what to fix — the agent will see this' });
+  const saveBtn = h('button', { class: 'btn primary' }, '⚑ Save & notify agent');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      for (const id of ids) { await api('api_leadFlags_create', { lead_id: Number(id), type: typeSel.value, severity: sevSel.value, comment: cmt.value }); }
+      toast('Flagged ' + ids.length + ' lead(s) for review', 'ok'); modal.remove();
+      try { clearSelection(); } catch (_) {}
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '⚑ Save & notify agent'; }
+  };
+  modal.appendChild(h('div', { class: 'modal' },
+    h('h3', {}, '⚑ Mark ' + ids.length + ' lead(s) for review'),
+    h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'Type'), typeSel,
+    h('label', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.5rem', display: 'block' } }, 'Severity'), sevSel,
+    h('label', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.5rem', display: 'block' } }, 'Comment (agent will see this)'), cmt,
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end', marginTop: '.8rem' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'), saveBtn)));
+  document.body.appendChild(modal);
+}
+
+VIEWS.quality = async (view) => {
+  view.innerHTML = '';
+  const role = (window.CRM && CRM.user && CRM.user.role) || 'agent';
+  const isMgr = ['admin','manager'].includes(role);
+  view.appendChild(h('h3', {}, '⚑ Quality Review'));
+
+  if (!isMgr) {
+    view.appendChild(h('p', { class: 'muted' }, 'Reviews your manager marked on your leads. Add your response, then mark it resolved once fixed.'));
+    const box = h('div', {}); view.appendChild(box);
+    async function loadMine() {
+      box.innerHTML = '⏳ Loading…';
+      try {
+        const r = await api('api_leadFlags_mine'); box.innerHTML = '';
+        if (!(r.rows || []).length) { box.appendChild(h('p', { class: 'muted' }, 'No reviews on your leads. 🎉')); return; }
+        r.rows.forEach(f => {
+          const card = h('div', { class: 'card', style: { marginBottom: '.7rem', borderLeft: '4px solid ' + (f.status==='resolved'?'#10b981':'#ef4444') } });
+          card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '.5rem', flexWrap: 'wrap' } },
+            h('div', {}, h('b', {}, f.type), ' · ', h('span', { style: { fontWeight: 700, color: _qsev(f.severity) } }, String(f.severity||'').toUpperCase()), ' · ', h('span', { class: 'muted' }, f.lead_name || ('Lead #' + f.lead_id))),
+            h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'by ' + (f.manager_name||'Manager') + ' · ' + _qwhen(f.created_at))));
+          if (f.comment) card.appendChild(h('div', { style: { margin: '.4rem 0', padding: '.5rem .6rem', background: '#fef2f2', borderRadius: '6px', fontSize: '.88rem' } }, f.comment));
+          if (f.status !== 'resolved') {
+            const ta = h('textarea', { class: 'input', rows: 2, style: { width: '100%' }, placeholder: 'Your response / what you did…' }, f.agent_revert || '');
+            const rb = h('button', { class: 'btn sm' }, '↩ Save response');
+            rb.onclick = async () => { try { await api('api_leadFlags_revert', { flag_id: f.id, revert: ta.value }); toast('Response saved', 'ok'); loadMine(); } catch (e) { toast(e.message, 'err'); } };
+            const res = h('button', { class: 'btn sm primary' }, '✓ Mark resolved');
+            res.onclick = async () => { try { await api('api_leadFlags_resolve', { flag_id: f.id }); toast('Marked resolved', 'ok'); loadMine(); } catch (e) { toast(e.message, 'err'); } };
+            card.appendChild(ta);
+            card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.4rem' } }, rb, res));
+          } else {
+            if (f.agent_revert) card.appendChild(h('div', { style: { margin: '.3rem 0', fontSize: '.85rem' } }, h('b', {}, 'Your response: '), f.agent_revert));
+            card.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem' } }, '✓ Resolved ' + (f.resolved_at ? _qwhen(f.resolved_at) : '')));
+          }
+          box.appendChild(card);
+        });
+      } catch (e) { box.innerHTML = ''; box.appendChild(h('p', { style: { color: '#b91c1c' } }, e.message)); }
+    }
+    loadMine(); return;
+  }
+
+  view.appendChild(h('p', { class: 'muted' }, 'Every lead flagged by managers, the caller’s response, and resolution status. Mark leads for review from the Leads list (select leads → ⚑ Review).'));
+  const from = h('input', { type: 'date', class: 'input', style: { width: '150px' } });
+  const to   = h('input', { type: 'date', class: 'input', style: { width: '150px' } });
+  const statusSel = h('select', { class: 'input' }, h('option', { value: '' }, 'All status'), h('option', { value: 'open' }, 'Open'), h('option', { value: 'resolved' }, 'Resolved'));
+  const go = h('button', { class: 'btn primary' }, '🔄 Load');
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap', margin: '.6rem 0 1rem' } },
+    h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'From'), from, h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'To'), to, statusSel, go));
+  const kpis = h('div', { class: 'cards' }); view.appendChild(kpis);
+  const byAgentBox = h('div', { style: { margin: '.8rem 0' } }); view.appendChild(byAgentBox);
+  const tblBox = h('div', { style: { overflowX: 'auto' } }); view.appendChild(tblBox);
+  go.onclick = load;
+  async function load() {
+    kpis.innerHTML = '⏳'; byAgentBox.innerHTML = ''; tblBox.innerHTML = '';
+    try {
+      const r = await api('api_leadFlags_report', { from: from.value || undefined, to: to.value || undefined, status: statusSel.value || undefined });
+      kpis.innerHTML = '';
+      const mk = (l, n, c) => h('div', { class: 'card' }, h('div', { class: 'muted', style: { fontSize: '.75rem' } }, l), h('div', { style: { fontSize: '1.6rem', fontWeight: 700, color: c || '' } }, String(n)));
+      const topType = Object.entries(r.byType || {}).sort((a, b) => b[1] - a[1])[0];
+      const topAgent = Object.entries(r.byAgent || {}).sort((a, b) => b[1] - a[1])[0];
+      kpis.appendChild(mk('Total flags', r.total, '#6366f1'));
+      kpis.appendChild(mk('Open', r.open, '#ef4444'));
+      kpis.appendChild(mk('Top type', topType ? topType[0] : '—'));
+      kpis.appendChild(mk('Most flagged', topAgent ? topAgent[0] : '—'));
+      const maxA = Math.max(1, ...Object.values(r.byAgent || { x: 1 }));
+      byAgentBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginBottom: '.3rem' } }, 'Flags by agent'));
+      Object.entries(r.byAgent || {}).sort((a, b) => b[1] - a[1]).forEach(([a, n]) => {
+        byAgentBox.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.2rem 0' } },
+          h('div', { style: { width: '150px', fontSize: '.85rem' } }, a),
+          h('div', { style: { flex: 1, background: '#eef2ff', borderRadius: '6px', height: '10px', overflow: 'hidden' } }, h('div', { style: { width: (n / maxA * 100) + '%', height: '100%', background: '#6366f1' } })),
+          h('div', { style: { width: '30px', textAlign: 'right', fontSize: '.85rem' } }, String(n))));
+      });
+      byAgentBox.appendChild(h('button', { class: 'btn sm ghost', style: { marginTop: '.5rem' }, onclick: () => {
+        const head = ['Lead','Agent','Type','Severity','Manager','Date','Agent response','Status'];
+        const esc = v => { v = v == null ? '' : String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? '"' + v + '"' : v; };
+        const lines = [head.join(',')].concat((r.rows || []).map(f => [f.lead_name || ('#' + f.lead_id), f.agent_name || '', f.type, f.severity, f.manager_name || '', String(f.created_at || '').slice(0, 16), f.agent_revert || '', f.status].map(esc).join(',')));
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'quality-report.csv'; document.body.appendChild(a); a.click(); a.remove();
+      } }, '⬇ Download CSV'));
+      if (!(r.rows || []).length) { tblBox.appendChild(h('p', { class: 'muted' }, 'No flags in this range.')); return; }
+      tblBox.appendChild(h('table', { class: 'mini-table', style: { width: '100%' } },
+        h('thead', {}, h('tr', {}, ...['Lead','Agent','Type','Sev','Manager','Date','Agent response','Status',''].map(x => h('th', {}, x)))),
+        h('tbody', {}, ...r.rows.map(f => h('tr', {},
+          h('td', {}, f.lead_name || ('#' + f.lead_id)),
+          h('td', {}, f.agent_name || '—'),
+          h('td', {}, f.type),
+          h('td', {}, h('span', { style: { fontWeight: 700, color: _qsev(f.severity) } }, String(f.severity || '').toUpperCase())),
+          h('td', {}, f.manager_name || '—'),
+          h('td', { style: { whiteSpace: 'nowrap' } }, String(f.created_at || '').slice(0, 10)),
+          h('td', { style: { maxWidth: '240px' } }, f.agent_revert || h('span', { class: 'muted' }, '—')),
+          h('td', {}, h('span', { style: { fontWeight: 700, color: f.status === 'resolved' ? '#10b981' : '#ef4444' } }, f.status)),
+          h('td', {}, f.status === 'resolved'
+            ? h('button', { class: 'btn sm ghost', onclick: async () => { try { await api('api_leadFlags_resolve', { flag_id: f.id, reopen: 1 }); toast('Reopened'); load(); } catch (e) { toast(e.message, 'err'); } } }, 'Reopen')
+            : h('button', { class: 'btn sm', onclick: async () => { try { await api('api_leadFlags_resolve', { flag_id: f.id }); toast('Resolved'); load(); } catch (e) { toast(e.message, 'err'); } } }, 'Resolve'))
+        )))));
+    } catch (e) { kpis.innerHTML = ''; tblBox.appendChild(h('p', { style: { color: '#b91c1c' } }, e.message)); }
+  }
+  load();
+};
 
 VIEWS.activityreport = async (view) => {
   view.innerHTML = '';
