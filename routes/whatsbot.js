@@ -35,6 +35,21 @@ const WA_SUBSCRIBE_FIELDS = [
   'smb_app_state_sync'                 // Coexistence app-state events
 ];
 
+// WA_WEBHOOK_OVERRIDE_v1 — after the migration to the new server the Meta app's
+// app-level WhatsApp webhook still pointed at the dead old PHP endpoint
+// (smartcrmsolution.com/whatsbot_webhook_all.php), so NO tenant received inbound
+// messages. Every subscribed_apps POST must therefore also set a per-WABA
+// override_callback_uri pointing at THIS CRM's /hook/whatsapp_webhook, with the
+// tenant's own verify token, so a re-subscribe can never revert to the dead URL.
+async function _waSubscribeBody() {
+  const base = (process.env.PUBLIC_BASE_URL || process.env.BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  let vt = '';
+  try { vt = await db.getConfig('WHATSAPP_VERIFY_TOKEN', ''); } catch (_) {}
+  const body = { subscribed_fields: WA_SUBSCRIBE_FIELDS };
+  if (vt) { body.override_callback_uri = base + '/hook/whatsapp_webhook'; body.verify_token = vt; }
+  return body;
+}
+
 // ---------- Platform-wide Facebook credentials -----------------------
 // These are the SAME for every tenant/client on the platform — they are the
 // CRM vendor's Meta Developer App, not the client's. Clients only press
@@ -435,7 +450,7 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId, opts) {
     const sub = await fetch(`${GRAPH}/${wabaId}/subscribed_apps`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subscribed_fields: WA_SUBSCRIBE_FIELDS })
+      body: JSON.stringify(await _waSubscribeBody())
     });
     const sj = await sub.json();
     if (sj.error) { subscribeOk = false; subscribeErr = sj.error.message; }
@@ -780,7 +795,7 @@ async function api_wb_webhook_subscribe(token) {
       const fetchRes = await fetch(`${GRAPH}/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscribed_fields: WA_SUBSCRIBE_FIELDS })
+        body: JSON.stringify(await _waSubscribeBody())
       });
       const j = await fetchRes.json().catch(() => ({}));
       const ok = fetchRes.ok && j && (j.success === true || !j.error);
