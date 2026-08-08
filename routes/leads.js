@@ -3857,11 +3857,11 @@ async function api_leadFlags_create(token, payload) {
   let agentId = lead.assigned_to ? Number(lead.assigned_to) : null;
   let agentName = '';
   if (agentId) { const u = await db.findById('users', agentId).catch(() => null); agentName = u ? (u.name || u.email || '') : ''; }
-  await db.insert('lead_flags', {
-    lead_id: leadId, type, severity, comment,
-    manager_id: me.id, manager_name: me.name || me.email || '',
-    agent_id: agentId, agent_name: agentName, status: 'open'
-  });
+  await db.query(
+    `INSERT INTO lead_flags (lead_id, type, severity, comment, manager_id, manager_name, agent_id, agent_name, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open')`,
+    [leadId, type, severity, comment, me.id, me.name || me.email || '', agentId, agentName]
+  );
   if (agentId) {
     try {
       await db.insert('notifications', {
