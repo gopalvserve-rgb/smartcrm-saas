@@ -2931,6 +2931,21 @@ app.get('/api/wa/media/:msgId', async (req, res) => {
     });
 });
 
+// ── WA_CENTRAL_FORWARDER_v1 (2026-08-08) ────────────────────────────────────
+// Restores the central WhatsApp webhook forwarder that died when the old PHP
+// hosting for smartcrmsolution.com root was replaced by this Express app.
+// Meta App "Smart CRM Solution" posts ALL WhatsApp events for every connected
+// number to /whatsbot_webhook_all.php on this host; these routes route them to
+// each CRM's own webhook via wa_connections.json (see routes/waForwarder.js).
+try {
+  const waForwarder = require('./routes/waForwarder');
+  app.get('/whatsbot_webhook_all.php', waForwarder.verify);
+  app.post('/whatsbot_webhook_all.php', bodyParser.json({ limit: '2mb' }), waForwarder.event);
+  app.post('/whatsbot_register.php', bodyParser.json({ limit: '256kb' }), waForwarder.register);
+  app.post('/whatsbot_deregister.php', bodyParser.json({ limit: '256kb' }), waForwarder.deregister);
+  console.log('[waFwd] central WhatsApp forwarder routes registered');
+} catch (e) { console.warn('[waFwd] could not register forwarder routes:', e.message); }
+
 app.all(/^\/api(\/.*)?$/, (req, res) => {
   res.status(404).json({ error: 'Not found: ' + req.method + ' ' + req.originalUrl });
 });
