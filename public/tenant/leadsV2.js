@@ -1882,7 +1882,7 @@ tr:hover .lv2-actions { opacity: 1; }
   }
 
   // QUALITY_FLAG_LV2_v1 — who can mark a lead for review (admin/manager).
-  function _lv2CanFlag(){ try { const r=String((window.CRM&&window.CRM.user&&window.CRM.user.role)||'').toLowerCase(); return ['admin','manager','owner','superadmin'].includes(r); } catch(_){ return false; } }
+  function _lv2CanFlag(){ try { var c=(typeof CRM!=='undefined'&&CRM)?CRM:(window.CRM||null); var r=String((c&&c.user&&c.user.role)||'').toLowerCase(); return ['admin','manager','owner','superadmin'].includes(r); } catch(_){ return false; } }
   function renderModernRow(l) {
     const name = l.name || l.phone || '—';
     const stat = statusClass(l.status_name);

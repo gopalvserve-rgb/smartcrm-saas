@@ -51,6 +51,12 @@ const CRM = {
     })()
   }
 };
+// CRM_WINDOW_ALIAS_v1 — `const CRM` is a lexical global, NOT a property of
+// window. Separate scripts (leadsV2.js, etc.) and any `window.CRM` checks
+// therefore couldn't see CRM.user, so role-gated UI (e.g. the ⚑ quality-review
+// flag) silently never rendered. Expose the real object on window so every
+// `window.CRM` reference resolves to it. Kept in sync by reference.
+try { window.CRM = CRM; } catch (_) {}
 
 // PERM_ONBOARDING_SOFT_v1 (2026-05-28) — soft top-banner instead of hard
 // redirect to the permission onboarding activity. The Android side now
@@ -55860,7 +55866,7 @@ function _qsev(s){ return s==='high'?'#b91c1c':s==='medium'?'#b45309':'#64748b';
 function _qwhen(t){ try{ return new Date(t).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(_){ return String(t||'').slice(0,16); } }
 // Who may mark leads for quality review — admins & managers (owner/superadmin
 // treated as admin). Case-insensitive so a differently-cased role still works.
-function _canFlag(){ const r=String((window.CRM&&CRM.user&&CRM.user.role)||'').toLowerCase(); return ['admin','manager','owner','superadmin'].includes(r); }
+function _canFlag(){ try { var c=(typeof CRM!=='undefined'&&CRM)?CRM:(window.CRM||null); var r=String((c&&c.user&&c.user.role)||'').toLowerCase(); return ['admin','manager','owner','superadmin'].includes(r); } catch(_){ return false; } }
 
 async function markReviewPrompt(presetIds) {
   // presetIds: optional array of lead ids (per-lead ⚑ Review). Falls back to the
