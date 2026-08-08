@@ -917,8 +917,10 @@ async function api_wb_templates_sync(token) {
     throw new Error(r.body.error.message);
   }
   const list = r.body.data || [];
-  // Replace the cache atomically
-  await db.query('DELETE FROM wa_templates');
+  // WA_TPL_CREATED_KEEP_v1 — DO NOT delete-then-reinsert: that reset every
+  // template's created_at to the sync moment, making the "Created date" column
+  // meaningless. Upsert instead (ON CONFLICT keeps the original created_at),
+  // then prune only the templates Meta no longer returns.
   for (const t of list) {
     const bodyText = (t.components || []).find(c => c.type === 'BODY')?.text || '';
     const params = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
@@ -934,6 +936,17 @@ async function api_wb_templates_sync(token) {
              body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
              has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
         [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
+      );
+    } catch (_) {}
+  }
+  // Prune templates that no longer exist on Meta (only when Meta returned some,
+  // so a transient empty response never wipes the local cache).
+  if (list.length) {
+    try {
+      await db.query(
+        `DELETE FROM wa_templates
+          WHERE (name, language) NOT IN (SELECT n, l FROM unnest($1::text[], $2::text[]) AS u(n, l))`,
+        [list.map(t => t.name), list.map(t => t.language)]
       );
     } catch (_) {}
   }
@@ -953,7 +966,8 @@ async function api_wb_templates_list(token) {
       refreshed_at: r.refreshed_at,
       created_at: r.created_at || r.refreshed_at
     }))
-    .sort((a, b) => (a.status === 'APPROVED' ? -1 : 1) - (b.status === 'APPROVED' ? -1 : 1) || String(a.name).localeCompare(String(b.name)));
+    /* WA_TPL_SORT_v1 — latest submitted on top (Created date desc) */
+    .sort((a, b) => String(b.created_at || b.refreshed_at || '').localeCompare(String(a.created_at || a.refreshed_at || '')));
 }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return []; } }
 
@@ -1022,7 +1036,8 @@ async function api_wb_templates_create(token, payload) {
        SET status = EXCLUDED.status, category = EXCLUDED.category,
            body_text = EXCLUDED.body_text, components_json = EXCLUDED.components_json,
            body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
-           has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
+           has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW(),
+           created_at = NOW()`,   /* WA_TPL_LASTSUBMIT_v1 — resubmit bumps the "last submitted" date */
       [name, language, status, category, bodyText, JSON.stringify(components),
        params, headerType, hasBtn ? 1 : 0]
     );

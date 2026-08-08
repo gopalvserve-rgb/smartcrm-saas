@@ -19046,7 +19046,8 @@ function _viewWaTemplate(t) {
 
 async function wbTemplates() {
   const wrap = h('div', {});
-  const list = await api('api_wb_templates_list').catch(() => []);
+  const list = (await api('api_wb_templates_list').catch(() => []))
+    .slice().sort((a, b) => String(b.created_at || b.refreshed_at || '').localeCompare(String(a.created_at || a.refreshed_at || '')));  /* latest submitted on top */
   // Template creation/edit/submission lives on the Meta side — this CRM
   // can only consume APPROVED templates. We expose a one-click jump-off
   // to Meta's Template Manager so admins don't have to hunt for the URL.
@@ -19080,7 +19081,7 @@ async function wbTemplates() {
   wrap.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Name'), h('th', {}, 'Lang'), h('th', {}, 'Category'),
-      h('th', {}, 'Status'), h('th', {}, 'Created'), h('th', {}, 'Body params'), h('th', {}, 'Body preview'), h('th', {}, ''))),
+      h('th', {}, 'Status'), h('th', {}, 'Created Date'), h('th', {}, 'Body params'), h('th', {}, 'Body preview'), h('th', {}, ''))),
     h('tbody', {}, ...list.map(t => h('tr', {},
       h('td', {}, h('code', {}, t.name)),
       h('td', {}, t.language),
@@ -19090,7 +19091,7 @@ async function wbTemplates() {
           style: t.status === 'APPROVED' ? { background: '#10b981', color: '#fff' } : (t.status === 'PENDING' ? { background: '#f59e0b', color: '#fff' } : null)
         }, t.status)
       ),
-      h('td', { style: { whiteSpace: 'nowrap', fontSize: '.8rem' } }, t.created_at ? new Date(t.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'),
+      h('td', { style: { whiteSpace: 'nowrap', fontSize: '.8rem' }, title: t.created_at ? new Date(t.created_at).toLocaleString('en-IN') : '' }, t.created_at ? new Date(t.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'),
       h('td', {}, t.body_params),
       h('td', { style: { maxWidth: '420px' }, title: t.body_text || '' }, (t.body_text || '').slice(0, 100) + ((t.body_text || '').length > 100 ? '\u2026' : '')),
       h('td', { style: { whiteSpace: 'nowrap' } },
