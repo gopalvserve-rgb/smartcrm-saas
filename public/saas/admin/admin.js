@@ -5781,14 +5781,44 @@ VIEWS.transactions = async (view) => {
   view.appendChild(h('h1', {}, '💳 Transactions'));
   view.appendChild(h('div', { class: 'muted', style: { marginBottom: '10px' } }, 'All tenant payments — auto-recorded from signups, plus manual entries. Filter by type/GST and search.'));
   const _inr = v => '₹' + Number(v || 0).toLocaleString('en-IN');
-  const state = { page: 1, pageSize: 25, type: '', gst_mode: '', q: '' };
+  const state = { page: 1, pageSize: 25, type: '', gst_mode: '', q: '', from: '', to: '', preset: 'this_month' };
+  // TXN_DATE_EXPORT_v1 — date shortcuts (Today/Yesterday/This week/This month/Last month/Custom) + Excel export
+  const _d2 = n => String(n).padStart(2, '0');
+  const _ymd = dt => dt.getFullYear() + '-' + _d2(dt.getMonth() + 1) + '-' + _d2(dt.getDate());
+  function _txnPreset(kind) {
+    const n = new Date(); let from = null, to = null;
+    if (kind === 'today') { from = new Date(n); to = new Date(n); }
+    else if (kind === 'yesterday') { from = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1); to = new Date(from); }
+    else if (kind === 'this_week') { const dow = (n.getDay() + 6) % 7; from = new Date(n.getFullYear(), n.getMonth(), n.getDate() - dow); to = new Date(n); }
+    else if (kind === 'this_month') { from = new Date(n.getFullYear(), n.getMonth(), 1); to = new Date(n.getFullYear(), n.getMonth() + 1, 0); }
+    else if (kind === 'last_month') { from = new Date(n.getFullYear(), n.getMonth() - 1, 1); to = new Date(n.getFullYear(), n.getMonth(), 0); }
+    else return { from: '', to: '' };
+    return { from: _ymd(from), to: _ymd(to) };
+  }
+  Object.assign(state, _txnPreset('this_month'));
   let tenants = [];
   try { tenants = await api('api_saas_tenants_list', {}); } catch (_) {}
 
   const sumHost = h('div', {}); view.appendChild(sumHost);
   const typeSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, 'All types'), h('option', { value: 'auto' }, 'Auto (signup)'), h('option', { value: 'manual' }, 'Manual'));
   const gstSel = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, 'GST + No GST'), h('option', { value: 'gst' }, 'With GST'), h('option', { value: 'no_gst' }, 'No GST'));
-  const qInp = h('input', { type: 'search', placeholder: 'Search tenant / txn id…', style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '180px' } });
+  const qInp = h('input', { type: 'search', placeholder: 'Search tenant / txn id…', style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '160px' } });
+  // ---- Date shortcut chips + custom range ----
+  const _chipStyle = active => ({ padding: '.3rem .6rem', fontSize: '.78rem', borderRadius: '6px', border: '1px solid ' + (active ? '#4f46e5' : '#cbd5e1'), background: active ? '#eef2ff' : '#fff', color: active ? '#4338ca' : '#334155', cursor: 'pointer', fontWeight: active ? '700' : '500' });
+  const _presets = [['today', 'Today'], ['yesterday', 'Yesterday'], ['this_week', 'This week'], ['this_month', 'This month'], ['last_month', 'Last month'], ['all', 'All']];
+  const fromInp = h('input', { type: 'date', value: state.from, style: { padding: '.35rem', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '.8rem' } });
+  const toInp = h('input', { type: 'date', value: state.to, style: { padding: '.35rem', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '.8rem' } });
+  const _chipEls = {};
+  const chipRow = h('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } });
+  const _paintChips = () => _presets.forEach(([k]) => Object.assign(_chipEls[k].style, _chipStyle(state.preset === k)));
+  _presets.forEach(([k, l]) => {
+    const c = h('button', { style: _chipStyle(state.preset === k), onclick: () => { state.preset = k; const r = _txnPreset(k); state.from = r.from; state.to = r.to; fromInp.value = r.from; toInp.value = r.to; _paintChips(); state.page = 1; reload(); } }, l);
+    _chipEls[k] = c; chipRow.appendChild(c);
+  });
+  fromInp.onchange = () => { state.from = fromInp.value; state.preset = 'custom'; _paintChips(); state.page = 1; reload(); };
+  toInp.onchange = () => { state.to = toInp.value; state.preset = 'custom'; _paintChips(); state.page = 1; reload(); };
+  const excelBtn = h('button', { class: 'btn', title: 'Download all filtered transactions as Excel (CSV)', style: { background: '#16a34a', color: '#fff', borderColor: '#16a34a' } }, '⬇ Excel');
+  excelBtn.onclick = () => _txnExport();
   const addBtn = h('button', { class: 'btn primary' }, '+ Manual entry');
   addBtn.onclick = () => _openTxnCreateModal(tenants, reload);
   const backfillBtn = h('button', { class: 'btn', title: 'Create transactions from this month\'s PAID invoices (skips ones already recorded)' }, '↺ Backfill this month');
@@ -5810,17 +5840,43 @@ VIEWS.transactions = async (view) => {
     catch (e) { toast(e.message, 'err'); }
     backfillBtn.disabled = false; backfillBtn.textContent = '↺ Backfill this month';
   };
-  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 12px' } }, typeSel, gstSel, qInp, h('span', { style: { flex: '1' } }), backfillBtn, addBtn));
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 12px' } },
+    chipRow, fromInp, h('span', { style: { color: '#94a3b8' } }, '→'), toInp,
+    typeSel, gstSel, qInp,
+    h('span', { style: { flex: '1' } }), excelBtn, backfillBtn, addBtn));
   const tblHost = h('div', {}); view.appendChild(tblHost);
   const pager = h('div', {}); view.appendChild(pager);
   typeSel.onchange = () => { state.type = typeSel.value; state.page = 1; reload(); };
   gstSel.onchange = () => { state.gst_mode = gstSel.value; state.page = 1; reload(); };
   qInp.oninput = () => { state.q = qInp.value; state.page = 1; reload(); };
 
+  // TXN_DATE_EXPORT_v1 — download all rows in the current filter as Excel/CSV
+  async function _txnExport() {
+    excelBtn.disabled = true; const _lbl = excelBtn.textContent; excelBtn.textContent = '⏳ Exporting…';
+    try {
+      const ex = await api('api_saas_txn_list', { type: state.type || null, gst_mode: state.gst_mode || null, q: state.q || null, from: state.from || null, to: (state.to ? state.to + ' 23:59:59' : null), page: 1, pageSize: 100000 });
+      const rows = ex.rows || [];
+      const cols = ['Date', 'Tenant', 'Type', 'Amount (INR)', 'Sale (INR)', 'GST (INR)', 'Mode', 'Txn ID', 'Remarks'];
+      const esc = v => { v = (v == null ? '' : String(v)); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+      const lines = [cols.join(',')];
+      rows.forEach(r => lines.push([String(r.txn_date || r.created_at || '').slice(0, 10), r.org_name || ('#' + (r.tenant_id || '')), r.type || '', r.amount_inr || 0, r.sale_amount_inr || 0, r.gst_amount_inr || 0, r.transaction_mode || '', r.transaction_id || '', r.notes || ''].map(esc).join(',')));
+      const su = ex.summary || {};
+      lines.push(''); lines.push(['TOTAL', '', String(su.count != null ? su.count : rows.length), su.total || 0, su.sale || 0, su.gst || 0, '', '', ''].map(esc).join(','));
+      const csv = '﻿' + lines.join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      const tag = state.preset === 'custom' ? (state.from + '_to_' + state.to) : (state.preset || 'all');
+      a.href = url; a.download = 'transactions_' + tag + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      toast('Exported ' + rows.length + ' transaction(s)', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+    excelBtn.disabled = false; excelBtn.textContent = _lbl;
+  }
+
   async function reload() {
     tblHost.innerHTML = '<div class="muted">Loading…</div>';
     let d;
-    try { d = await api('api_saas_txn_list', { type: state.type || null, gst_mode: state.gst_mode || null, q: state.q || null, page: state.page, pageSize: state.pageSize }); }
+    try { d = await api('api_saas_txn_list', { type: state.type || null, gst_mode: state.gst_mode || null, q: state.q || null, from: state.from || null, to: (state.to ? state.to + ' 23:59:59' : null), page: state.page, pageSize: state.pageSize }); }
     catch (e) { tblHost.innerHTML = ''; tblHost.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
     const su = d.summary || {};
     const kpi = (l, v, c) => h('div', { style: { flex: '1', minWidth: '130px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 14px' } }, h('div', { style: { fontSize: '1.3rem', fontWeight: '800', color: c || '#0f172a' } }, v), h('div', { style: { fontSize: '.72rem', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' } }, l));
