@@ -33539,6 +33539,10 @@ async function adminBotFlows() {
       catch (e) { toast(e.message, 'err'); return; }
     }
 
+    // WA_FLOW_ASSIGN_v1 — staff list for the Assign User node's pickers.
+    let flowUsers = (window.CRM && CRM.cache && CRM.cache.users) || [];
+    if (!flowUsers.length) { try { flowUsers = await api('api_users_list') || []; } catch (_) { flowUsers = []; } }
+
     // Component palette - what users can drag onto the canvas.
     const PALETTE = [
       { type: 'message',    icon: '💬', title: 'Text Message',  hint: 'Plain text, with up to 3 quick-reply buttons.' },
@@ -33554,6 +33558,7 @@ async function adminBotFlows() {
       { type: 'save_field', icon: '💾', title: 'Save to Lead',  hint: 'Write a variable into a lead column.' },
       { type: 'ai_handoff', icon: '🤖', title: 'AI Personal Assistant', hint: 'Hand the rest of the chat to the AI Bot.' },
       { type: 'handoff',    icon: '🙋', title: 'Human Handoff', hint: 'Silence bots and pass to a human agent.' },
+      { type: 'assign',     icon: '👤', title: 'Assign User',   hint: 'Assign the lead + chat to staff — specific, round-robin, sticky, or default.' },  /* WA_FLOW_ASSIGN_v1 */
       { type: 'end',        icon: '🏁', title: 'End',            hint: 'Final message and close the session.' }
     ];
 
@@ -33872,7 +33877,7 @@ async function adminBotFlows() {
         }})
       );
       // Body for nearly all types
-      if (!['save_field','branch'].includes(node.type)) {
+      if (!['save_field','branch','assign'].includes(node.type)) {
         m.appendChild(h('label', {}, node.type === 'cta' ? 'Body text' : (['ask'].includes(node.type) ? 'Question' : 'Body')));
         m.appendChild(h('textarea', { rows: 3, style: { width: '100%' }, onchange: (e) => node.body = e.target.value }, node.body || ''));
       }
@@ -33933,6 +33938,59 @@ async function adminBotFlows() {
         }
         rRules();
         m.appendChild(rwrap);
+      }
+      // WA_FLOW_ASSIGN_v1 — Assign User node editor
+      if (node.type === 'assign') {
+        node.assign_mode = node.assign_mode || 'specific';
+        m.appendChild(h('label', {}, 'Assign to'));
+        const modeSel = h('select', { style: { width: '100%' } },
+          h('option', { value: 'specific' },    'Specific staff — always this person'),
+          h('option', { value: 'round_robin' }, 'Round-robin — rotate a pool one by one'),
+          h('option', { value: 'sticky' },      'Sticky — same agent as this customer last time'),
+          h('option', { value: 'default' },     'Default agent — auto-assign to the default'));
+        modeSel.value = node.assign_mode;
+        const dyn = h('div', { style: { marginTop: '.5rem' } });
+        function renderDyn() {
+          dyn.innerHTML = '';
+          const mode = node.assign_mode;
+          if (mode === 'specific' || mode === 'default') {
+            dyn.appendChild(h('label', {}, mode === 'default' ? 'Default agent' : 'Staff member'));
+            const sel = h('select', { style: { width: '100%' } },
+              h('option', { value: '' }, '— pick staff —'),
+              ...flowUsers.map(u => h('option', { value: u.id, selected: Number(node.assign_user_id) === Number(u.id) ? 'selected' : null }, u.name || u.email || ('User #' + u.id))));
+            sel.onchange = () => node.assign_user_id = Number(sel.value) || null;
+            dyn.appendChild(sel);
+            if (mode === 'default') dyn.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem' } }, 'If left blank, falls back to the first admin.'));
+          }
+          if (mode === 'round_robin' || mode === 'sticky') {
+            dyn.appendChild(h('label', {}, mode === 'sticky' ? 'Fallback pool (for brand-new customers)' : 'Staff pool (rotates one by one)'));
+            node.pool = Array.isArray(node.pool) ? node.pool : [];
+            const box = h('div', { style: { maxHeight: '170px', overflow: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.4rem' } });
+            if (!flowUsers.length) box.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'No staff found.'));
+            flowUsers.forEach(u => {
+              const cb = h('input', { type: 'checkbox', checked: node.pool.map(Number).includes(Number(u.id)) ? 'checked' : null });
+              cb.onchange = () => { const id = Number(u.id); const set = new Set(node.pool.map(Number)); if (cb.checked) set.add(id); else set.delete(id); node.pool = Array.from(set); };
+              box.appendChild(h('label', { style: { display: 'flex', gap: '.45rem', alignItems: 'center', padding: '.15rem 0', fontWeight: '400' } }, cb, (u.name || u.email || ('User #' + u.id))));
+            });
+            dyn.appendChild(box);
+          }
+        }
+        modeSel.onchange = () => { node.assign_mode = modeSel.value; renderDyn(); };
+        m.appendChild(modeSel);
+        m.appendChild(dyn);
+        renderDyn();
+        // Notify agent
+        const notifyChk = h('input', { type: 'checkbox', checked: node.notify === false ? null : 'checked' });
+        notifyChk.onchange = () => node.notify = notifyChk.checked;
+        m.appendChild(h('label', { style: { display: 'flex', gap: '.45rem', alignItems: 'center', marginTop: '.7rem', fontWeight: '400' } }, notifyChk, 'Notify the assigned agent (bell notification)'));
+        // Optional confirmation to the customer
+        const confChk = h('input', { type: 'checkbox', checked: node.confirm_send ? 'checked' : null });
+        const confWrap = h('div', { style: { marginTop: '.35rem', display: node.confirm_send ? 'block' : 'none' } });
+        confChk.onchange = () => { node.confirm_send = confChk.checked; confWrap.style.display = confChk.checked ? 'block' : 'none'; };
+        m.appendChild(h('label', { style: { display: 'flex', gap: '.45rem', alignItems: 'center', marginTop: '.4rem', fontWeight: '400' } }, confChk, 'Also send a confirmation message to the customer'));
+        confWrap.appendChild(h('textarea', { rows: 2, style: { width: '100%' }, placeholder: 'You are now connected with {{agent}} 👋', onchange: (e) => node.confirm_text = e.target.value }, node.confirm_text || ''));
+        confWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem' } }, 'Use {{agent}} for the staff name, or any {{variable}} captured earlier in the flow.'));
+        m.appendChild(confWrap);
       }
       // Buttons (message/image/audio/video/document/ask)
       if (['message','image','audio','video','document','ask','button'].includes(node.type)) {

@@ -81,6 +81,17 @@ async function _ensureSchema() {
   // Dedupe any stray rows, then ensure a unique index so one session per phone.
   try { await db.query(`DELETE FROM wa_bot_flow_sessions a USING wa_bot_flow_sessions b WHERE a.phone = b.phone AND a.id < b.id`); } catch (_) {}
   try { await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_wa_bot_flow_sessions_phone ON wa_bot_flow_sessions(phone)`); } catch (_) {}
+  // WA_FLOW_ASSIGN_v1 — per-node round-robin cursor for the Assign User node.
+  // Additive: only used by the new 'assign' node type; nothing else reads it.
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS wa_flow_assign_rr (
+        flow_id  INTEGER NOT NULL,
+        node_id  TEXT    NOT NULL,
+        last_idx INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (flow_id, node_id)
+      )`);
+  } catch (_) {}
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -411,6 +422,94 @@ async function _executeNode(session, flow, node, ctx) {
           ON CONFLICT (phone) DO UPDATE SET handoff_at = NOW(), updated_at = NOW()
         `, [session.phone]);
       } catch (_) {}
+      return { stop: true, completed: true };
+    }
+    case 'assign': {
+      // WA_FLOW_ASSIGN_v1 — assign the lead + chat to a staff member at the end
+      // of the flow, per the customer's answers. Fully self-contained + wrapped
+      // in try/catch so a failure can NEVER break the flow. Modes:
+      //   specific     — always node.assign_user_id
+      //   round_robin  — rotate node.pool[] one-by-one (cursor in wa_flow_assign_rr)
+      //   sticky       — same agent this customer had last time, else round-robin pool
+      //   default      — node.assign_user_id, else first admin
+      try {
+        const flowId = flow.id || session.flow_id;
+        const mode = String(node.assign_mode || 'specific');
+        const poolIds = (Array.isArray(node.pool) ? node.pool : []).map(Number).filter(Boolean);
+        const _activeIds = async (ids) => {
+          if (!ids || !ids.length) return [];
+          try {
+            const r = await db.query(`SELECT id FROM users WHERE id = ANY($1::int[]) AND COALESCE(is_active,1) <> 0`, [ids]);
+            return r.rows.map(x => Number(x.id));
+          } catch (_) { return ids.map(Number); }
+        };
+        let userId = null;
+        if (mode === 'specific' || mode === 'default') {
+          userId = Number(node.assign_user_id) || null;
+          if (mode === 'default' && !userId) {
+            try { const r = await db.query(`SELECT id FROM users WHERE role='admin' AND COALESCE(is_active,1) <> 0 ORDER BY id LIMIT 1`); userId = (r.rows[0] && r.rows[0].id) || null; } catch (_) {}
+          }
+        } else if (mode === 'sticky') {
+          try { const r = await db.query(`SELECT assigned_to FROM wa_chat_assignments WHERE phone = $1`, [session.phone]); if (r.rows[0] && r.rows[0].assigned_to) userId = Number(r.rows[0].assigned_to); } catch (_) {}
+          if (!userId && session.lead_id) { try { const r = await db.query(`SELECT assigned_to FROM leads WHERE id = $1`, [session.lead_id]); if (r.rows[0] && r.rows[0].assigned_to) userId = Number(r.rows[0].assigned_to); } catch (_) {} }
+        }
+        // round-robin (also the sticky fallback for a brand-new customer)
+        if (!userId && (mode === 'round_robin' || mode === 'sticky')) {
+          const active = await _activeIds(poolIds);
+          if (active.length) {
+            let idx = 0;
+            try {
+              await db.query(`CREATE TABLE IF NOT EXISTS wa_flow_assign_rr (flow_id INTEGER NOT NULL, node_id TEXT NOT NULL, last_idx INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (flow_id, node_id))`);
+              const up = await db.query(
+                `INSERT INTO wa_flow_assign_rr (flow_id, node_id, last_idx) VALUES ($1, $2, 0)
+                 ON CONFLICT (flow_id, node_id) DO UPDATE SET last_idx = wa_flow_assign_rr.last_idx + 1
+                 RETURNING last_idx`, [Number(flowId) || 0, String(node.id)]);
+              idx = (up.rows[0] && Number(up.rows[0].last_idx)) || 0;
+            } catch (_) { idx = 0; }
+            userId = active[idx % active.length];
+          }
+        }
+        // final validation — the resolved user must still be active
+        if (userId && !(await _activeIds([userId])).length) userId = null;
+
+        if (userId) {
+          // 1) assign the lead
+          if (session.lead_id) {
+            try { await db.query(`UPDATE leads SET assigned_to = $1, updated_at = NOW() WHERE id = $2`, [userId, session.lead_id]); } catch (_) {}
+          }
+          // 2) assign / own the chat (also keeps the AI bot off this thread)
+          try {
+            await db.query(
+              `INSERT INTO wa_chat_assignments (phone, assigned_to, assigned_by, assigned_at, note)
+               VALUES ($1, $2, $3, NOW(), $4)
+               ON CONFLICT (phone) DO UPDATE SET assigned_to = EXCLUDED.assigned_to, assigned_by = EXCLUDED.assigned_by, assigned_at = NOW(), note = EXCLUDED.note`,
+              [session.phone, userId, flow.created_by || null, 'Bot flow: ' + (flow.name || '')]);
+          } catch (_) {}
+          try { await db.query(`INSERT INTO wa_chat_assignment_log (phone, assigned_to, assigned_by) VALUES ($1,$2,$3)`, [session.phone, userId, flow.created_by || null]); } catch (_) {}
+          // 3) notify the agent (bell) unless turned off
+          if (node.notify !== false) {
+            try {
+              let who = '';
+              if (session.lead_id) { const r = await db.query(`SELECT name, phone FROM leads WHERE id = $1`, [session.lead_id]); who = (r.rows[0] && (r.rows[0].name || r.rows[0].phone)) || ''; }
+              await db.insert('notifications', {
+                user_id: userId, type: 'lead_assign',
+                title: '🤖 New WhatsApp lead assigned',
+                body: (who ? who + ' — ' : '') + 'via bot flow "' + (flow.name || '') + '"',
+                link: session.lead_id ? ('#/leads?id=' + session.lead_id) : '#/whatsbot/chat', is_read: 0
+              });
+            } catch (_) {}
+          }
+          // 4) optional confirmation to the customer
+          if (node.confirm_send && node.confirm_text) {
+            let agentName = '';
+            try { const r = await db.query(`SELECT name FROM users WHERE id = $1`, [userId]); agentName = (r.rows[0] && r.rows[0].name) || ''; } catch (_) {}
+            const msg = _interpolate(String(node.confirm_text).replace(/\{\{\s*agent\s*\}\}/gi, agentName), session.vars);
+            try { await wb._sendText({ to: session.phone, text: msg, leadId: session.lead_id }, cfg); } catch (_) {}
+          }
+        }
+      } catch (e) { console.warn('[waflow] assign node failed:', e.message); }
+      const nextA = node.default_next ? _findNode(flow, node.default_next) : null;
+      if (nextA) return await _executeNode(session, flow, nextA, ctx);
       return { stop: true, completed: true };
     }
     case 'end':
