@@ -3868,7 +3868,7 @@ async function api_leadFlags_create(token, payload) {
         user_id: agentId, type: 'lead_flag',
         title: '⚑ Manager review: ' + type,
         body: severity.toUpperCase() + ' — ' + (comment || 'Please review this lead'),
-        link: '#/myreviews', is_read: 0
+        link: '#/quality', is_read: 0
       });
     } catch (_) {}
   }
