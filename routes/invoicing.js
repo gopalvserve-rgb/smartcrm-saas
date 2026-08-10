@@ -1177,6 +1177,10 @@ async function api_invoicing_gstr1_csv(token, opts) {
 
   return {
     period: { from: opts.from, to: opts.to },
+    // GSTR1_XLSX_DATA_v1 — expose the structured rows (incl. cgst/sgst/igst
+    // split) so the client can build a single multi-sheet .xlsx in the
+    // government offline-utility layout. Additive; existing `sheets` unchanged.
+    data: { b2b: d.b2b, b2cl: d.b2cl, b2cs: d.b2cs, hsn: d.hsn, cdnr: d.cdnr, docs: d.docs },
     sheets: {
       b2b:  b2b.join('\n'),
       b2cl: b2cl.join('\n'),

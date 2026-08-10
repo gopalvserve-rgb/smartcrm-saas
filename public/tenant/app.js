@@ -59043,7 +59043,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
         out.appendChild(h('div', { style:{padding:'.7rem .9rem',background:'#f8fafc',borderRadius:'8px',marginBottom:'1rem'} },
           'Issued: ' + r.docs.issued + ' • Cancelled: ' + r.docs.cancelled + ' • Net: ' + r.docs.net
         ));
-        out.appendChild(_btn('Download GSTR-1 (CSV bundle)', { onclick: downloadCsv }));
+        out.appendChild(_btn('Download GSTR-1 (Excel — all sheets in one file)', { onclick: downloadXlsx }));
       } catch (e) { toast(e.message, 'err'); }
     }
     async function downloadCsv() {
@@ -59056,6 +59056,102 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
           setTimeout(() => _dlCsv(`gstr1_${name}_${from.value}_to_${to.value}.csv`, csv), idx * 600);
         });
         toast('Downloading ' + entries.length + ' GSTR-1 sheet' + (entries.length > 1 ? 's' : '') + '…', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+    /* GSTR1_XLSX_v1 — single .xlsx workbook with one sheet per GSTR-1 section
+     * (B2B, B2CL, B2CS, HSN, Docs) instead of 4-5 separate CSV downloads. The
+     * B2B sheet uses the government offline-utility layout: a merged two-row
+     * header with Place of supply (State Code/Name), Invoice Details, and
+     * Amount of Tax (Central/State/Integrated/Cess) split. */
+    var GST_STATES = {'01':'Jammu & Kashmir','02':'Himachal Pradesh','03':'Punjab','04':'Chandigarh','05':'Uttarakhand','06':'Haryana','07':'Delhi','08':'Rajasthan','09':'Uttar Pradesh','10':'Bihar','11':'Sikkim','12':'Arunachal Pradesh','13':'Nagaland','14':'Manipur','15':'Mizoram','16':'Tripura','17':'Meghalaya','18':'Assam','19':'West Bengal','20':'Jharkhand','21':'Odisha','22':'Chhattisgarh','23':'Madhya Pradesh','24':'Gujarat','25':'Daman & Diu','26':'Dadra & Nagar Haveli and Daman & Diu','27':'Maharashtra','28':'Andhra Pradesh (Old)','29':'Karnataka','30':'Goa','31':'Lakshadweep','32':'Kerala','33':'Tamil Nadu','34':'Puducherry','35':'Andaman & Nicobar Islands','36':'Telangana','37':'Andhra Pradesh','38':'Ladakh','97':'Other Territory','99':'Centre Jurisdiction'};
+    function _gstrStateFrom(gstin, pos) {
+      var code = String(gstin || '').slice(0, 2);
+      if (/^\d\d$/.test(code)) return { code: code, name: GST_STATES[code] || String(pos || '').replace(/^\d+\s*-?\s*/, '') };
+      var m = String(pos || '').match(/^(\d{1,2})\s*-\s*(.+)$/);
+      if (m) return { code: ('0' + m[1]).slice(-2), name: m[2] };
+      return { code: '', name: String(pos || '') };
+    }
+    function _gstrDate(d2) {
+      if (!d2) return '';
+      var m = String(d2).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return m[3] + '/' + m[2] + '/' + m[1];
+      var dt = new Date(d2); if (isNaN(dt)) return String(d2);
+      var p = function (n) { return ('0' + n).slice(-2); };
+      return p(dt.getDate()) + '/' + p(dt.getMonth() + 1) + '/' + dt.getFullYear();
+    }
+    async function downloadXlsx() {
+      try {
+        const r = await api('api_invoicing_gstr1_csv', { company_id: Number(compSel.value), from: from.value, to: to.value });
+        const d = r.data || {};
+        const b2b = d.b2b || [], b2cl = d.b2cl || [], b2cs = d.b2cs || [], hsn = d.hsn || [], docs = d.docs || {};
+        if (!b2b.length && !b2cl.length && !b2cs.length && !hsn.length) {
+          toast('No GST-filable invoices in this range (proforma & cancelled invoices are excluded).', 'warn'); return;
+        }
+        const XLSX = await ensureXLSX();
+        const NUM = v => Math.round((Number(v || 0)) * 100) / 100;
+        const wb = XLSX.utils.book_new();
+
+        if (b2b.length) {
+          const aoa = [
+            ['Sales'],
+            ['GSTIN','Customer Name','Place of supply','','Invoice Details','','','Total Tax%','Taxable Value','Amount of Tax','','','','Total Tax Amt.'],
+            ['','','State Code','State Name','Invoice Number','Invoice Date','Invoice value','','','Central Tax Amount','State/UT Tax Amount','Integrated Tax Amount','Cess Amt.','']
+          ];
+          b2b.forEach(row => {
+            const st = _gstrStateFrom(row.gstin, row.place_of_supply);
+            const cgst = NUM(row.cgst), sgst = NUM(row.sgst), igst = NUM(row.igst), cess = NUM(row.cess);
+            aoa.push([
+              row.gstin || '', row.name || '',
+              st.code, st.name,
+              row.invoice_no || '', _gstrDate(row.invoice_date), NUM(row.invoice_value),
+              NUM(row.rate), NUM(row.taxable),
+              cgst, sgst, igst, cess,
+              NUM(cgst + sgst + igst + cess)
+            ]);
+          });
+          const ws = XLSX.utils.aoa_to_sheet(aoa);
+          ws['!merges'] = [
+            { s:{r:1,c:2}, e:{r:1,c:3} },   // Place of supply
+            { s:{r:1,c:4}, e:{r:1,c:6} },   // Invoice Details
+            { s:{r:1,c:9}, e:{r:1,c:12} },  // Amount of Tax
+            { s:{r:1,c:0}, e:{r:2,c:0} },   // GSTIN
+            { s:{r:1,c:1}, e:{r:2,c:1} },   // Customer Name
+            { s:{r:1,c:7}, e:{r:2,c:7} },   // Total Tax%
+            { s:{r:1,c:8}, e:{r:2,c:8} },   // Taxable Value
+            { s:{r:1,c:13}, e:{r:2,c:13} }  // Total Tax Amt.
+          ];
+          ws['!cols'] = [{wch:18},{wch:26},{wch:10},{wch:16},{wch:14},{wch:12},{wch:13},{wch:9},{wch:13},{wch:16},{wch:17},{wch:17},{wch:10},{wch:13}];
+          XLSX.utils.book_append_sheet(wb, ws, 'B2B');
+        }
+        if (b2cl.length) {
+          const aoa = [['Invoice Number','Invoice Date','Invoice Value','Place Of Supply','Rate','Taxable Value','Integrated Tax','Cess Amount']];
+          b2cl.forEach(x => aoa.push([x.invoice_no||'', _gstrDate(x.invoice_date), NUM(x.invoice_value), x.place_of_supply||'', NUM(x.rate), NUM(x.taxable), NUM(x.igst), NUM(x.cess)]));
+          const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:14},{wch:12},{wch:13},{wch:18},{wch:8},{wch:13},{wch:13},{wch:11}];
+          XLSX.utils.book_append_sheet(wb, ws, 'B2CL');
+        }
+        if (b2cs.length) {
+          const aoa = [['Type','Place Of Supply','Rate','Taxable Value','Central Tax','State/UT Tax','Integrated Tax','Cess']];
+          b2cs.forEach(x => aoa.push([x.type||'OE', x.place_of_supply||'', NUM(x.rate), NUM(x.taxable), NUM(x.cgst), NUM(x.sgst), NUM(x.igst), NUM(x.cess)]));
+          const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:8},{wch:18},{wch:8},{wch:13},{wch:12},{wch:12},{wch:13},{wch:10}];
+          XLSX.utils.book_append_sheet(wb, ws, 'B2CS');
+        }
+        if (hsn.length) {
+          const aoa = [['HSN','Description','UQC','Total Quantity','Total Value','Rate','Taxable Value','Integrated Tax','Central Tax','State/UT Tax','Cess']];
+          hsn.forEach(x => aoa.push([x.hsn||'','',x.unit||'', NUM(x.qty), NUM(NUM(x.taxable)+NUM(x.cgst)+NUM(x.sgst)+NUM(x.igst)+NUM(x.cess)), NUM(x.rate), NUM(x.taxable), NUM(x.igst), NUM(x.cgst), NUM(x.sgst), NUM(x.cess)]));
+          const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:12},{wch:16},{wch:6},{wch:12},{wch:13},{wch:8},{wch:13},{wch:13},{wch:12},{wch:12},{wch:10}];
+          XLSX.utils.book_append_sheet(wb, ws, 'HSN');
+        }
+        {
+          const aoa = [['Nature of Document','Total Number','Cancelled','Net Issued'],
+                       ['Invoices for outward supply', docs.issued||0, docs.cancelled||0, docs.net||0]];
+          const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:28},{wch:14},{wch:12},{wch:12}];
+          XLSX.utils.book_append_sheet(wb, ws, 'Docs');
+        }
+
+        const cname = ((compSel.options[compSel.selectedIndex] || {}).text || 'company').trim();
+        const fn = ('GSTR-1_' + cname + '_' + from.value + '_to_' + to.value + '.xlsx').replace(/[\\/:*?"<>|]+/g, '_');
+        XLSX.writeFile(wb, fn);
+        toast('GSTR-1 Excel downloaded — all sheets in one file.', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     }
   });
