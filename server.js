@@ -96,7 +96,13 @@ const finance         = require('./routes/saas/finance');
 const expenses        = require('./routes/saas/expenses');
 const financeDashboard= require('./routes/saas/financeDashboard');
 const signupRequests  = require('./routes/saas/signupRequests');
-const wlBilling       = require('./routes/saas/whitelabelBilling');
+// WL_MODULE_FIX_v1 (2026-08-10) — the admin SPA and cashfreeWebhook call the
+// plural api_saas_wl_customers_*/invoices_*/settings* surface, which lives in
+// whiteLabelBilling.js (capital L). The lowercase whitelabelBilling.js exported
+// a different, singular surface that the frontend never calls, so saves failed
+// with "Unknown SaaS function: api_saas_wl_customers_save". Register the file
+// the rest of the app actually uses. Same wl_customers/wl_invoices tables.
+const wlBilling       = require('./routes/saas/whiteLabelBilling');
 const saasPermissions = require('./routes/saas/saasPermissions');   // SUPER_ADMIN_PERMS — Roles & Permissions
 const recordingHealth = require('./routes/saas/recordingHealth');   // DEVICE_DIAG — Device Health
 
