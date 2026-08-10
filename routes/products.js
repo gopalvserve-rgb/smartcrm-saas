@@ -13,6 +13,14 @@ async function _ensureProductCols() {
     /* WORKSPACE_v1 — workspace scoping. Empty JSONB [] = all workspaces
      * (today's behaviour, no data migration needed). */
     await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS workspace_ids JSONB DEFAULT '[]'`);
+    /* PRODUCT_MASTER_UNIFY_v1 (2026-08-10) — one product master shared by
+     * BOTH the Quotation and the Invoicing modules. Invoicing needs GST
+     * bill fields (HSN/SAC code, unit of measure, goods-vs-service flag),
+     * so the shared master carries them too. Empty/defaults are harmless
+     * for quotation-only products. */
+    await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS hsn_sac    TEXT`);
+    await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit       TEXT NOT NULL DEFAULT 'PCS'`);
+    await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS is_service INTEGER NOT NULL DEFAULT 0`);
     _columnsEnsured = true;
   } catch (e) {
     console.warn('[products] _ensureProductCols:', e.message);
@@ -45,6 +53,11 @@ async function api_products_save(token, product) {
     workspace_ids: JSON.stringify(wsIds),
     is_active: 1
   };
+  /* PRODUCT_MASTER_UNIFY_v1 — invoicing GST fields, only overwrite when the
+   * caller actually sent them (the Quotation product form omits these). */
+  if (p.hsn_sac !== undefined)    payload.hsn_sac    = p.hsn_sac ? String(p.hsn_sac).slice(0, 20) : null;
+  if (p.unit !== undefined)       payload.unit       = String(p.unit || 'PCS').slice(0, 16) || 'PCS';
+  if (p.is_service !== undefined) payload.is_service = p.is_service ? 1 : 0;
   if (p.id) {
     await db.update('products', p.id, payload);
     try {
