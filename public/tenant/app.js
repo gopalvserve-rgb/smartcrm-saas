@@ -1955,7 +1955,8 @@ const NAV_GROUPS = [
     { id: 'knowledge',  label: 'Knowledge Base',     icon: '📚', search: 'knowledge knowledge base help article faq' },
     { id: 'tutorial',   label: 'SmartCRM Tutorial',  icon: '📖', search: 'tutorial guide help' },
     { id: 'kbvideos',   label: 'Video Tutorials',    icon: '🎬', search: 'video tutorial youtube guide' },
-    { id: 'tickets',    label: 'Support Tickets',    icon: '🎫', search: 'support ticket help desk raise issue' }
+    { id: 'tickets',    label: 'Support Tickets',    icon: '🎫', search: 'support ticket help desk raise issue' },
+    { id: 'customreq',  label: 'Custom Requirements', icon: '🛠', roles: ['admin', 'manager'], search: 'custom requirement feature request pricing quote development customization ask' }
   ] },
   { label: 'Admin & Settings', icon: '⚙️', items: [
     { id: 'users',      label: 'Users',            icon: '👥', roles: ['admin', 'manager'], search: 'users staff team member role' },
@@ -36755,6 +36756,85 @@ function _trkPin(emoji, label) {
   const html = '<div style="background:#fff;border:2px solid #4f46e5;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 1px 4px rgba(0,0,0,.25)" title="' + (label || '') + '">' + emoji + '</div>';
   return L.divIcon({ html, className: '', iconSize: [30, 30], iconAnchor: [15, 15] });
 }
+
+/* CUSTOM_REQ_TENANT_v1 — tenant submits a custom requirement and chats with the
+ * super-admin (who verifies + quotes a price). Full discussion is logged. */
+VIEWS.customreq = async (view) => {
+  view.innerHTML = '';
+  const page = h('div', {});
+  view.appendChild(page);
+  const STAT = { open: ['#0ea5e9', 'Open — awaiting review'], quoted: ['#f59e0b', 'Quoted'], approved: ['#22c55e', 'Approved'], in_progress: ['#6366f1', 'In progress'], done: ['#16a34a', 'Done'], rejected: ['#ef4444', 'Rejected'] };
+  async function load() {
+    page.innerHTML = '<div class="loading">Loading…</div>';
+    let rows = [];
+    try { rows = await api('api_customreq_mine'); } catch (e) { page.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; return; }
+    page.innerHTML = '';
+    page.appendChild(h('div', { class: 'toolbar' },
+      h('h2', { style: { margin: 0 } }, '🛠 Custom Requirements'),
+      h('button', { class: 'btn primary', onclick: () => openSubmit() }, '+ New requirement')));
+    page.appendChild(h('p', { class: 'muted', style: { marginTop: '.2rem' } }, 'Tell us what you need — we’ll review it, quote a price, and discuss it with you right here.'));
+    if (!rows.length) { page.appendChild(h('div', { class: 'empty', style: { padding: '1rem' } }, 'No requirements yet. Click “New requirement” to raise one.')); return; }
+    const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.5rem', marginTop: '.6rem' } });
+    rows.forEach(r => {
+      const st = STAT[r.status] || ['#64748b', r.status];
+      list.appendChild(h('div', { class: 'card', style: { cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '.8rem' }, onclick: () => openThread(r) },
+        h('div', { style: { flex: 1 } },
+          h('div', { style: { fontWeight: 600 } }, r.title),
+          h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.15rem' } }, (r.message_count || 0) + ' message(s) · ' + fmtDate(r.created_at, 'relative'))),
+        r.quote_inr ? h('div', { style: { fontWeight: 700, color: '#0891b2' } }, '₹' + Number(r.quote_inr).toLocaleString('en-IN')) : null,
+        h('span', { style: { background: st[0], color: '#fff', padding: '.2rem .6rem', borderRadius: '999px', fontSize: '.72rem', whiteSpace: 'nowrap' } }, st[1])));
+    });
+    page.appendChild(list);
+  }
+  function openSubmit() {
+    const m = h('div', { class: 'modal-backdrop' }); const card = h('div', { class: 'modal', style: { maxWidth: '480px' } }); m.appendChild(card); document.body.appendChild(m);
+    const title = h('input', { class: 'input', placeholder: 'Short title (e.g. WhatsApp broadcast scheduling)', style: { width: '100%' } });
+    const desc = h('textarea', { class: 'input', rows: '5', placeholder: 'Describe what you need in detail…', style: { width: '100%', fontFamily: 'inherit' } });
+    const out = h('div', { style: { marginTop: '.4rem', fontSize: '.85rem' } });
+    const save = h('button', { class: 'btn primary' }, 'Submit requirement');
+    save.onclick = async () => {
+      save.disabled = true; save.textContent = 'Submitting…';
+      try { await api('api_customreq_submit', { title: title.value, description: desc.value }); m.remove(); toast('Requirement submitted — we’ll get back to you.', 'ok'); load(); }
+      catch (e) { out.innerHTML = '<span style="color:#dc2626">' + esc(e.message) + '</span>'; save.disabled = false; save.textContent = 'Submit requirement'; }
+    };
+    card.append(h('h3', { style: { marginTop: 0 } }, '🛠 New Custom Requirement'),
+      h('label', { class: 'muted', style: { fontSize: '.78rem', fontWeight: 600 } }, 'Title'), title,
+      h('label', { class: 'muted', style: { fontSize: '.78rem', fontWeight: 600, display: 'block', marginTop: '.5rem' } }, 'Details'), desc,
+      out, h('div', { style: { marginTop: '.8rem', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'), save));
+  }
+  async function openThread(r) {
+    const m = h('div', { class: 'modal-backdrop' }); const card = h('div', { class: 'modal', style: { maxWidth: '560px', display: 'flex', flexDirection: 'column', maxHeight: '85vh' } }); m.appendChild(card); document.body.appendChild(m);
+    card.appendChild(h('h3', { style: { marginTop: 0 } }, '🛠 ' + r.title));
+    const info = h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.4rem' } });
+    const thread = h('div', { style: { flex: 1, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.6rem', background: '#f8fafc', minHeight: '200px' } });
+    const inp = h('textarea', { class: 'input', rows: '2', placeholder: 'Type a reply…', style: { width: '100%', fontFamily: 'inherit' } });
+    const send = h('button', { class: 'btn primary' }, 'Send');
+    send.onclick = async () => {
+      const msg = inp.value.trim(); if (!msg) return; send.disabled = true;
+      try { await api('api_customreq_postMessage', { cr_id: r.id, message: msg }); inp.value = ''; await paint(); } catch (e) { toast(e.message, 'err'); }
+      send.disabled = false;
+    };
+    card.append(info, thread, h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.5rem' } }, inp, send),
+      h('div', { style: { marginTop: '.5rem', textAlign: 'right' } }, h('button', { class: 'btn ghost', onclick: () => { m.remove(); load(); } }, 'Close')));
+    async function paint() {
+      let d; try { d = await api('api_customreq_thread', r.id); } catch (e) { thread.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; return; }
+      const cr = d.requirement || {};
+      info.innerHTML = ''; info.append('Status: ', h('b', {}, (STAT[cr.status] || ['', cr.status])[1]),
+        cr.quote_inr ? h('span', { style: { marginLeft: '.6rem' } }, '· Quoted price: ', h('b', { style: { color: '#0891b2' } }, '₹' + Number(cr.quote_inr).toLocaleString('en-IN'))) : '');
+      thread.innerHTML = '';
+      (d.messages || []).forEach(mr => {
+        const mine = mr.sender_type === 'tenant';
+        thread.appendChild(h('div', { style: { display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start', marginBottom: '.4rem' } },
+          h('div', { style: { maxWidth: '80%', padding: '.45rem .65rem', borderRadius: '10px', background: mine ? '#2563eb' : '#fff', color: mine ? '#fff' : '#0f172a', border: mine ? 'none' : '1px solid #e2e8f0', fontSize: '.85rem', whiteSpace: 'pre-wrap' } },
+            h('div', { style: { fontSize: '.68rem', opacity: .75, marginBottom: '.1rem' } }, (mine ? 'You' : (mr.sender_name || 'Support')) + ' · ' + fmtDate(mr.created_at, 'relative')),
+            mr.message)));
+      });
+      thread.scrollTop = thread.scrollHeight;
+    }
+    paint();
+  }
+  load();
+};
 
 VIEWS.attendance = async (view) => {
   view.innerHTML = '';

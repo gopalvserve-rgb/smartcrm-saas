@@ -131,6 +131,7 @@ const ROUTE_FILES = [
   'waCatalogue',        /* WA_CATALOGUE_v1 — WhatsApp Catalogue library (Vserve-gated) */
   'setupTour',          /* SETUP_TOUR_v1 — first-run admin setup checklist */
   'tradeIndia',         /* TRADEINDIA_API_v1 — scheduled TradeIndia inquiry import */
+  'customReqTenant',    /* CUSTOM_REQ_TENANT_v1 — tenant submits custom requirements + chats with super-admin */
 ];
 
 const API = {};

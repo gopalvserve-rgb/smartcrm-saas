@@ -96,9 +96,55 @@ async function api_saas_cr_update(token, payload) {
   return { ok: true };
 }
 
+// CUSTOM_REQ_TENANT_v1 — discussion thread (shared with the tenant side).
+async function _ensureMsgSchema() {
+  await control.query(`CREATE TABLE IF NOT EXISTS custom_requirement_messages (
+    id SERIAL PRIMARY KEY,
+    cr_id INTEGER NOT NULL,
+    sender_type TEXT NOT NULL,
+    sender_name TEXT,
+    message TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await control.query(`CREATE INDEX IF NOT EXISTS idx_cr_msg_thread ON custom_requirement_messages(cr_id, id)`);
+}
+
+/** Admin: full discussion thread for a requirement. */
+async function api_saas_cr_thread(token, crId) {
+  await requireSuperAdmin(token);
+  await _ensureMsgSchema();
+  const cr = await control.findById('custom_requirements', Number(crId));
+  if (!cr) throw new Error('Requirement not found');
+  const t = await control.query('SELECT org_name, slug FROM tenants WHERE id = $1', [cr.tenant_id]);
+  const r = await control.query(
+    `SELECT id, sender_type, sender_name, message, created_at
+       FROM custom_requirement_messages WHERE cr_id = $1 ORDER BY id ASC`, [cr.id]);
+  return { requirement: Object.assign({}, cr, t.rows[0] || {}), messages: r.rows };
+}
+
+/** Admin: post a reply into the thread. */
+async function api_saas_cr_reply(token, payload) {
+  const me = await requireSuperAdmin(token);
+  await _ensureMsgSchema();
+  const p = payload || {};
+  const cr = await control.findById('custom_requirements', Number(p.id));
+  if (!cr) throw new Error('Requirement not found');
+  const msg = String(p.message || '').trim();
+  if (!msg) throw new Error('Message is empty');
+  const id = await control.insert('custom_requirement_messages', {
+    cr_id: cr.id, sender_type: 'admin', sender_name: me.name || me.email || 'Support', message: msg.slice(0, 5000)
+  });
+  // First admin reply on an 'open' ticket nudges it to 'quoted' visibility only
+  // when a quote is included; status stays admin-controlled via cr_update.
+  try { await control.update('custom_requirements', cr.id, { updated_at: new Date().toISOString() }); } catch (_) {}
+  return { id, ok: true };
+}
+
 module.exports = {
   api_saas_cr_tenantList,
   api_saas_cr_submit,
   api_saas_cr_listAll,
-  api_saas_cr_update
+  api_saas_cr_update,
+  api_saas_cr_thread,
+  api_saas_cr_reply
 };

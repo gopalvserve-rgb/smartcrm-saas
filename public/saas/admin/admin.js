@@ -2525,7 +2525,7 @@ VIEWS.requirements = async (view) => {
       h('th', {}, 'Title'), h('th', {}, 'Org'), h('th', {}, 'Status'),
       h('th', {}, 'Quote'), h('th', {}, 'Created')
     )),
-    h('tbody', {}, ...list.map(c => h('tr', {},
+    h('tbody', {}, ...list.map(c => h('tr', { style: { cursor: 'pointer' }, title: 'Open discussion', onclick: () => openReqModal(c) },
       h('td', {}, h('b', {}, c.title)),
       h('td', { class: 'muted' }, c.org_name || '—'),
       h('td', {}, h('span', { class: 'tag info' }, c.status)),
@@ -2565,6 +2565,44 @@ VIEWS.requirements = async (view) => {
   view.appendChild(fbBackfillBar);
     view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
+
+/* CUSTOM_REQ_TENANT_v1 — open a requirement: full discussion thread + reply +
+ * pricing (quote) + status workflow (approve auto-generates the invoice). */
+async function openReqModal(c) {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '600px', display: 'flex', flexDirection: 'column', maxHeight: '88vh' } });
+  m.appendChild(card); document.body.appendChild(m);
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '🛠 ' + c.title + (c.org_name ? ' — ' + c.org_name : '')));
+  const thread = h('div', { style: { flex: 1, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.6rem', background: '#f8fafc', minHeight: '180px' } });
+  card.appendChild(thread);
+  const reply = h('textarea', { rows: '2', placeholder: 'Reply to the tenant…', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'inherit', boxSizing: 'border-box', marginTop: '.5rem' } });
+  const sendBtn = h('button', { class: 'btn' }, 'Send reply');
+  sendBtn.onclick = async () => { const msg = reply.value.trim(); if (!msg) return; sendBtn.disabled = true; try { await api('api_saas_cr_reply', { id: c.id, message: msg }); reply.value = ''; await paint(); } catch (e) { toast(e.message, 'err'); } sendBtn.disabled = false; };
+  const quoteInp = h('input', { type: 'number', min: '0', step: '0.01', placeholder: 'Quote ₹', value: c.quote_inr || '', style: { padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px', width: '130px' } });
+  const statusSel = h('select', { style: { padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, ...['open', 'quoted', 'approved', 'in_progress', 'done', 'rejected'].map(s => h('option', { value: s, selected: c.status === s ? 'selected' : null }, s)));
+  const saveBtn = h('button', { class: 'btn primary' }, 'Save quote / status');
+  saveBtn.onclick = async () => { saveBtn.disabled = true; try { await api('api_saas_cr_update', { id: c.id, quote_inr: quoteInp.value || null, status: statusSel.value }); toast('Saved — approving with a quote auto-creates the invoice.', 'ok'); await paint(); } catch (e) { toast(e.message, 'err'); } saveBtn.disabled = false; };
+  card.append(
+    h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.4rem' } }, reply, sendBtn),
+    h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.6rem', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid #e2e8f0', paddingTop: '.6rem' } },
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Pricing & status:'), quoteInp, statusSel, saveBtn),
+    h('div', { style: { marginTop: '.5rem', textAlign: 'right' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'))
+  );
+  async function paint() {
+    let d; try { d = await api('api_saas_cr_thread', c.id); } catch (e) { thread.innerHTML = '<div class="error-box">' + e.message + '</div>'; return; }
+    const cr = d.requirement || {}; c.status = cr.status; c.quote_inr = cr.quote_inr;
+    thread.innerHTML = '';
+    (d.messages || []).forEach(mr => {
+      const admin = mr.sender_type === 'admin';
+      thread.appendChild(h('div', { style: { display: 'flex', justifyContent: admin ? 'flex-end' : 'flex-start', marginBottom: '.4rem' } },
+        h('div', { style: { maxWidth: '80%', padding: '.45rem .65rem', borderRadius: '10px', background: admin ? '#6366f1' : '#fff', color: admin ? '#fff' : '#0f172a', border: admin ? 'none' : '1px solid #e2e8f0', fontSize: '.85rem', whiteSpace: 'pre-wrap' } },
+          h('div', { style: { fontSize: '.68rem', opacity: .75, marginBottom: '.1rem' } }, (mr.sender_name || (admin ? 'Support' : 'Tenant')) + ' · ' + fmtDate(mr.created_at)),
+          mr.message)));
+    });
+    thread.scrollTop = thread.scrollHeight;
+  }
+  paint();
+}
 
 VIEWS.admins = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
