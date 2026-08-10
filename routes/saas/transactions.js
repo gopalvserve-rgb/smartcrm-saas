@@ -118,35 +118,35 @@ async function api_saas_sales_by_user(token, filters) {
   const me = await requireSuperAdmin(token);
   await require('./saasPermissions').requirePerm(me, 'transactions.view');
   const f = filters || {};
-  const where = []; const params = [];
-  if (f.from) { params.push(f.from); where.push(`tx.created_at >= $${params.length}`); }
-  if (f.to)   { params.push(f.to);   where.push(`tx.created_at <= $${params.length}`); }
-  if (f.type) { params.push(String(f.type)); where.push(`tx.type = $${params.length}`); }
-  const wsql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  // SAAS_SALES_BY_USER_v3 — driven by SIGNUP REQUESTS. Each signup carries the
+  // salesperson (submitted_by) + the deal amount (total_amount_inr) + whether it
+  // converted (provisioned_tenant_id). This is the complete source of who sold
+  // what, so the dashboard maps each signup to its rep and reports per person.
+  const where = [`COALESCE(TRIM(sr.submitted_by),'') <> ''`]; const params = [];
+  if (f.from) { params.push(f.from); where.push(`sr.created_at >= $${params.length}`); }
+  if (f.to)   { params.push(f.to);   where.push(`sr.created_at <= $${params.length}`); }
+  const wsql = 'WHERE ' + where.join(' AND ');
   const r = await control.query(
-    `SELECT COALESCE(
-              NULLIF(TRIM(tx.sold_by_name), ''),
-              (SELECT NULLIF(TRIM(sr.submitted_by), '') FROM signup_requests sr
-                WHERE sr.provisioned_tenant_id = tx.tenant_id AND COALESCE(TRIM(sr.submitted_by),'')<>''
-                ORDER BY sr.id DESC LIMIT 1),
-              (SELECT sa.name FROM super_admins sa WHERE sa.id = tx.sold_by),
-              'Unassigned'
-            ) AS rep,
+    `SELECT TRIM(sr.submitted_by) AS rep,
             COUNT(*)::int AS cnt,
-            COALESCE(SUM(tx.amount_inr),0)::numeric AS amount,
-            COALESCE(SUM(tx.sale_amount_inr),0)::numeric AS sale
-       FROM transactions tx ${wsql}
-      GROUP BY 1`, params);
+            COUNT(*) FILTER (WHERE sr.provisioned_tenant_id IS NOT NULL)::int AS won,
+            COALESCE(SUM(sr.total_amount_inr),0)::numeric AS amount,
+            COALESCE(SUM(sr.amount_paid_inr),0)::numeric   AS paid
+       FROM signup_requests sr ${wsql}
+      GROUP BY TRIM(sr.submitted_by)`, params);
   const grand = r.rows.reduce((s, x) => s + Number(x.amount || 0), 0);
   const grandCnt = r.rows.reduce((s, x) => s + Number(x.cnt || 0), 0);
+  const grandPaid = r.rows.reduce((s, x) => s + Number(x.paid || 0), 0);
+  const grandWon = r.rows.reduce((s, x) => s + Number(x.won || 0), 0);
   const rows = r.rows.map(x => ({
-    name: x.rep || 'Unassigned',
+    name: x.rep,
     count: Number(x.cnt) || 0,
+    won: Number(x.won) || 0,
     amount: Number(x.amount) || 0,
-    sale: Number(x.sale) || 0,
+    paid: Number(x.paid) || 0,
     pct: grand > 0 ? Math.round((Number(x.amount) / grand) * 1000) / 10 : 0
   })).sort((a, b) => b.amount - a.amount);
-  return { rows, grand_total: grand, grand_count: grandCnt };
+  return { rows, grand_total: grand, grand_count: grandCnt, grand_paid: grandPaid, grand_won: grandWon };
 }
 
 async function api_saas_txn_delete(token, id) {
