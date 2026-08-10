@@ -6722,16 +6722,37 @@ async function loadLeads(opts) {
   localStorage.setItem('crm_filters', JSON.stringify(savedFilters));
 
   try {
-    const res = await api('api_leads_list', filters);
-    // Apply client-side rule-builder rules (post-filter on the loaded set).
-    try {
-      const _rb = window._leadsRuleBtn && window._leadsRuleBtn.getRules ? window._leadsRuleBtn.getRules() : [];
-      if (_rb && _rb.length && Array.isArray(res.leads)) res.leads = res.leads.filter(r => _applyClientRules(r, _rb));
-      if (CRM.prefs.filters.heat_only && Array.isArray(res.leads)) {
-        const hot = new Set(['hot','very_hot','on_fire']);
-        res.leads = res.leads.filter(r => hot.has(String(r.heat_label || '')));
+    /* LEADS_RULE_PAGINATION_FIX_v1 — the advanced "+ Filter rule" builder and the
+     * 🔥 heat filter are CLIENT-side post-filters. If the server paginates first
+     * and we filter the returned page, the count + per-page rows are wrong (e.g.
+     * "101–178 of 178" but only 5 rows shown, rest bleeding onto page 2). Fix:
+     * when a client-side filter is active, pull the FULL server-filtered set,
+     * apply the client filters, then count + paginate here so totals are right. */
+    const _rb = (window._leadsRuleBtn && window._leadsRuleBtn.getRules) ? window._leadsRuleBtn.getRules() : [];
+    const _heatOnly = !!CRM.prefs.filters.heat_only;
+    const _clientFilterActive = (Array.isArray(_rb) && _rb.length) || _heatOnly;
+    let res;
+    if (_clientFilterActive) {
+      const BULK = 500, MAX_PAGES = 40;   // safety cap: up to 20k leads scanned
+      const first = await api('api_leads_list', Object.assign({}, filters, { page: 1, page_size: BULK }));
+      let all = Array.isArray(first.leads) ? first.leads.slice() : [];
+      const serverTotal = Number(first.total || all.length);
+      const pages = Math.min(MAX_PAGES, Math.ceil(serverTotal / BULK));
+      for (let p = 2; p <= pages; p++) {
+        const nx = await api('api_leads_list', Object.assign({}, filters, { page: p, page_size: BULK }));
+        if (Array.isArray(nx.leads) && nx.leads.length) all = all.concat(nx.leads); else break;
       }
-    } catch (_) {}
+      if (serverTotal > MAX_PAGES * BULK) toast('Filter scanned the first ' + (MAX_PAGES * BULK) + ' leads — narrow the date range for an exact count on very large sets.', 'warn');
+      let matched = all;
+      if (Array.isArray(_rb) && _rb.length) matched = matched.filter(r => _applyClientRules(r, _rb));
+      if (_heatOnly) { const hot = new Set(['hot', 'very_hot', 'on_fire']); matched = matched.filter(r => hot.has(String(r.heat_label || ''))); }
+      const sc = {};
+      matched.forEach(l => { const sid = Number(l.status_id) || 0; sc[sid] = (sc[sid] || 0) + 1; });
+      const pageRows = matched.slice((page - 1) * pageSize, page * pageSize);
+      res = { leads: pageRows, total: matched.length, page: page, page_size: pageSize, status_count: sc };
+    } else {
+      res = await api('api_leads_list', filters);
+    }
     CRM.cache.lastLeads = res.leads;
     CRM.cache.lastStatusCounts = res.status_count;
     // TOPBAR_NEW_COUNT_v1 — topbar ✨ New chip = count of New-status leads in the
