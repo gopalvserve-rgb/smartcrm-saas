@@ -103,18 +103,21 @@ async function _getTransporter() {
   // around an issue where Railway's egress can stall on direct
   // smtp.gmail.com:587 connections but works on the service-routed
   // alternative endpoints.
-  const isGmail = /smtp\.gmail\.com/i.test(c.host);
-  _transporter = nodemailer.createTransport(isGmail ? {
-    service: 'gmail',
-    auth: { user: c.user, pass: c.pass },
-    connectionTimeout: 30000,
-    greetingTimeout:   15000,
-    socketTimeout:     30000
-  } : {
+  // SMTP_465_FALLBACK_v1 — this server's host BLOCKS outbound port 465 (SSL);
+  // port 587 (STARTTLS) is open. Two fixes vs before:
+  //  (1) never use nodemailer's service:'gmail' preset — it forces 465 and
+  //      ECONNREFUSEDs on this host; build an explicit host/port transport;
+  //  (2) any 465 config transparently downgrades to 587 (STARTTLS).
+  let ePort = Number(c.port) || 587;
+  let eSecure = !!c.secure;
+  if (ePort === 465) { ePort = 587; eSecure = false; }
+  _transporter = nodemailer.createTransport({
     host: c.host,
-    port: c.port,
-    secure: c.secure,
+    port: ePort,
+    secure: eSecure,
+    requireTLS: !eSecure && ePort !== 25,
     auth: { user: c.user, pass: c.pass },
+    tls: { rejectUnauthorized: false },
     connectionTimeout: 30000,
     greetingTimeout:   15000,
     socketTimeout:     30000
