@@ -115,6 +115,31 @@ async function _ensureTables() {
   try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS google_review_url TEXT`); } catch (_) {}
   // INV_THEME_v1 — selectable invoice theme (classic | modern | minimal).
   try { await db.query(`ALTER TABLE inv_settings ADD COLUMN IF NOT EXISTS invoice_theme TEXT NOT NULL DEFAULT 'classic'`); } catch (_) {}
+  // PRODUCT_MASTER_UNIFY_v1 (2026-08-10) — the Invoicing "Items/Services"
+  // catalogue is now the SAME product master used by Quotations (the
+  // `products` table), so a product added in either module shows up in
+  // both. Steps, all idempotent:
+  //   1. Give the products master the GST bill fields invoicing needs.
+  //   2. Drop the old FK from invoice_lines_inv.item_id -> inv_items so a
+  //      products.id can be stored there without violating it (line items
+  //      are self-contained snapshots; item_id is only a soft reference).
+  //   3. One-time copy of any legacy inv_items rows into products, deduped
+  //      by name, so nothing the tenant already created is lost.
+  try { await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS hsn_sac    TEXT`); } catch (_) {}
+  try { await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit       TEXT NOT NULL DEFAULT 'PCS'`); } catch (_) {}
+  try { await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS is_service INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+  try { await db.query(`ALTER TABLE invoice_lines_inv DROP CONSTRAINT IF EXISTS invoice_lines_inv_item_id_fkey`); } catch (_) {}
+  try {
+    await db.query(`
+      INSERT INTO products (name, description, price, gst_pct, hsn_sac, unit, is_service, is_active, workspace_ids)
+      SELECT i.name, COALESCE(i.description,''), i.rate, i.gst_pct,
+             i.hsn_sac, COALESCE(i.unit,'PCS'), COALESCE(i.is_service,0), 1, '[]'::jsonb
+        FROM inv_items i
+       WHERE i.is_active = 1
+         AND NOT EXISTS (
+           SELECT 1 FROM products p
+            WHERE p.is_active = 1 AND LOWER(TRIM(p.name)) = LOWER(TRIM(i.name)))`);
+  } catch (e) { console.warn('[invoicing] inv_items→products migrate:', e.message); }
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -349,21 +374,31 @@ async function api_invoicing_customers_delete(token, id) {
 // =====================================================================
 // Items
 // =====================================================================
+/* PRODUCT_MASTER_UNIFY_v1 — the invoicing item catalogue IS the shared
+ * `products` master. We expose it in the invoice-item shape the frontend
+ * expects: `rate` is an alias of products.price; hsn_sac/unit/is_service
+ * live on products now. Writing here writes the shared master, so the same
+ * product is instantly available in Quotations too. */
+const _ITEM_SELECT = `
+  SELECT id, name, COALESCE(description,'') AS description,
+         COALESCE(hsn_sac,'') AS hsn_sac, COALESCE(unit,'PCS') AS unit,
+         price AS rate, gst_pct, COALESCE(is_service,0) AS is_service, is_active
+    FROM products`;
 async function api_invoicing_items_list(token, q) {
   await _ctx(token);
   if (q) {
     const r = await db.query(
-      `SELECT * FROM inv_items WHERE is_active=1 AND (LOWER(name) LIKE $1 OR LOWER(COALESCE(hsn_sac,'')) LIKE $1) ORDER BY name LIMIT 200`,
+      `${_ITEM_SELECT} WHERE is_active=1 AND (LOWER(name) LIKE $1 OR LOWER(COALESCE(hsn_sac,'')) LIKE $1) ORDER BY name LIMIT 200`,
       [`%${String(q).toLowerCase()}%`]
     );
     return r.rows;
   }
-  const r = await db.query(`SELECT * FROM inv_items WHERE is_active=1 ORDER BY name LIMIT 500`);
+  const r = await db.query(`${_ITEM_SELECT} WHERE is_active=1 ORDER BY name LIMIT 500`);
   return r.rows;
 }
 async function api_invoicing_items_get(token, id) {
   await _ctx(token);
-  const r = await db.query(`SELECT * FROM inv_items WHERE id=$1`, [Number(id)]);
+  const r = await db.query(`${_ITEM_SELECT} WHERE id=$1`, [Number(id)]);
   if (!r.rows.length) throw new Error('Item not found');
   return r.rows[0];
 }
@@ -371,28 +406,37 @@ async function api_invoicing_items_save(token, payload) {
   await _ctx(token);
   payload = payload || {};
   if (!s(payload.name).trim()) throw new Error('Item name is required');
-  const fields = ['name','description','hsn_sac','unit','rate','gst_pct','is_service','is_active'];
+  // Map the invoice-item fields onto the shared products master.
   const data = {};
-  fields.forEach(f => { if (payload[f] !== undefined) data[f] = payload[f]; });
+  if (payload.name        !== undefined) data.name        = payload.name;
+  if (payload.description !== undefined) data.description = payload.description;
+  if (payload.hsn_sac     !== undefined) data.hsn_sac     = payload.hsn_sac || null;
+  if (payload.unit        !== undefined) data.unit        = payload.unit || 'PCS';
+  if (payload.rate        !== undefined) data.price       = Number(payload.rate) || 0;
+  if (payload.gst_pct     !== undefined) data.gst_pct     = payload.gst_pct;
+  if (payload.is_service  !== undefined) data.is_service  = payload.is_service ? 1 : 0;
+  if (payload.is_active   !== undefined) data.is_active   = payload.is_active;
+  let id;
   if (payload.id) {
-    const id = Number(payload.id);
+    id = Number(payload.id);
     const sets = []; const vals = []; let i = 1;
     Object.keys(data).forEach(k => { sets.push(`${k} = $${i++}`); vals.push(data[k]); });
-    sets.push(`updated_at = NOW()`);
-    vals.push(id);
-    const r = await db.query(`UPDATE inv_items SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`, vals);
-    return r.rows[0];
+    if (sets.length) { vals.push(id); await db.query(`UPDATE products SET ${sets.join(', ')} WHERE id = $${i}`, vals); }
+  } else {
+    data.is_active = 1;
+    if (data.price === undefined) data.price = 0;
+    if (data.workspace_ids === undefined) data.workspace_ids = '[]';
+    const cols = Object.keys(data); const vals = Object.values(data);
+    const phs  = cols.map((_, i) => `$${i+1}`);
+    const r = await db.query(`INSERT INTO products (${cols.join(',')}) VALUES (${phs.join(',')}) RETURNING id`, vals);
+    id = r.rows[0].id;
   }
-  const cols = Object.keys(data); const vals = Object.values(data);
-  const phs  = cols.map((_, i) => `$${i+1}`);
-  const r = await db.query(
-    `INSERT INTO inv_items (${cols.join(',')}) VALUES (${phs.join(',')}) RETURNING *`, vals
-  );
-  return r.rows[0];
+  const out = await db.query(`${_ITEM_SELECT} WHERE id=$1`, [id]);
+  return out.rows[0];
 }
 async function api_invoicing_items_delete(token, id) {
   await _ctx(token);
-  await db.query(`UPDATE inv_items SET is_active=0, updated_at=NOW() WHERE id=$1`, [Number(id)]);
+  await db.query(`UPDATE products SET is_active=0 WHERE id=$1`, [Number(id)]);
   return { ok: true };
 }
 
