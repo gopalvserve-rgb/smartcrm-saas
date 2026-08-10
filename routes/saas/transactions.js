@@ -84,9 +84,52 @@ async function api_saas_txn_create(token, payload) {
     tenant_id: Number(p.tenant_id), type: 'manual', source: 'manual',
     amount_inr: sp.amount_inr, sale_amount_inr: sp.sale_amount_inr, gst_amount_inr: sp.gst_amount_inr, gst_mode: sp.gst_mode,
     transaction_mode: p.transaction_mode || null, transaction_id: p.transaction_id || null,
-    txn_date: p.txn_date || null, notes: p.notes || null, created_by: me.id, created_at: new Date().toISOString()
+    txn_date: p.txn_date || null, notes: p.notes || null, created_by: me.id,
+    /* SAAS_SALES_BY_USER_v1 — who made the sale (super-admin sales rep). Defaults
+     * to the creating admin when not explicitly chosen. */
+    sold_by: (p.sold_by != null && p.sold_by !== '') ? Number(p.sold_by) : me.id,
+    created_at: new Date().toISOString()
   });
   return { ok: true, id, split: sp };
+}
+
+// SAAS_SALES_BY_USER_v1 — dropdown source: the platform sales team (super-admins).
+async function api_saas_sales_reps(token) {
+  await requireSuperAdmin(token);
+  const r = await control.query(`SELECT id, name, email FROM super_admins WHERE COALESCE(is_active,1)=1 ORDER BY name NULLS LAST, id`);
+  return { reps: r.rows };
+}
+
+// SAAS_SALES_BY_USER_v1 — user-wise sale summary (count, amount, % of total) for a
+// date range. Grouped by transactions.sold_by (legacy rows fall back to created_by).
+async function api_saas_sales_by_user(token, filters) {
+  await requireSuperAdmin(token);
+  const f = filters || {};
+  const where = []; const params = [];
+  if (f.from) { params.push(f.from); where.push(`tx.created_at >= $${params.length}`); }
+  if (f.to)   { params.push(f.to);   where.push(`tx.created_at <= $${params.length}`); }
+  if (f.type) { params.push(String(f.type)); where.push(`tx.type = $${params.length}`); }
+  const wsql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const r = await control.query(
+    `SELECT COALESCE(tx.sold_by, tx.created_by) AS rep_id,
+            COUNT(*)::int AS cnt,
+            COALESCE(SUM(tx.amount_inr),0)::numeric AS amount,
+            COALESCE(SUM(tx.sale_amount_inr),0)::numeric AS sale
+       FROM transactions tx ${wsql}
+      GROUP BY COALESCE(tx.sold_by, tx.created_by)`, params);
+  const admins = await control.query(`SELECT id, name, email FROM super_admins`);
+  const nameById = {}; admins.rows.forEach(a => { nameById[Number(a.id)] = a.name || a.email || ('Admin #' + a.id); });
+  const grand = r.rows.reduce((s, x) => s + Number(x.amount || 0), 0);
+  const grandCnt = r.rows.reduce((s, x) => s + Number(x.cnt || 0), 0);
+  const rows = r.rows.map(x => ({
+    rep_id: x.rep_id,
+    name: x.rep_id ? (nameById[Number(x.rep_id)] || ('Admin #' + x.rep_id)) : 'Unassigned',
+    count: Number(x.cnt) || 0,
+    amount: Number(x.amount) || 0,
+    sale: Number(x.sale) || 0,
+    pct: grand > 0 ? Math.round((Number(x.amount) / grand) * 1000) / 10 : 0
+  })).sort((a, b) => b.amount - a.amount);
+  return { rows, grand_total: grand, grand_count: grandCnt };
 }
 
 async function api_saas_txn_delete(token, id) {
@@ -177,11 +220,12 @@ async function api_saas_txn_update(token, payload) {
     transaction_mode: p.transaction_mode !== undefined ? (p.transaction_mode || null) : cur.transaction_mode,
     transaction_id:   p.transaction_id   !== undefined ? (p.transaction_id   || null) : cur.transaction_id,
     txn_date:         p.txn_date          !== undefined ? (p.txn_date          || null) : cur.txn_date,
-    notes:            p.notes             !== undefined ? (p.notes             || null) : cur.notes
+    notes:            p.notes             !== undefined ? (p.notes             || null) : cur.notes,
+    sold_by:          p.sold_by           !== undefined ? (p.sold_by ? Number(p.sold_by) : null) : cur.sold_by
   };
   if (p.tenant_id) data.tenant_id = Number(p.tenant_id);
   await control.update('transactions', Number(p.id), data);
   return { ok: true, split: sp };
 }
 
-module.exports = { recordTransaction, api_saas_txn_list, api_saas_txn_create, api_saas_txn_delete, api_saas_txn_backfill, api_saas_txn_update };
+module.exports = { recordTransaction, api_saas_txn_list, api_saas_txn_create, api_saas_txn_delete, api_saas_txn_backfill, api_saas_txn_update, api_saas_sales_reps, api_saas_sales_by_user };

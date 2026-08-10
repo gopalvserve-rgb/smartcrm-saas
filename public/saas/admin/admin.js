@@ -267,7 +267,96 @@ VIEWS.dashboard = async (view) => {
     card('Revenue', fmtRupees(stats.mrr), 'all-time paid'),
     outstandingCard
   ));
+  // SAAS_SALES_BY_USER_v1 — user-wise sale summary with date shortcuts.
+  view.appendChild(_renderSalesByUser());
 };
+
+/* SAAS_SALES_BY_USER_v1 — dashboard card: sales grouped by rep (count, amount, %)
+ * with Today / Yesterday / This week / This month / Last month / Custom shortcuts. */
+function _salesPreset(kind) {
+  const pad = n => ('0' + n).slice(-2);
+  const iso = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const sod = d => iso(d) + ' 00:00:00';
+  const eod = d => iso(d) + ' 23:59:59';
+  if (kind === 'today')      return { from: sod(today), to: eod(today) };
+  if (kind === 'yesterday')  { const y = new Date(today); y.setDate(y.getDate() - 1); return { from: sod(y), to: eod(y) }; }
+  if (kind === 'this_week')  { const w = new Date(today); const dow = (w.getDay() + 6) % 7; w.setDate(w.getDate() - dow); return { from: sod(w), to: eod(today) }; }
+  if (kind === 'this_month') { const m = new Date(now.getFullYear(), now.getMonth(), 1); return { from: sod(m), to: eod(today) }; }
+  if (kind === 'last_month') { const s = new Date(now.getFullYear(), now.getMonth() - 1, 1); const e = new Date(now.getFullYear(), now.getMonth(), 0); return { from: sod(s), to: eod(e) }; }
+  return { from: '', to: '' }; // custom
+}
+function _renderSalesByUser() {
+  const wrap = h('div', { class: 'card', style: { marginTop: '1.2rem' } });
+  wrap.appendChild(h('h2', { style: { margin: '0 0 .2rem', fontSize: '1.15rem' } }, '👤 User-wise Sale Summary'));
+  wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.6rem' } }, 'Sales by team member — count, amount and share of total.'));
+  const st = Object.assign({ preset: 'this_month' }, _salesPreset('this_month'));
+  const chipRow = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginBottom: '.5rem', alignItems: 'center' } });
+  const body = h('div', {});
+  const chipStyle = on => ({ padding: '.3rem .7rem', borderRadius: '999px', border: '1px solid ' + (on ? '#2563eb' : '#cbd5e1'), background: on ? '#2563eb' : '#fff', color: on ? '#fff' : '#334155', cursor: 'pointer', fontSize: '.8rem' });
+  const fromInp = h('input', { type: 'date', class: 'input', style: { padding: '.25rem .4rem' }, value: (st.from || '').slice(0, 10) });
+  const toInp   = h('input', { type: 'date', class: 'input', style: { padding: '.25rem .4rem' }, value: (st.to || '').slice(0, 10) });
+  const presets = [['today', 'Today'], ['yesterday', 'Yesterday'], ['this_week', 'This week'], ['this_month', 'This month'], ['last_month', 'Last month'], ['custom', 'Custom']];
+  function paintChips() { Array.prototype.forEach.call(chipRow.querySelectorAll('[data-preset]'), b => Object.assign(b.style, chipStyle(b.dataset.preset === st.preset))); }
+  async function reload() {
+    body.replaceChildren(h('div', { class: 'muted', style: { padding: '.6rem' } }, 'Loading…'));
+    try {
+      const r = await api('api_saas_sales_by_user', { from: st.from || undefined, to: st.to || undefined });
+      body.replaceChildren(_salesTable(r));
+    } catch (e) { body.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
+  }
+  presets.forEach(([k, label]) => {
+    chipRow.appendChild(h('button', { 'data-preset': k, style: chipStyle(st.preset === k), onclick: () => {
+      st.preset = k;
+      if (k !== 'custom') { const p = _salesPreset(k); st.from = p.from; st.to = p.to; fromInp.value = (p.from || '').slice(0, 10); toInp.value = (p.to || '').slice(0, 10); }
+      paintChips(); reload();
+    } }, label));
+  });
+  chipRow.appendChild(h('span', { style: { margin: '0 .2rem', color: '#94a3b8' } }, '|'));
+  chipRow.appendChild(fromInp);
+  chipRow.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'to'));
+  chipRow.appendChild(toInp);
+  chipRow.appendChild(h('button', { style: chipStyle(false), onclick: () => {
+    st.preset = 'custom';
+    st.from = fromInp.value ? fromInp.value + ' 00:00:00' : '';
+    st.to   = toInp.value ? toInp.value + ' 23:59:59' : '';
+    paintChips(); reload();
+  } }, 'Apply'));
+  wrap.appendChild(chipRow);
+  wrap.appendChild(body);
+  reload();
+  return wrap;
+}
+function _salesTable(r) {
+  const rows = (r && r.rows) || [];
+  if (!rows.length) return h('div', { class: 'muted', style: { padding: '.8rem' } }, 'No sales in this period.');
+  const grand = Number(r.grand_total) || 0;
+  return h('div', { class: 'table-wrap' }, h('table', { style: { width: '100%' } },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Salesperson'),
+      h('th', { style: { textAlign: 'right' } }, 'Sales'),
+      h('th', { style: { textAlign: 'right' } }, 'Amount'),
+      h('th', { style: { textAlign: 'right' } }, '% of total')
+    )),
+    h('tbody', {}, ...rows.map(x => h('tr', {},
+      h('td', {}, h('b', {}, x.name)),
+      h('td', { style: { textAlign: 'right' } }, String(x.count)),
+      h('td', { style: { textAlign: 'right' } }, fmtRupees(x.amount)),
+      h('td', { style: { textAlign: 'right' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', justifyContent: 'flex-end' } },
+          h('div', { style: { width: '60px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' } },
+            h('div', { style: { width: Math.min(100, x.pct) + '%', height: '100%', background: '#2563eb' } })),
+          h('span', {}, x.pct + '%')))
+    ))),
+    h('tfoot', {}, h('tr', { style: { fontWeight: '700', borderTop: '2px solid #cbd5e1' } },
+      h('td', {}, 'Total'),
+      h('td', { style: { textAlign: 'right' } }, String(r.grand_count || 0)),
+      h('td', { style: { textAlign: 'right' } }, fmtRupees(grand)),
+      h('td', { style: { textAlign: 'right' } }, '100%')
+    ))
+  ));
+}
 
 VIEWS.packages = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
@@ -5927,6 +6016,12 @@ function _openTxnCreateModal(tenants, onDone, existing) {
   const idInp = h('input', { type: 'text', placeholder: 'Transaction ID / ref (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
   const dateInp = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10), style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
   const notesInp = h('textarea', { rows: '2', placeholder: 'Remarks / notes (optional)', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontFamily: 'inherit' } });
+  /* SAAS_SALES_BY_USER_v1 — attribute the sale to a team member. */
+  const soldBySel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— sold by —'));
+  api('api_saas_sales_reps').then(r => {
+    ((r && r.reps) || []).forEach(u => soldBySel.appendChild(h('option', { value: String(u.id) }, u.name || u.email || ('Admin #' + u.id))));
+    if (existing && existing.sold_by) soldBySel.value = String(existing.sold_by);
+  }).catch(() => {});
   const split = h('div', { style: { fontSize: '.82rem', color: '#334155', marginTop: '4px' } });
   const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });
   function calc() { const t = Number(amtInp.value); if (!isFinite(t) || t <= 0) { split.textContent = ''; return; } if (gstSel.value === 'gst') { const s = Math.round((t / 1.18) * 100) / 100, g = Math.round((t - s) * 100) / 100; split.innerHTML = 'Sale: <b>' + _inr(s) + '</b> · GST 18%: <b style="color:#0891b2">' + _inr(g) + '</b>'; } else split.innerHTML = 'No GST — full ' + _inr(t) + ' is the sale amount.'; }
@@ -5946,7 +6041,7 @@ function _openTxnCreateModal(tenants, onDone, existing) {
     if (!tenSel.value) { out.innerHTML = '<span style="color:#dc2626">Choose a tenant</span>'; return; }
     if (!(Number(amtInp.value) > 0)) { out.innerHTML = '<span style="color:#dc2626">Enter a valid amount</span>'; return; }
     save.disabled = true; save.textContent = 'Saving…';
-    const body = { tenant_id: Number(tenSel.value), gst_mode: gstSel.value, amount_inr: Number(amtInp.value), transaction_mode: modeSel.value || null, transaction_id: idInp.value.trim() || null, txn_date: dateInp.value || null, notes: notesInp.value.trim() || null };
+    const body = { tenant_id: Number(tenSel.value), gst_mode: gstSel.value, amount_inr: Number(amtInp.value), transaction_mode: modeSel.value || null, transaction_id: idInp.value.trim() || null, txn_date: dateInp.value || null, notes: notesInp.value.trim() || null, sold_by: soldBySel.value || null };
     try {
       if (existing) { body.id = existing.id; await api('api_saas_txn_update', body); }
       else { await api('api_saas_txn_create', body); }
@@ -5957,6 +6052,6 @@ function _openTxnCreateModal(tenants, onDone, existing) {
   const fl = (lbl, el) => h('div', { style: { marginBottom: '8px' } }, h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600', display: 'block', marginBottom: '2px' } }, lbl), el);
   card.appendChild(h('h3', { style: { marginTop: 0 } }, existing ? '✏️ Edit transaction' : '+ Manual transaction'));
   card.appendChild(fl('Tenant *', tenSel)); card.appendChild(fl('GST', gstSel)); card.appendChild(fl('Amount (₹) *', amtInp)); card.appendChild(split);
-  card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(fl('Remarks', notesInp)); card.appendChild(out);
+  card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(fl('Sold by', soldBySel)); card.appendChild(fl('Remarks', notesInp)); card.appendChild(out);
   card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), save));
 }
