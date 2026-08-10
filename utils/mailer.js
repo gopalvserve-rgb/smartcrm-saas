@@ -142,8 +142,11 @@ async function _transporter() {
   if (_cachedTransporter && sig === _cachedSig) return _cachedTransporter;
   const host = cfg.SMTP_HOST || process.env.SMTP_HOST;
   if (!host) throw new Error('SMTP not configured — fill in Settings → SMTP first.');
-  const port = Number(cfg.SMTP_PORT || process.env.SMTP_PORT || 587);
-  const secure = String(cfg.SMTP_SECURE || process.env.SMTP_SECURE || '0') === '1' || port === 465;
+  let port = Number(cfg.SMTP_PORT || process.env.SMTP_PORT || 587);
+  let secure = String(cfg.SMTP_SECURE || process.env.SMTP_SECURE || '0') === '1' || port === 465;
+  // SMTP_465_FALLBACK_v1 — this server's host BLOCKS outbound port 465 (SSL);
+  // port 587 (STARTTLS) is open. A 465 config always ECONNREFUSEDs, so use 587.
+  if (port === 465) { port = 587; secure = false; }
   _cachedTransporter = nodemailer.createTransport({
     host,
     port,
@@ -286,9 +289,12 @@ async function testSmtpAdhoc(to, overrides) {
   const cfg = await _allConfig();
   const host = overrides.host || cfg.SMTP_HOST || process.env.SMTP_HOST;
   if (!host) throw new Error('SMTP host required');
-  const port = Number(overrides.port || cfg.SMTP_PORT || process.env.SMTP_PORT || 587);
+  let port = Number(overrides.port || cfg.SMTP_PORT || process.env.SMTP_PORT || 587);
   const secureStr = overrides.secure != null ? String(overrides.secure) : String(cfg.SMTP_SECURE || process.env.SMTP_SECURE || '0');
-  const secure = (secureStr === '1' || secureStr === 'true' || port === 465);
+  let secure = (secureStr === '1' || secureStr === 'true' || port === 465);
+  // SMTP_465_FALLBACK_v1 — host blocks outbound 465 (SSL); 587 (STARTTLS) is open.
+  // A 465 config always ECONNREFUSEDs on this server, so transparently use 587.
+  if (port === 465) { port = 587; secure = false; }
   const user = overrides.user || cfg.SMTP_USER || process.env.SMTP_USER || '';
   const pass = overrides.pass || cfg.SMTP_PASSWORD || process.env.SMTP_PASSWORD || '';
   const from = overrides.from || cfg.SMTP_FROM || cfg.EMAIL_NOTIFY_FROM || cfg.SMTP_USER || user || 'no-reply@example.com';
