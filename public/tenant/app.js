@@ -34625,7 +34625,7 @@ async function adminProducts() {
   const card = h("div", { class: "card" });
   card.appendChild(h("h4", { style: { margin: "0 0 .35rem" } }, "📦 Products"));
   card.appendChild(h("p", { class: "muted", style: { margin: "0 0 1rem", fontSize: ".88rem" } },
-    "Manage the products / services your team sells. Each product appears in the Product dropdown on the lead form, and rolls up in conversion + revenue reports. Edit any cell and click 💾 Save to update."));
+    "Manage the products / services your team sells. This is one shared master — every product here is available in both Quotations and Invoices (and the Product dropdown on the lead form), and rolls up in conversion + revenue reports. HSN/SAC + Unit are used on GST invoices. Edit any cell and click 💾 Save to update."));
 
   const tbl = h("table", { class: "mini-table" },
     h("thead", {}, h("tr", {},
@@ -34634,12 +34634,15 @@ async function adminProducts() {
       h("th", {}, "Description"),
       h("th", { style: { width: "100px", textAlign: "right" } }, "Price (₹)"),
       h("th", { style: { width: "80px", textAlign: "right" } }, "GST %"),
+      /* PRODUCT_MASTER_UNIFY_v1 — GST bill fields shared with Invoicing */
+      h("th", { title: 'HSN (goods) / SAC (services) code — used on GST invoices.', style: { width: "110px" } }, "HSN/SAC"),
+      h("th", { title: 'Unit of measure used on invoices.', style: { width: "95px" } }, "Unit"),
       /* WORKSPACE_v1 P3 — workspace scope */
       h("th", { title: 'Restrict this product to specific workspaces. Empty = all workspaces (default).', style: { width: "200px" } }, "📁 Workspaces"),
       h("th", { style: { width: "170px" } }, "")
     )),
     h("tbody", {}, ...(products.length === 0
-      ? [h("tr", {}, h("td", { colspan: 7, class: "muted", style: { textAlign: "center", padding: "1rem" } },
+      ? [h("tr", {}, h("td", { colspan: 9, class: "muted", style: { textAlign: "center", padding: "1rem" } },
           "No products yet — add your first product below."))]
       : products.map(p => h("tr", {},
           h("td", { style: { width: "70px" } },
@@ -34674,6 +34677,14 @@ async function adminProducts() {
           h("td", {}, h("input", { value: p.description || "", "data-id": p.id, "data-field": "description", placeholder: "Optional description", style: { width: "100%" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", step: "0.01", value: Number(p.price) || 0, "data-id": p.id, "data-field": "price", style: { width: "100%", textAlign: "right" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", max: "100", step: "0.01", value: Number(p.gst_pct) || 0, "data-id": p.id, "data-field": "gst_pct", title: "GST percentage applied when this product is added to a quotation", style: { width: "100%", textAlign: "right" } })),
+          /* PRODUCT_MASTER_UNIFY_v1 — HSN/SAC + Unit (shared with Invoicing) */
+          h("td", {}, h("input", { value: p.hsn_sac || "", "data-id": p.id, "data-field": "hsn_sac", placeholder: "HSN/SAC", style: { width: "100%" } })),
+          h("td", {}, (function () {
+            const sel = h("select", { "data-id": p.id, "data-field": "unit", style: { width: "100%" } },
+              ...['PCS','KG','HRS','NOS','LITRE','METER','BOX','SET','OTH'].map(u =>
+                h("option", Object.assign({ value: u }, (String(p.unit || 'PCS') === u ? { selected: "selected" } : {})), u)));
+            return sel;
+          })()),
           /* WORKSPACE_v1 P6 — Global + checkbox picker (same as statuses) */
           h("td", {}, _wsCheckboxPicker(p.workspace_ids, p.id, workspaces)),
           h("td", { style: { whiteSpace: "nowrap" } },
@@ -34746,6 +34757,9 @@ async function adminProducts() {
           description: String(f.d.value || ""),
           price: Number(f.p.value) || 0,
           gst_pct: Number(f.g.value) || 0,
+          /* PRODUCT_MASTER_UNIFY_v1 — carry GST bill fields into the master */
+          hsn_sac: String((f.hsn && f.hsn.value) || "").trim() || null,
+          unit: String((f.unit && f.unit.value) || "PCS"),
           image_url: String(f.img.value || "").trim() || null
         });
         toast("Product added");
@@ -34758,6 +34772,10 @@ async function adminProducts() {
     h("input", { name: "d", placeholder: "Description (optional)", style: { flex: "2 1 280px" } }),
     h("input", { name: "p", type: "number", min: "0", step: "0.01", placeholder: "Price (₹)", value: "0", style: { width: "120px" } }),
     h("input", { name: "g", type: "number", min: "0", max: "100", step: "0.01", placeholder: "GST %", value: "0", title: "GST percentage — auto-applied to quotation lines using this product", style: { width: "90px" } }),
+    /* PRODUCT_MASTER_UNIFY_v1 — HSN/SAC + Unit, used on invoices */
+    h("input", { name: "hsn", placeholder: "HSN/SAC (optional)", title: "HSN (goods) / SAC (services) code for GST invoices", style: { width: "130px" } }),
+    h("select", { name: "unit", title: "Unit of measure on invoices", style: { width: "100px" } },
+      ...['PCS','KG','HRS','NOS','LITRE','METER','BOX','SET','OTH'].map(u => h("option", { value: u }, u))),
     h("input", { name: "img", placeholder: "Image URL (optional) — shown on quotations", style: { flex: "1 1 240px" } }),
     h("button", { type: "submit", class: "btn primary" }, "+ Add product")
   ));
