@@ -40,6 +40,11 @@ const CATALOG = [
   { module: 'Invoices',          key: 'invoices.mark_paid',      label: 'Mark invoice paid' },
   { module: 'Invoices',          key: 'invoices.void',           label: 'Void invoice' },
 
+  // ─── Transactions ─────────────────────────────────────────────
+  { module: 'Transactions',      key: 'transactions.view',       label: 'View transactions ledger + sales summary' },
+  { module: 'Transactions',      key: 'transactions.add',        label: 'Add / edit manual transaction' },
+  { module: 'Transactions',      key: 'transactions.delete',     label: 'Delete transaction' },
+
   // ─── Signup Requests ──────────────────────────────────────────
   { module: 'Signup Requests',   key: 'signup_req.view',         label: 'View pending requests' },
   { module: 'Signup Requests',   key: 'signup_req.edit',         label: 'Edit pending request' },
@@ -93,6 +98,7 @@ const DEFAULTS = {
     'tenants.view': 1,  'tenants.add': 1,  'tenants.edit': 1,
     'tenants.suspend': 0, 'tenants.delete': 0, 'tenants.login_as': 0,
     'invoices.view': 1, 'invoices.add': 1, 'invoices.mark_paid': 1, 'invoices.void': 0,
+    'transactions.view': 1, 'transactions.add': 1, 'transactions.delete': 0,
     'signup_req.view': 1, 'signup_req.edit': 1, 'signup_req.approve': 1, 'signup_req.reject': 1,
     'webhooks.view': 1, 'errors.view': 1, 'errors.resolve': 1, 'crashes.view': 1,
     'ai_costing.view': 1, 'finance.view': 1, 'wl_billing.view': 1, 'wl_billing.edit': 0,

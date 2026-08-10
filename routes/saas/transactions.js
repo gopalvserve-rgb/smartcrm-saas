@@ -37,7 +37,8 @@ async function recordTransaction(row) {
 }
 
 async function api_saas_txn_list(token, filters) {
-  await requireSuperAdmin(token);
+  const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'transactions.view');
   const f = filters || {};
   const where = []; const params = [];
   if (f.type)      { params.push(String(f.type)); where.push(`tx.type = $${params.length}`); }
@@ -75,6 +76,7 @@ async function api_saas_txn_list(token, filters) {
 
 async function api_saas_txn_create(token, payload) {
   const me = await requireFullAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'transactions.add');
   const p = payload || {};
   if (!p.tenant_id) throw new Error('Choose a tenant');
   const amt = Number(p.amount_inr);
@@ -97,7 +99,8 @@ async function api_saas_txn_create(token, payload) {
 // free-text names captured at signup (signup_requests.submitted_by), plus the
 // platform super-admins, de-duplicated.
 async function api_saas_sales_reps(token) {
-  await requireSuperAdmin(token);
+  const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'transactions.view');
   const a = await control.query(`SELECT DISTINCT TRIM(submitted_by) AS name FROM signup_requests WHERE COALESCE(TRIM(submitted_by),'') <> ''`);
   const b = await control.query(`SELECT name FROM super_admins WHERE COALESCE(is_active,1)=1 AND COALESCE(TRIM(name),'') <> ''`);
   const set = new Set();
@@ -112,7 +115,8 @@ async function api_saas_sales_reps(token) {
 //   2) the signup rep who onboarded this tenant (signup_requests.submitted_by), else
 //   3) legacy super-admin creator name (tx.sold_by), else 'Unassigned'.
 async function api_saas_sales_by_user(token, filters) {
-  await requireSuperAdmin(token);
+  const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'transactions.view');
   const f = filters || {};
   const where = []; const params = [];
   if (f.from) { params.push(f.from); where.push(`tx.created_at >= $${params.length}`); }
@@ -146,7 +150,8 @@ async function api_saas_sales_by_user(token, filters) {
 }
 
 async function api_saas_txn_delete(token, id) {
-  await requireFullAdmin(token);
+  const me = await requireFullAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'transactions.delete');
   await control.query(`DELETE FROM transactions WHERE id = $1`, [Number(id)]);
   return { ok: true };
 }
@@ -220,6 +225,7 @@ async function api_saas_txn_backfill(token, opts) {
 }
 async function api_saas_txn_update(token, payload) {
   const me = await requireFullAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'transactions.add');
   const p = payload || {};
   if (!p.id) throw new Error('id required');
   const ex = await control.query('SELECT * FROM transactions WHERE id = $1', [Number(p.id)]);

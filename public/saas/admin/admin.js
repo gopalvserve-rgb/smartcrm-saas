@@ -157,7 +157,7 @@ const NAV = [
   { id: 'signup_requests', label: '🆕 Signup Requests',  requiresPerm: 'signup_req.view' },
   { id: 'packages',      label: '📦 Packages',           requiresPerm: 'packages.view' },
   { id: 'invoices',      label: '🧾 Invoices',           requiresPerm: 'invoices.view' },
-  { id: 'transactions',  label: '💳 Transactions' },  /* SAAS_TXN_v1 */
+  { id: 'transactions',  label: '💳 Transactions',       requiresPerm: 'transactions.view' },  /* SAAS_TXN_v1 */
   { id: 'webhooks',      label: '📡 Webhook Logs',       requiresPerm: 'webhooks.view' },
   { id: 'errors',        label: '🐞 Errors',             requiresPerm: 'errors.view' },
   { id: 'crashes',       label: '🚨 Crashes',            requiresPerm: 'crashes.view' },
