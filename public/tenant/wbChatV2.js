@@ -1061,7 +1061,14 @@
     const dir = m.direction === 'out' ? 'out' : 'in';
     const isTpl = m.message_type === 'template' || /template/i.test(m.type || '');
     const cls = 'wbv2-msg ' + dir + (isTpl ? ' tpl' : '');
-    const body = m.body || m.text || '';
+    let body = m.body || m.text || '';
+    /* WA_UNSUPPORTED_LABEL_v1 — Meta error 131051 messages (view-once, polls,
+     * app-only formats on coexistence numbers) arrive with NO content. Show a
+     * clean, actionable label instead of the cryptic "Message type unknown".
+     * Applies to already-saved rows too. */
+    if (body && /unsupported message type|message type unknown|message type is currently not supported/i.test(body)) {
+      body = '📎 Unsupported message — open in WhatsApp to view';
+    }
     /* WB_CHAT_V2_MSG_USER_v1 — resolve sender name via users cache when
      * the API didn't include user_name (older payloads). Fallback to
      * '📱 Mobile' only when there's genuinely no user_id (agent sent

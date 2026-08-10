@@ -982,6 +982,11 @@
     var isOut = !isIn;
     var isTemplate = !!(m.template_name || m.is_template);
     var body = m.body || m.text || '';
+    /* WA_UNSUPPORTED_LABEL_v1 — prettify Meta 131051 "Unsupported message type
+     * (Message type unknown)" bodies into a clean, actionable label. */
+    if (body && /unsupported message type|message type unknown|message type is currently not supported/i.test(body)) {
+      body = '📎 Unsupported message — open in WhatsApp to view';
+    }
     var time = fmtMsgTime(m.timestamp || m.created_at || m.sent_at);
 
     var justify = isOut ? 'flex-end' : 'flex-start';
