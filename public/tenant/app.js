@@ -21818,7 +21818,14 @@ async function wbChat() {
           // Friendly fallback for already-saved messages with empty body
           // (old inbound rows where the type was 'unsupported' / 'sticker'
           // / 'reaction' etc. before the parser learned them).
-          if (msg.body && String(msg.body).trim()) return msg.body;
+          // WA_UNSUPPORTED_LABEL_v1 — prettify legacy/stored "Unsupported
+          // message type (Message type unknown)" bodies (Meta error 131051)
+          // into a clean, actionable label. Applies to already-saved rows too.
+          var _wbBody = msg.body ? String(msg.body).trim() : '';
+          if (_wbBody && /unsupported message type|message type unknown|message type is currently not supported/i.test(_wbBody)) {
+            return '📎 Unsupported message — open in WhatsApp to view';
+          }
+          if (_wbBody) return _wbBody;
           if (mediaNode) return '';
           const t = String(msg.message_type || '').toLowerCase();
           const labels = {

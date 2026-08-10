@@ -3596,8 +3596,11 @@ async function _handleInbound(m, value) {
     // Business Platform can't classify (community announcements, polls
     // on some plans, view-once media, etc.). Try to pull the human
     // error message from m.errors if present.
-    const errMsg = (m.errors && m.errors[0] && (m.errors[0].title || m.errors[0].message)) || '';
-    text = '\uD83D\uDCAC Unsupported message type' + (errMsg ? ' (' + errMsg + ')' : '');
+    // WA_UNSUPPORTED_LABEL_v1 \u2014 Meta delivers these (error 131051) with NO
+    // content payload: view-once media, polls, or app-only formats on
+    // coexistence numbers. Nothing to render, so show a clean, actionable
+    // label instead of the cryptic "Message type unknown" error text.
+    text = '\uD83D\uDCCE Unsupported message \u2014 open in WhatsApp to view';
   }
   else if (m.type) {
     // Future-proof: ANY new Meta type lands here with a readable label
