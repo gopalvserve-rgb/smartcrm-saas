@@ -6020,7 +6020,7 @@ function _openTxnCreateModal(tenants, onDone, existing) {
   const soldBySel = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px' } }, h('option', { value: '' }, '— sold by —'));
   api('api_saas_sales_reps').then(r => {
     ((r && r.reps) || []).forEach(u => soldBySel.appendChild(h('option', { value: String(u.id) }, u.name || u.email || ('Admin #' + u.id))));
-    if (existing && existing.sold_by) soldBySel.value = String(existing.sold_by);
+    if (existing && existing.sold_by_name) soldBySel.value = String(existing.sold_by_name);
   }).catch(() => {});
   const split = h('div', { style: { fontSize: '.82rem', color: '#334155', marginTop: '4px' } });
   const out = h('div', { style: { marginTop: '8px', fontSize: '.85rem' } });

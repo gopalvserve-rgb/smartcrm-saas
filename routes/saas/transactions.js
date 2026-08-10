@@ -85,23 +85,32 @@ async function api_saas_txn_create(token, payload) {
     amount_inr: sp.amount_inr, sale_amount_inr: sp.sale_amount_inr, gst_amount_inr: sp.gst_amount_inr, gst_mode: sp.gst_mode,
     transaction_mode: p.transaction_mode || null, transaction_id: p.transaction_id || null,
     txn_date: p.txn_date || null, notes: p.notes || null, created_by: me.id,
-    /* SAAS_SALES_BY_USER_v1 — who made the sale (super-admin sales rep). Defaults
-     * to the creating admin when not explicitly chosen. */
-    sold_by: (p.sold_by != null && p.sold_by !== '') ? Number(p.sold_by) : me.id,
+    /* SAAS_SALES_BY_USER_v2 — salesperson NAME (matches signup_requests.submitted_by,
+     * a free-text sales-rep name captured at signup). */
+    sold_by_name: (p.sold_by != null && p.sold_by !== '') ? String(p.sold_by).slice(0, 120) : null,
     created_at: new Date().toISOString()
   });
   return { ok: true, id, split: sp };
 }
 
-// SAAS_SALES_BY_USER_v1 — dropdown source: the platform sales team (super-admins).
+// SAAS_SALES_BY_USER_v2 — dropdown source: the actual sales reps. These are the
+// free-text names captured at signup (signup_requests.submitted_by), plus the
+// platform super-admins, de-duplicated.
 async function api_saas_sales_reps(token) {
   await requireSuperAdmin(token);
-  const r = await control.query(`SELECT id, name, email FROM super_admins WHERE COALESCE(is_active,1)=1 ORDER BY name NULLS LAST, id`);
-  return { reps: r.rows };
+  const a = await control.query(`SELECT DISTINCT TRIM(submitted_by) AS name FROM signup_requests WHERE COALESCE(TRIM(submitted_by),'') <> ''`);
+  const b = await control.query(`SELECT name FROM super_admins WHERE COALESCE(is_active,1)=1 AND COALESCE(TRIM(name),'') <> ''`);
+  const set = new Set();
+  [...a.rows, ...b.rows].forEach(r => { const n = String(r.name || '').trim(); if (n) set.add(n); });
+  const reps = [...set].sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase())).map(n => ({ id: n, name: n }));
+  return { reps };
 }
 
-// SAAS_SALES_BY_USER_v1 — user-wise sale summary (count, amount, % of total) for a
-// date range. Grouped by transactions.sold_by (legacy rows fall back to created_by).
+// SAAS_SALES_BY_USER_v2 — user-wise sale summary (count, amount, % of total) for a
+// date range, grouped by SALESPERSON NAME. Precedence per transaction:
+//   1) tx.sold_by_name (explicitly chosen on the form), else
+//   2) the signup rep who onboarded this tenant (signup_requests.submitted_by), else
+//   3) legacy super-admin creator name (tx.sold_by), else 'Unassigned'.
 async function api_saas_sales_by_user(token, filters) {
   await requireSuperAdmin(token);
   const f = filters || {};
@@ -111,19 +120,23 @@ async function api_saas_sales_by_user(token, filters) {
   if (f.type) { params.push(String(f.type)); where.push(`tx.type = $${params.length}`); }
   const wsql = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const r = await control.query(
-    `SELECT COALESCE(tx.sold_by, tx.created_by) AS rep_id,
+    `SELECT COALESCE(
+              NULLIF(TRIM(tx.sold_by_name), ''),
+              (SELECT NULLIF(TRIM(sr.submitted_by), '') FROM signup_requests sr
+                WHERE sr.provisioned_tenant_id = tx.tenant_id AND COALESCE(TRIM(sr.submitted_by),'')<>''
+                ORDER BY sr.id DESC LIMIT 1),
+              (SELECT sa.name FROM super_admins sa WHERE sa.id = tx.sold_by),
+              'Unassigned'
+            ) AS rep,
             COUNT(*)::int AS cnt,
             COALESCE(SUM(tx.amount_inr),0)::numeric AS amount,
             COALESCE(SUM(tx.sale_amount_inr),0)::numeric AS sale
        FROM transactions tx ${wsql}
-      GROUP BY COALESCE(tx.sold_by, tx.created_by)`, params);
-  const admins = await control.query(`SELECT id, name, email FROM super_admins`);
-  const nameById = {}; admins.rows.forEach(a => { nameById[Number(a.id)] = a.name || a.email || ('Admin #' + a.id); });
+      GROUP BY 1`, params);
   const grand = r.rows.reduce((s, x) => s + Number(x.amount || 0), 0);
   const grandCnt = r.rows.reduce((s, x) => s + Number(x.cnt || 0), 0);
   const rows = r.rows.map(x => ({
-    rep_id: x.rep_id,
-    name: x.rep_id ? (nameById[Number(x.rep_id)] || ('Admin #' + x.rep_id)) : 'Unassigned',
+    name: x.rep || 'Unassigned',
     count: Number(x.cnt) || 0,
     amount: Number(x.amount) || 0,
     sale: Number(x.sale) || 0,
@@ -221,7 +234,7 @@ async function api_saas_txn_update(token, payload) {
     transaction_id:   p.transaction_id   !== undefined ? (p.transaction_id   || null) : cur.transaction_id,
     txn_date:         p.txn_date          !== undefined ? (p.txn_date          || null) : cur.txn_date,
     notes:            p.notes             !== undefined ? (p.notes             || null) : cur.notes,
-    sold_by:          p.sold_by           !== undefined ? (p.sold_by ? Number(p.sold_by) : null) : cur.sold_by
+    sold_by_name:     p.sold_by           !== undefined ? (p.sold_by ? String(p.sold_by).slice(0, 120) : null) : cur.sold_by_name
   };
   if (p.tenant_id) data.tenant_id = Number(p.tenant_id);
   await control.update('transactions', Number(p.id), data);
