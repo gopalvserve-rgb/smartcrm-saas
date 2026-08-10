@@ -3199,7 +3199,7 @@ VIEWS.signup_requests = async (view) => {
   (function renderSubmittedBySummary() {
     const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const monthLabel = ym => { const p = String(ym || '').split('-'); return (MON[Number(p[1]) - 1] || p[1] || '') + ' ' + (p[0] || ''); };
-    const sumState = { status: '' };
+    const sumState = { status: '', month: '' };
     const card = h('div', { class: 'card', style: { marginBottom: '1rem' } });
     const statusSel = h('select', { style: { padding: '.3rem .5rem' }, onchange: ev => { sumState.status = ev.target.value; load(); } },
       h('option', { value: '' }, 'All statuses'),
@@ -3207,16 +3207,39 @@ VIEWS.signup_requests = async (view) => {
       h('option', { value: 'paid' }, 'Paid'),
       h('option', { value: 'pending' }, 'Pending')
     );
+    // SR_SUMMARY_MONTH_DROPDOWN_v1 — filter the summary to a single month.
+    const monthSel = h('select', { style: { padding: '.3rem .5rem' }, onchange: ev => { sumState.month = ev.target.value; render(); } },
+      h('option', { value: '' }, 'All months'));
     const csvBtn = h('button', { class: 'btn sm ghost' }, '⬇ CSV');
     card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.5rem', marginBottom: '.5rem' } },
       h('h2', { style: { margin: 0, fontSize: '1.05rem' } }, '📊 Sales Summary — by “Submitted by” (month-wise)'),
-      h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } }, statusSel, csvBtn)
+      h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } }, monthSel, statusSel, csvBtn)
     ));
     const body = h('div', {});
     card.appendChild(body);
     view.appendChild(card);
 
     let _last = null;
+    // Rows to show given the current month filter, with recomputed totals.
+    function displayed() {
+      const all = (_last && _last.rows) || [];
+      const rows = sumState.month ? all.filter(x => x.month === sumState.month) : all;
+      const totals = rows.reduce((a, x) => {
+        a.count += x.count; a.amount += x.amount; a.paid += x.paid; a.balance += x.balance; return a;
+      }, { count: 0, amount: 0, paid: 0, balance: 0 });
+      return { rows, totals };
+    }
+    // Rebuild the month dropdown from the distinct months in the data.
+    function syncMonths() {
+      const months = Array.from(new Set(((_last && _last.rows) || []).map(x => x.month))).sort().reverse();
+      const cur = sumState.month;
+      monthSel.replaceChildren(
+        h('option', { value: '' }, 'All months'),
+        ...months.map(m => h('option', Object.assign({ value: m }, m === cur ? { selected: 'selected' } : {}), monthLabel(m)))
+      );
+      if (cur && !months.includes(cur)) { sumState.month = ''; monthSel.value = ''; }
+    }
+    function render() { body.replaceChildren(table(displayed())); }
     function table(r) {
       const rows = (r && r.rows) || [];
       if (!rows.length) return h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No signups with a “Submitted by” in this view.');
@@ -3267,23 +3290,24 @@ VIEWS.signup_requests = async (view) => {
       return h('div', { class: 'table-wrap' }, tbl);
     }
     csvBtn.onclick = () => {
-      const rows = (_last && _last.rows) || [];
-      if (!rows.length) { toast('Nothing to export', 'err'); return; }
+      const d = displayed();
+      if (!d.rows.length) { toast('Nothing to export', 'err'); return; }
       const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
       const lines = [['Submitted by', 'Month', 'Signups', 'Amount', 'Paid', 'Balance'].join(',')];
-      rows.forEach(x => lines.push([esc(x.rep), esc(monthLabel(x.month)), x.count, x.amount, x.paid, x.balance].join(',')));
-      const t = (_last && _last.totals) || {};
+      d.rows.forEach(x => lines.push([esc(x.rep), esc(monthLabel(x.month)), x.count, x.amount, x.paid, x.balance].join(',')));
+      const t = d.totals;
       lines.push(['Grand total', '', t.count || 0, t.amount || 0, t.paid || 0, t.balance || 0].join(','));
       const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = 'signup-submittedby-summary.csv'; a.click();
+      a.href = URL.createObjectURL(blob);
+      a.download = 'signup-submittedby-summary' + (sumState.month ? '-' + sumState.month : '') + '.csv'; a.click();
     };
     async function load() {
       body.replaceChildren(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'Loading…'));
       try {
-        const r = await api('api_saas_sr_submittedby_summary', { status: sumState.status || undefined });
-        _last = r;
-        body.replaceChildren(table(r));
+        _last = await api('api_saas_sr_submittedby_summary', { status: sumState.status || undefined });
+        syncMonths();
+        render();
       } catch (e) { body.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
     }
     load();
