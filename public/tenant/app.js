@@ -8143,7 +8143,11 @@ function renderCell(col, l, statuses) {
 /* --- selection & bulk --- */
 function onRowCheck() {
   const boxes = $$('.row-check');
-  const n = $$('.row-check:checked').length;
+  // LEADS_SEL_DEDUPE_v1 — the Classic and Modern views each render a .row-check
+  // per lead into the DOM, so counting raw checkboxes double-counted: 4 selected
+  // leads showed as "8 selected". Count UNIQUE lead ids instead.
+  const n = new Set($$('.row-check:checked').map(c => Number(c.dataset.id))).size;
+  const uniqBoxes = new Set(boxes.map(c => Number(c.dataset.id))).size;
   const bar = $('#bulk-bar');
   if (!bar) return;
   if (n === 0) CRM._selectAllMatching = false;   // LEADS_EXPORT_SELECTION_v1
@@ -8155,7 +8159,7 @@ function onRowCheck() {
   $('#bulk-count').textContent = CRM._selectAllMatching
     ? `All ${total} matching leads selected`
     : `${n} selected`;
-  _renderSelectAllMatchingLink(n, boxes.length, total);
+  _renderSelectAllMatchingLink(n, uniqBoxes, total);
 }
 
 // LEADS_EXPORT_SELECTION_v1 — the header checkbox only ticks the CURRENT page.
@@ -8196,7 +8200,10 @@ function clearSelection() {
   selectAll(false);
 }
 function selectedIds() {
-  return $$('.row-check:checked').map(c => Number(c.dataset.id));
+  // LEADS_SEL_DEDUPE_v1 — the same lead can carry a .row-check in BOTH the
+  // Classic and Modern render paths; return each lead id only once so bulk
+  // actions and the "N selected" count reflect real leads, not checkboxes.
+  return [...new Set($$('.row-check:checked').map(c => Number(c.dataset.id)))];
 }
 
 async function bulkAssignPrompt() {
