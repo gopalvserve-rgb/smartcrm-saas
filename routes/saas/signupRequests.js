@@ -339,6 +339,51 @@ async function expressPublicSubmit(req, res) {
   }
 }
 
+/**
+ * SR_SUBMITTEDBY_SUMMARY_v1 — month-wise sales summary grouped by the
+ * "Submitted by" salesperson on each signup request. Count, total amount,
+ * amount paid, and outstanding balance per (salesperson, month).
+ *
+ * The amount fields live inside signups.metadata as strings (e.g. "7670"),
+ * so we strip any non-numeric characters before casting. Salesperson names
+ * are grouped case-insensitively (e.g. "lalit" and "Lalit" merge) and shown
+ * in Title Case.
+ */
+async function api_saas_sr_submittedby_summary(token, filters) {
+  await requireFullAdmin(token);
+  const f = filters || {};
+  const where = []; const args = [];
+  if (f.status && f.status !== 'all') { args.push(f.status); where.push(`status = $${args.length}`); }
+  if (f.from) { args.push(f.from); where.push(`created_at >= $${args.length}`); }
+  if (f.to)   { args.push(f.to);   where.push(`created_at <= $${args.length}`); }
+  const wsql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const NUM = (k) => `NULLIF(regexp_replace(COALESCE(metadata->>'${k}',''),'[^0-9.]','','g'),'')::numeric`;
+  const sql = `
+    SELECT lower(trim(COALESCE(NULLIF(TRIM(metadata->>'submitted_by'),''),'(unassigned)'))) AS rep_key,
+           INITCAP(COALESCE(NULLIF(TRIM(metadata->>'submitted_by'),''),'(unassigned)'))      AS rep,
+           to_char(date_trunc('month', created_at),'YYYY-MM')                                 AS ym,
+           COUNT(*)::int                                                                      AS cnt,
+           COALESCE(SUM(${NUM('total_amount_inr')}),0)::numeric                               AS amount,
+           COALESCE(SUM(${NUM('amount_paid_inr')}),0)::numeric                                AS paid
+      FROM signups
+      ${wsql}
+      GROUP BY rep_key, rep, ym
+      ORDER BY rep, ym`;
+  const r = await control.query(sql, args);
+  const rows = r.rows.map(x => {
+    const amount = Number(x.amount) || 0;
+    const paid   = Number(x.paid)   || 0;
+    return {
+      rep: x.rep, month: x.ym, count: Number(x.cnt) || 0,
+      amount, paid, balance: Math.round((amount - paid) * 100) / 100
+    };
+  });
+  const totals = rows.reduce((a, x) => {
+    a.count += x.count; a.amount += x.amount; a.paid += x.paid; a.balance += x.balance; return a;
+  }, { count: 0, amount: 0, paid: 0, balance: 0 });
+  return { rows, totals };
+}
+
 module.exports = {
   expressPublicSubmit,
   api_saas_sr_list,
@@ -350,5 +395,6 @@ module.exports = {
   api_saas_sr_reject,
   api_saas_sr_delete,
   api_saas_sr_resend,
-  api_saas_sr_summary
+  api_saas_sr_summary,
+  api_saas_sr_submittedby_summary
 };
