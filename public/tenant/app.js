@@ -17854,19 +17854,26 @@ VIEWS.whatsbot = async (view) => {
   // modal can render their 'Send from' picker without an extra wait.
   _loadWaPhones().catch(() => {});
   view.innerHTML = '';
-  const tabs = [
-    { id: 'connect',   label: '🔗 Connect Account' },
-    { id: 'templates', label: '📋 Templates' },
-    { id: 'flows',     label: '🗺️ Bot Flows' },
-    { id: 'msgbots',   label: '💬 Message Bot' },
-    { id: 'tplbots',   label: '🤖 Template Bot' },
-    { id: 'campaigns', label: '📱 WA Campaign' },
-    { id: 'chat',      label: '💭 Chat' },
-    { id: 'assign',    label: '👥 Auto-assign' },
-    { id: 'activity',  label: '📑 Activity Log' },
+  /* WA_TAB_ROLES_v1 — non-admin agents (sales) only need Chat. The old code
+   * showed ALL tabs to everyone and defaulted to 'connect' (admin-only), so
+   * agents (esp. on mobile) landed on an "Admin only" error and had to
+   * horizontally scroll the subtab row to find Chat — which sometimes didn't
+   * scroll. Filter tabs by role and default to the first allowed tab. */
+  const _wbRole = (CRM.user && CRM.user.role) || 'sales';
+  const _WB_ALL_TABS = [
+    { id: 'connect',   label: '🔗 Connect Account', roles: ['admin'] },
+    { id: 'templates', label: '📋 Templates',       roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'flows',     label: '🗺️ Bot Flows',       roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'msgbots',   label: '💬 Message Bot',      roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'tplbots',   label: '🤖 Template Bot',     roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'campaigns', label: '📱 WA Campaign',      roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'chat',      label: '💭 Chat',             roles: ['admin', 'manager', 'team_leader', 'sales'] },
+    { id: 'assign',    label: '👥 Auto-assign',      roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'activity',  label: '📑 Activity Log',     roles: ['admin', 'manager', 'team_leader'] },
     /* WA_CATALOGUE_v1 (2026-07-06) — Vserve-gated at render time */
-    { id: 'catalogue', label: '📚 Catalogue' }
+    { id: 'catalogue', label: '📚 Catalogue',        roles: ['admin', 'manager', 'team_leader', 'sales'] }
   ];
+  const tabs = _WB_ALL_TABS.filter(t => t.roles.includes(_wbRole));
   /* WA_CATALOGUE_v1 (2026-07-06) — CRM.brand doesn't carry WA_CATALOGUE_ENABLED,
    * so the initial paint hides the tab. Show all tabs first, then flip the
    * Catalogue tab visible/hidden after an explicit config fetch. Vserve
@@ -17903,7 +17910,14 @@ VIEWS.whatsbot = async (view) => {
   })();
   view.appendChild(nav);
   view.appendChild(h('div', { id: 'wb-body' }));
-  const startTab = (location.hash.match(/whatsbot\/([a-z]+)/i) || [])[1] || 'connect';
+  /* WA_TAB_ROLES_v1 — default to the first tab this role may see (Chat for
+   * agents), and never land a non-admin on an admin-only tab even if the URL
+   * hash points there. */
+  const _allowed = tabs.map(t => t.id);
+  let startTab = (location.hash.match(/whatsbot\/([a-z]+)/i) || [])[1] || '';
+  if (!startTab || _allowed.indexOf(startTab) === -1) {
+    startTab = _allowed.indexOf('chat') !== -1 ? 'chat' : (_allowed[0] || 'chat');
+  }
   showWbTab(startTab);
 };
 
