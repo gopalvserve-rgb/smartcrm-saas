@@ -2080,7 +2080,12 @@ const NAV_PERM = {
   nurture: 'nurture.view',
   kb: 'kb.view', knowledge: 'kb.view',
   recordings: 'recordings.view',
-  attendance: 'attendance.view_team',
+  /* ATTENDANCE_OWN_ALWAYS_v1 — do NOT gate the Attendance menu by
+   * 'attendance.view_team'. Every employee must reach their OWN attendance
+   * (check-in/out + own history); 'view_team' only controls the team-report
+   * tabs, which VIEWS.attendance already gates by role (canReport). Mapping
+   * the whole menu to view_team hid own-attendance for any role an admin had
+   * (correctly) barred from seeing the whole team's attendance. */
   salary: 'salary.view_team',
   reimburse: 'reimburse.view_team',
   tracking: 'tracking.view_team',
