@@ -290,7 +290,7 @@ function _salesPreset(kind) {
 function _renderSalesByUser() {
   const wrap = h('div', { class: 'card', style: { marginTop: '1.2rem' } });
   wrap.appendChild(h('h2', { style: { margin: '0 0 .2rem', fontSize: '1.15rem' } }, '👤 User-wise Sale Summary'));
-  wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.6rem' } }, 'Sales by team member — count, amount and share of total.'));
+  wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.6rem' } }, 'Sales by salesperson — the “Submitted by” on each signup request. Count, conversions, amount and share of total.'));
   const st = Object.assign({ preset: 'this_month' }, _salesPreset('this_month'));
   const chipRow = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginBottom: '.5rem', alignItems: 'center' } });
   const body = h('div', {});
@@ -330,29 +330,35 @@ function _renderSalesByUser() {
 }
 function _salesTable(r) {
   const rows = (r && r.rows) || [];
-  if (!rows.length) return h('div', { class: 'muted', style: { padding: '.8rem' } }, 'No sales in this period.');
+  if (!rows.length) return h('div', { class: 'muted', style: { padding: '.8rem' } }, 'No signups with a salesperson in this period.');
   const grand = Number(r.grand_total) || 0;
   return h('div', { class: 'table-wrap' }, h('table', { style: { width: '100%' } },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Salesperson'),
-      h('th', { style: { textAlign: 'right' } }, 'Sales'),
+      h('th', { style: { textAlign: 'right' } }, 'Signups'),
+      h('th', { style: { textAlign: 'right' } }, 'Converted'),
       h('th', { style: { textAlign: 'right' } }, 'Amount'),
-      h('th', { style: { textAlign: 'right' } }, '% of total')
+      h('th', { style: { textAlign: 'right' } }, 'Paid'),
+      h('th', { style: { textAlign: 'right' } }, '% of amount')
     )),
     h('tbody', {}, ...rows.map(x => h('tr', {},
       h('td', {}, h('b', {}, x.name)),
       h('td', { style: { textAlign: 'right' } }, String(x.count)),
+      h('td', { style: { textAlign: 'right' } }, String(x.won || 0)),
       h('td', { style: { textAlign: 'right' } }, fmtRupees(x.amount)),
+      h('td', { style: { textAlign: 'right' } }, fmtRupees(x.paid || 0)),
       h('td', { style: { textAlign: 'right' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', justifyContent: 'flex-end' } },
-          h('div', { style: { width: '60px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' } },
+          h('div', { style: { width: '52px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' } },
             h('div', { style: { width: Math.min(100, x.pct) + '%', height: '100%', background: '#2563eb' } })),
           h('span', {}, x.pct + '%')))
     ))),
     h('tfoot', {}, h('tr', { style: { fontWeight: '700', borderTop: '2px solid #cbd5e1' } },
       h('td', {}, 'Total'),
       h('td', { style: { textAlign: 'right' } }, String(r.grand_count || 0)),
+      h('td', { style: { textAlign: 'right' } }, String(r.grand_won || 0)),
       h('td', { style: { textAlign: 'right' } }, fmtRupees(grand)),
+      h('td', { style: { textAlign: 'right' } }, fmtRupees(r.grand_paid || 0)),
       h('td', { style: { textAlign: 'right' } }, '100%')
     ))
   ));
