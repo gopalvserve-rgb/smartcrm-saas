@@ -58221,13 +58221,21 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       { value:'cancelled', label:'Cancelled' }
     ], '');
     statusSel.style.maxWidth = '180px';
+    const docSel = _sel('doc', [
+      { value:'', label:'All documents' },
+      { value:'tax', label:'Tax Invoices' },
+      { value:'proforma', label:'Proforma' }
+    ], '');
+    docSel.style.maxWidth = '180px';
+    docSel.onchange = () => load();
     filters.appendChild(qIn);
     filters.appendChild(statusSel);
+    filters.appendChild(docSel);
     filters.appendChild(_btn('Apply', { kind:'ghost', onclick: () => load() }));
     pg.appendChild(filters);
     pg.querySelector('.page-head').appendChild(_btn('⬇ Excel', { kind:'ghost', onclick: async () => {
       try {
-        const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined });
+        const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined, doc_type: docSel.value || undefined });
         const flat = rows.map(r => ({ 'Invoice #': r.invoice_no, Type: r.doc_type || 'tax', Date: r.invoice_date, Customer: r.customer_name, GSTIN: r.customer_gstin || '', Total: r.total, Paid: r.amount_paid, Balance: (Number(r.total)||0) - (Number(r.amount_paid)||0), Status: r.status, 'Paid status': r.paid_status || '' }));
         await downloadRowsAsXlsx(flat, 'invoices-' + new Date().toISOString().slice(0, 10) + '.xlsx', 'Invoices');
       } catch (e) { toast(e.message, 'err'); }
@@ -58283,7 +58291,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       }
     }
     async function load() {
-      const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined });
+      const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined, doc_type: docSel.value || undefined });
       _invRows = rows || []; _invPage = 1; _renderInvPage();
     }
     load();

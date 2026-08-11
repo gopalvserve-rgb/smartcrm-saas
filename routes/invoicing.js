@@ -451,6 +451,7 @@ async function api_invoicing_invoices_list(token, opts) {
   if (opts.customer_id) { wh.push(`customer_id = $${i++}`); vals.push(Number(opts.customer_id)); }
   if (opts.status)      { wh.push(`status      = $${i++}`); vals.push(String(opts.status)); }
   if (opts.paid_status) { wh.push(`paid_status = $${i++}`); vals.push(String(opts.paid_status)); }
+  if (opts.doc_type)    { wh.push(`COALESCE(doc_type,'tax') = $${i++}`); vals.push(String(opts.doc_type)); }  // INVOICE_DOCTYPE_FILTER_v1
   if (opts.from)        { wh.push(`invoice_date >= $${i++}`); vals.push(opts.from); }
   if (opts.to)          { wh.push(`invoice_date <= $${i++}`); vals.push(opts.to); }
   if (opts.q) {
@@ -467,7 +468,7 @@ async function api_invoicing_invoices_list(token, opts) {
           series reads sequentially and any real gap is obvious at a glance.
           (Date order scrambled the numbers, making present invoices look
           missing.) Zero-padded numbers sort correctly as text. */
-       ORDER BY invoice_no DESC, id DESC
+       ORDER BY (COALESCE(doc_type,'tax') = 'proforma') DESC, invoice_no DESC, id DESC  /* INVOICE_DOCTYPE_FILTER_v1: float proforma to top, keep numbers descending */
        LIMIT ${limit}`,
     vals
   );

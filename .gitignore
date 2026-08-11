@@ -10,3 +10,5 @@ firebase-service-account*.json
 dist/
 .vscode/
 .idea/
+.env.direct
+data/google_conv/
