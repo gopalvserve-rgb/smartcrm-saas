@@ -760,7 +760,6 @@ async function expressOAuthCallback(req, res) {
     const cfgBase = await db.getConfig('BASE_URL', '');
     const origin = (cfgBase || (req.protocol + '://' + req.get('host'))).replace(/\/+$/, '');
     const redirectUri = origin + '/fb/auth/callback';
-    try { console.error('[fb dbg] cfgBase=' + JSON.stringify(cfgBase) + ' proto=' + JSON.stringify(req.protocol) + ' host=' + JSON.stringify(req.get('host')) + ' xfp=' + JSON.stringify(req.headers['x-forwarded-proto']) + ' xfh=' + JSON.stringify(req.headers['x-forwarded-host']) + ' redirectUri=' + JSON.stringify(redirectUri)); } catch (_) {}
     const tokenJson = await _gget(
       `${GRAPH}/oauth/access_token?client_id=${app_id}&client_secret=${app_secret}` +
       `&redirect_uri=${encodeURIComponent(redirectUri)}&code=${encodeURIComponent(code)}`
