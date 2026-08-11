@@ -60310,8 +60310,14 @@ VIEWS.ecorders = async (view) => {
       if (reloading) return;
       try {
         var html = await fetch('./', { cache: 'no-store' }).then(function(r){ return r.text(); });
-        var m = html.match(/app\.js\?v=([^"'&]+)/i);
-        if (m && m[1] && m[1] !== MY) {
+        // AUTO_UPDATE_v2 (2026-08-11) — collect EVERY app.js?v= version in the
+        // shell and reload only when the version we actually loaded with is
+        // present NOWHERE (a genuinely newer build). v1 matched just the FIRST
+        // occurrence, so a stale ?v= string left in an HTML comment made the
+        // page think a new version was always available → infinite reload loop.
+        var re = /app\.js\?v=([^"'&\s]+)/ig, mm, versions = [];
+        while ((mm = re.exec(html))) { versions.push(mm[1]); }
+        if (versions.length && versions.indexOf(MY) === -1) {
           reloading = true;
           try { if (typeof toast === 'function') toast('Updating to the latest version…', 'ok'); } catch(_){}
           setTimeout(function(){ location.reload(true); }, 900);
