@@ -463,7 +463,11 @@ async function api_invoicing_invoices_list(token, opts) {
     `SELECT id, invoice_no, invoice_date, company_id, company_name,
             customer_id, customer_name, total, amount_paid, paid_status, status, doc_type
        FROM invoices_inv ${where}
-       ORDER BY invoice_date DESC, id DESC
+       /* INVOICE_SORT_BY_NO_v1 (2026-08-11) — order by the invoice number so the
+          series reads sequentially and any real gap is obvious at a glance.
+          (Date order scrambled the numbers, making present invoices look
+          missing.) Zero-padded numbers sort correctly as text. */
+       ORDER BY invoice_no DESC, id DESC
        LIMIT ${limit}`,
     vals
   );
