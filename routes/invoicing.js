@@ -688,8 +688,17 @@ async function api_invoicing_invoices_delete(token, id) {
   // INVOICE_DELETE_v1 — hard-delete an invoice + its lines + payments.
   const { user } = await _ctx(token);
   const iid = Number(id);
-  const ex = await db.query(`SELECT id, invoice_no, total FROM invoices_inv WHERE id=$1`, [iid]);
+  const ex = await db.query(`SELECT id, invoice_no, total, status, doc_type FROM invoices_inv WHERE id=$1`, [iid]);
   if (!ex.rows.length) throw new Error('Invoice not found');
+  // INVOICE_SERIES_GUARD_v1 (2026-08-11) — a finalized GST tax-invoice number is
+  // part of a legally-continuous series; hard-deleting it leaves a permanent
+  // gap (this is exactly how RED016653 went missing). Block it and steer the
+  // user to Cancel, which keeps the number in the series and marks it
+  // cancelled. Drafts and proforma docs may still be deleted.
+  if (String(ex.rows[0].status) !== 'draft' && String(ex.rows[0].doc_type || 'tax') === 'tax') {
+    throw new Error('Cannot delete finalized invoice ' + ex.rows[0].invoice_no +
+      ' — deleting it would break the invoice number series. Use "Cancel" instead: it keeps the number in the series and marks the invoice cancelled.');
+  }
   let store = null; try { store = db.tenantStorage.getStore(); } catch (_) {}
   const pool = store && store.pool;
   if (!pool) throw new Error('Tenant pool unavailable');
