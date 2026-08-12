@@ -52,7 +52,7 @@ function _slug() {
     return (st && st.slug) ? String(st.slug) : '';
   } catch (_) { return ''; }
 }
-function isEnabled() { return ALLOWED_SLUGS.indexOf(_slug()) >= 0; }
+function isEnabled() { return true; /* CUSTOMER_ALL_TENANTS_v1 — module enabled for every tenant */ }
 function _assertEnabled() {
   if (!isEnabled()) throw new Error('Customer module is not enabled for this tenant');
 }

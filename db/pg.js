@@ -892,8 +892,29 @@ async function findBy(table, field, value) {
   return rows.map(r => _deserialize(table, r));
 }
 
+// LEAD_PHONE_CC_v1 (2026-08-12) — when a tenant enables auto-add country code,
+// ensure EVERY lead's phone (from any intake path: manual, WhatsApp, FB, forms,
+// webhooks, IVR, call-sync, import) carries the "+CC" prefix so the dialer works.
+// Only ADDS "+", never strips; idempotent; no-op unless LEAD_CC_AUTOADD='1'.
+async function _normalizeLeadPhone(raw) {
+  const orig = String(raw == null ? '' : raw).trim();
+  if (!orig) return raw;
+  if (orig.charAt(0) === '+') return orig;               // already E.164
+  let auto = '0';
+  try { auto = String((await getConfig('LEAD_CC_AUTOADD', '0')) || '0'); } catch (_) { return raw; }
+  if (auto !== '1') return raw;                            // feature off → leave untouched
+  let cc = '91';
+  try { cc = String((await getConfig('LEAD_CC_CODE', '91')) || '91').replace(/\D/g, '') || '91'; } catch (_) {}
+  let d = orig.replace(/\D/g, '').replace(/^00/, '');
+  if (!d) return orig;
+  if (d.length === 10) return '+' + cc + d;                // bare national → +CC national
+  if (d.startsWith(cc) && d.length === cc.length + 10) return '+' + d;  // CC+national missing the +
+  return orig;                                             // anything odd → leave as-is
+}
+
 async function insert(table, row) {
   const data = _serialize(table, row);
+  if (table === 'leads' && data.phone) { try { data.phone = await _normalizeLeadPhone(data.phone); } catch (_) {} }
   const keys = Object.keys(data);
   if (keys.length === 0) throw new Error(`insert: no valid columns for ${table}`);
   const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
