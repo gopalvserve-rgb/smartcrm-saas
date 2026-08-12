@@ -121,7 +121,12 @@ public class MainActivity extends BridgeActivity {
         try {
             WebView wv = getBridge().getWebView();
             wv.getSettings().setGeolocationEnabled(true);
-            wv.setWebChromeClient(new WebChromeClient() {
+            // FILE_UPLOAD_FIX (2026-08-13): subclass Capacitor's BridgeWebChromeClient
+            // instead of a bare WebChromeClient. The bare client dropped onShowFileChooser(),
+            // which broke every <input type="file"> in the app (ticket attachments, uploads).
+            // Subclassing preserves file-chooser + Capacitor behavior AND keeps the
+            // geolocation auto-grant used by attendance check-in.
+            wv.setWebChromeClient(new com.getcapacitor.BridgeWebChromeClient(getBridge()) {
                 @Override
                 public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
                     callback.invoke(origin, true, true);
