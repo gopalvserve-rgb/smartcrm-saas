@@ -1818,7 +1818,7 @@ const NAV_GROUPS = [
     { id: 'trash',      label: 'Trash',                icon: '♻️', roles: ['admin','manager'], search: 'trash deleted recover restore reinstate bin recycle deleted leads recover deleted lead recovery' },
     /* CUSTOMER_MODULE_v1 — visible only when customers.js loaded (vserve). The view
      * itself re-checks enabled server-side, so this is just discoverability. */
-    { id: 'customers',  label: 'Customers',            icon: '👥', search: 'customer convert customer delivery order fulfilment buyer', requiresSlug: ['vserve'] },
+    { id: 'customers',  label: 'Customers',            icon: '👥', search: 'customer convert customer delivery order fulfilment buyer' },  /* CUSTOMER_ALL_TENANTS_v1 — nav shown for every tenant */
     { id: 'quotations', label: 'Quotations',           icon: '📄', search: 'quotation quote proposal estimate' },
     // ---- Education pack (visible only when pack is active) ----
     { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'fees collection education' },
