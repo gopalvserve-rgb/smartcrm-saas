@@ -10635,9 +10635,10 @@ async function openLeadModal(id) {
       });
     } catch (e) { console.warn('[F2 all-fields submit]', e && e.message); }
     // Tags: if non-admin, the tags field is a multi-select — collect with getAll.
-    const tagsValue = isAdmin
-      ? (fd.get('tags') || '')
-      : fd.getAll('tags[]').join(',');
+    // TAGS_MULTI_CHECKBOX_v1 — checkboxes for everyone; admins may also add new ones via name='tags'.
+    const _pickedTags = fd.getAll('tags[]');
+    const _extraTags = String(fd.get('tags') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const tagsValue = _pickedTags.concat(_extraTags).filter((v, i, a) => a.indexOf(v) === i).join(',');
     const payload = {
       name: fd.get('name'), phone: fd.get('phone'), email: fd.get('email'),
       whatsapp: fd.get('whatsapp'), source: fd.get('source'),
@@ -10714,29 +10715,30 @@ async function openLeadModal(id) {
  * - Non-admin → multi-select of existing tags only. Cannot type new ones.
  */
 function tagsInput(currentTags, tagLibrary, isAdmin) {
+  // TAGS_MULTI_CHECKBOX_v1 — everyone (incl. admins) picks tags via checkboxes.
+  // Admins additionally get an "add new tag(s)" box to create tags on the fly.
   const current = String(currentTags || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (isAdmin) {
-    // Free-form input plus a datalist of known tags for autocomplete.
-    const dlId = 'tag-suggest-' + Math.random().toString(36).slice(2, 8);
-    const inp = h('input', { name: 'tags', value: current.join(', '), list: dlId, placeholder: 'comma separated' });
-    const dl  = h('datalist', { id: dlId }, ...tagLibrary.map(t => h('option', { value: t.name })));
-    return h('div', { class: 'f-row' }, h('label', {}, 'Tags'), h('div', {}, inp, dl,
-      h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.25rem' } },
-        'Manage the master tag list under Admin → Tags.'))
-    );
-  }
-  // Non-admin: multi-select. Cannot type new tags.
-  if (tagLibrary.length === 0) {
+  const libNames = (tagLibrary || []).map(t => t.name);
+  const allNames = libNames.slice();
+  current.forEach(c => { if (allNames.indexOf(c) === -1) allNames.push(c); });
+  const colorOf = (n) => ((tagLibrary || []).find(t => t.name === n) || {}).color || '#6366f1';
+  if (!allNames.length && !isAdmin) {
     return h('div', { class: 'f-row' }, h('label', {}, 'Tags'),
       h('div', { class: 'muted' }, 'No tags available. Ask an admin to add them under Admin → Tags.'));
   }
   const grid = h('div', { class: 'cf-multi-grid' },
-    ...tagLibrary.map(t => h('label', {},
-      h('input', { type: 'checkbox', name: 'tags[]', value: t.name, checked: current.includes(t.name) ? 'checked' : null }),
-      ' ', h('span', { class: 'tag', style: { background: t.color, color: '#fff' } }, t.name)
+    ...allNames.map(n => h('label', {},
+      h('input', { type: 'checkbox', name: 'tags[]', value: n, checked: current.indexOf(n) !== -1 ? 'checked' : null }),
+      ' ', h('span', { class: 'tag', style: { background: colorOf(n), color: '#fff' } }, n)
     ))
   );
-  return h('div', { class: 'f-row full' }, h('label', {}, 'Tags'), grid);
+  const kids = [h('label', {}, 'Tags'), grid];
+  if (isAdmin) {
+    kids.push(h('input', { name: 'tags', value: '', placeholder: 'Add new tag(s), comma separated', style: { marginTop: '.4rem' } }));
+    kids.push(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.25rem' } },
+      'Tick existing tags above, or type new ones here. Manage the master list under Admin → Tags.'));
+  }
+  return h('div', { class: 'f-row full' }, ...kids);
 }
 
 function qualifiedToggle(lead) {
