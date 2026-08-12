@@ -450,7 +450,9 @@
       { key: 'sales',    label: 'Sales rep' },
       { key: 'age',      label: 'Age' },
       { key: 'phone',    label: 'Phone' },
-      { key: 'created',  label: 'Converted on' }
+      { key: 'created',  label: 'Converted on' },
+      { key: 'progress', label: 'Progress' },
+      { key: 'remark',   label: 'Remark' }
     ];
     const cf = (S.cfDefs || []).map(function (f) { return { key: 'cf:' + f.key, label: f.label, cf: f }; });
     return base.concat(cf);
@@ -481,6 +483,20 @@
       case 'age':     return h('td', { style: td() }, r.days_in_stage != null ? r.days_in_stage + 'd' : '—');
       case 'phone':   return h('td', { style: td() }, r.phone || '—');
       case 'created': return h('td', { style: td() }, r.created_at ? new Date(r.created_at).toLocaleDateString() : '—');
+      case 'progress': {
+        var tot = Number(r.task_total) || 0, dn = Number(r.task_done) || 0;
+        if (!tot) return h('td', { style: td() }, h('span', { style: { color: C.muted } }, '—'));
+        var pp = Math.round(dn / tot * 100), bc = pp >= 100 ? '#16a34a' : (pp >= 50 ? '#d97706' : '#dc2626');
+        return h('td', { style: td() }, h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+          h('div', { style: { width: '58px', height: '7px', background: '#eef2f7', borderRadius: '99px', overflow: 'hidden' } },
+            h('div', { style: { width: pp + '%', height: '100%', background: bc } })),
+          h('span', { style: { fontSize: '.72rem', fontWeight: 700, color: bc } }, pp + '%'),
+          h('span', { style: { fontSize: '.68rem', color: C.muted } }, dn + '/' + tot)));
+      }
+      case 'remark': {
+        var rmk = (r.delivery_remark || '').trim();
+        return h('td', { style: td() }, rmk ? h('span', { title: rmk }, rmk.length > 40 ? rmk.slice(0, 40) + '…' : rmk) : h('span', { style: { color: C.muted } }, '—'));
+      }
       default:
         if (col.key.slice(0, 3) === 'cf:') { const v = _extra(r)[col.cf.key]; return h('td', { style: td() }, (v != null && String(v).trim()) ? String(v) : '—'); }
         return h('td', { style: td() }, '');
@@ -535,6 +551,7 @@
     tabs.appendChild(mk('reports', '📊 Reports'));
     if (role() === 'admin') tabs.appendChild(mk('rules', '⚙️ Auto-assign rules'));
     if (role() === 'admin') tabs.appendChild(mk('fields', '🧩 Custom fields'));
+    if (role() === 'admin' || role() === 'manager') tabs.appendChild(mk('checklist', '✅ Checklist'));
     view.appendChild(tabs);
 
     const panel = h('div', {});
@@ -543,6 +560,7 @@
     else if (S.tab === 'reports') await renderReports(panel);
     else if (S.tab === 'rules') await renderRules(panel);
     else if (S.tab === 'fields') await renderFields(panel);
+    else if (S.tab === 'checklist') await renderChecklistAdmin(panel);
   }
 
   async function renderList(panel) {
@@ -636,6 +654,75 @@
     }
     body.appendChild(stageWrap);
 
+    // DELIVERY_CHECKLIST_v1 — checklist for the current stage + auto %
+    var canWork = role() === 'admin' || role() === 'manager' || myId() === Number(c.owner_user_id) || myId() === Number(c.sales_user_id);
+    (function () {
+      var tasks = d.tasks || [];
+      var total = tasks.length, done = tasks.filter(function (t) { return Number(t.done); }).length;
+      var pct = total ? Math.round(done / total * 100) : 0;
+      var barCol = pct >= 100 ? '#16a34a' : (pct >= 50 ? '#d97706' : '#dc2626');
+      var sec = h('div', { style: { margin: '.8rem 0' } });
+      var pctLbl = total ? h('span', { style: { fontSize: '.72rem', fontWeight: 700, color: barCol } }, pct + '% · ' + done + '/' + total) : null;
+      sec.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', margin: '0 0 .5rem' } },
+        h('div', { style: { fontWeight: 700, fontSize: '.75rem', color: C.soft, textTransform: 'uppercase' } }, 'Delivery checklist'), pctLbl));
+      if (!total) {
+        sec.appendChild(h('div', { style: { fontSize: '.78rem', color: C.muted } }, 'No checklist set for this stage.' + ((role() === 'admin' || role() === 'manager') ? ' Add tasks under the Checklist tab.' : '')));
+      } else {
+        var inner = h('div', { style: { width: pct + '%', height: '100%', background: barCol, transition: 'width .2s' } });
+        var bar = h('div', { style: { height: '8px', background: '#eef2f7', borderRadius: '99px', overflow: 'hidden', margin: '0 0 .5rem' } }, inner);
+        sec.appendChild(bar);
+        tasks.forEach(function (t) {
+          var cb = h('input', { type: 'checkbox' });
+          if (Number(t.done)) cb.checked = true;
+          if (!canWork) cb.disabled = 'disabled';
+          var txt = h('span', { style: Number(t.done) ? { textDecoration: 'line-through', color: C.muted } : {} }, t.title);
+          cb.addEventListener('change', async function () {
+            cb.disabled = 'disabled';
+            try {
+              await api('api_customers_taskToggle', { id: c.id, task_id: t.id, done: cb.checked });
+              t.done = cb.checked ? 1 : 0;
+              var nd = tasks.filter(function (x) { return Number(x.done); }).length;
+              var np = tasks.length ? Math.round(nd / tasks.length * 100) : 0;
+              var bc = np >= 100 ? '#16a34a' : (np >= 50 ? '#d97706' : '#dc2626');
+              inner.style.width = np + '%'; inner.style.background = bc;
+              if (pctLbl) { pctLbl.textContent = np + '% · ' + nd + '/' + tasks.length; pctLbl.style.color = bc; }
+              txt.style.textDecoration = t.done ? 'line-through' : 'none';
+              txt.style.color = t.done ? C.muted : '';
+            } catch (e) { toast(e.message, 'err'); cb.checked = !cb.checked; }
+            finally { if (canWork) cb.disabled = false; }
+          });
+          sec.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.28rem 0', fontSize: '.85rem', cursor: canWork ? 'pointer' : 'default' } }, cb, txt));
+        });
+      }
+      body.appendChild(sec);
+    })();
+
+    // DELIVERY_CHECKLIST_v1 — delivery remark
+    (function () {
+      var sec = h('div', { style: { margin: '.8rem 0' } });
+      sec.appendChild(label('Remark — what is done / pending'));
+      var ta = h('textarea', { style: { width: '100%', minHeight: '54px', border: '1px solid ' + C.border, borderRadius: '6px', padding: '.5rem', fontSize: '.85rem', fontFamily: 'inherit', boxSizing: 'border-box' } });
+      ta.value = c.delivery_remark || '';
+      if (!canWork) ta.disabled = 'disabled';
+      sec.appendChild(ta);
+      if (canWork) {
+        sec.appendChild(h('div', { style: { marginTop: '.4rem' } }, btn('Save remark', 'primary', async function () {
+          try { await api('api_customers_setRemark', { id: c.id, remark: ta.value }); toast('Remark saved', 'ok'); c.delivery_remark = ta.value.trim(); }
+          catch (e) { toast(e.message, 'err'); }
+        })));
+      }
+      if (d.remarks && d.remarks.length) {
+        var hist = h('div', { style: { marginTop: '.5rem' } });
+        d.remarks.slice(0, 10).forEach(function (rm) {
+          hist.appendChild(h('div', { style: { fontSize: '.76rem', color: C.soft, padding: '.2rem 0', borderBottom: '1px solid #f8fafc' } },
+            (rm.user_name || '—') + ' · ' + new Date(rm.created_at).toLocaleDateString() + ' — ' + rm.remark));
+        });
+        sec.appendChild(hist);
+      }
+      body.appendChild(sec);
+    })();
+
+
     // history
     if (d.history && d.history.length) {
       body.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.75rem', color: C.soft, textTransform: 'uppercase',
@@ -652,6 +739,46 @@
   }
   function kv(k, v) { return h('div', {}, h('div', { style: { fontSize: '.68rem', color: C.muted, textTransform: 'uppercase' } }, k),
     h('div', { style: { fontSize: '.85rem', fontWeight: 600 } }, v || '—')); }
+  async function renderChecklistAdmin(panel) {
+    panel.innerHTML = '';
+    panel.appendChild(h('div', { style: { color: C.soft, fontSize: '.85rem', margin: '0 0 .8rem' } },
+      'Define the checklist of tasks for each delivery stage. The delivery team ticks these on each customer, and the % complete is calculated automatically.'));
+    var all = [];
+    try { all = ((await api('api_customers_stageTasks_list')) || {}).tasks || []; }
+    catch (e) { panel.appendChild(h('div', { style: { color: C.err } }, e.message)); return; }
+    (S.stages || []).forEach(function (st) {
+      var mine = all.filter(function (t) { return Number(t.stage_id) === Number(st.id); })
+                    .sort(function (a, b) { return (a.sort_order - b.sort_order) || (a.id - b.id); });
+      var inner = h('div', {});
+      inner.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
+        stagePill({ stage_name: st.name, stage_id: st.id }),
+        h('span', { style: { color: C.muted, fontSize: '.72rem' } }, mine.length + ' task' + (mine.length === 1 ? '' : 's'))));
+      mine.forEach(function (t) {
+        var ti = input({ value: t.title }); ti.style.flex = '1';
+        var row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.2rem 0' } }, ti,
+          btn('Save', null, async function () {
+            try { await api('api_customers_stageTasks_save', { id: t.id, title: ti.value }); toast('Saved', 'ok'); }
+            catch (e) { toast(e.message, 'err'); }
+          }),
+          btn('🗑', null, async function () {
+            if (!confirm('Remove task: ' + t.title + ' ?')) return;
+            try { await api('api_customers_stageTasks_delete', t.id); toast('Removed', 'ok'); renderChecklistAdmin(panel); }
+            catch (e) { toast(e.message, 'err'); }
+          }));
+        inner.appendChild(row);
+      });
+      var nt = input({ placeholder: 'New task for this stage…' }); nt.style.flex = '1';
+      inner.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.4rem 0 0', borderTop: '1px solid ' + C.border, marginTop: '.4rem' } }, nt,
+        btn('+ Add', 'primary', async function () {
+          if (!nt.value.trim()) return;
+          try { await api('api_customers_stageTasks_save', { stage_id: st.id, title: nt.value, sort_order: (mine.length + 1) * 10 }); toast('Added', 'ok'); renderChecklistAdmin(panel); }
+          catch (e) { toast(e.message, 'err'); }
+        })));
+      panel.appendChild(card(inner));
+    });
+    if (!(S.stages || []).length) panel.appendChild(card('No delivery stages defined yet.'));
+  }
+
   function renderCurrent() { const v = document.getElementById('view') || document.querySelector('#view'); if (v) render(v); }
 
   async function renderReports(panel) {

@@ -318,6 +318,7 @@ async function api_customers_list(token, payload) {
   const me = await authUser(token);
   if (!isEnabled()) return { ok: true, enabled: false, rows: [], total: 0 };
   await ensureSeed();
+  await _ensureTaskSchema();
   const p = payload || {};
   const v = await _visibleWhere(me);
   const args = [...v.args];
@@ -348,7 +349,9 @@ async function api_customers_list(token, payload) {
   const rows = await db.query(
     `SELECT c.*,
             s.name AS stage_name, s.expected_days,
-            uo.name AS owner_name, us.name AS sales_name
+            uo.name AS owner_name, us.name AS sales_name,
+            (SELECT COUNT(*) FROM buyer_stage_tasks t WHERE t.stage_id=c.stage_id AND COALESCE(t.is_active,1)=1) AS task_total,
+            (SELECT COUNT(*) FROM buyer_task_done d JOIN buyer_stage_tasks t ON t.id=d.task_id WHERE d.customer_id=c.id AND COALESCE(d.done,1)=1 AND t.stage_id=c.stage_id AND COALESCE(t.is_active,1)=1) AS task_done
        FROM buyers c
        LEFT JOIN project_stages s ON s.id = c.stage_id
        LEFT JOIN users uo ON uo.id = c.owner_user_id
@@ -371,6 +374,7 @@ async function api_customers_list(token, payload) {
 async function api_customers_get(token, id) {
   const me = await authUser(token);
   _assertEnabled();
+  await _ensureTaskSchema();
   const v = await _visibleWhere(me);
   const r = await db.query(
     `SELECT c.*, s.name AS stage_name,
@@ -391,7 +395,9 @@ async function api_customers_get(token, id) {
   const watch = await db.query(
     `SELECT w.*, u.name FROM buyer_watchers w LEFT JOIN users u ON u.id = w.user_id
       WHERE w.customer_id = $1`, [Number(id)]);
-  return { ok: true, customer: r.rows[0], history: hist.rows, watchers: watch.rows };
+  const _lse = await _tasksForCustomer(r.rows[0]);
+  const _rem = await db.query(`SELECT rq.*, u.name AS user_name FROM buyer_remarks rq LEFT JOIN users u ON u.id=rq.user_id WHERE rq.customer_id=$1 ORDER BY rq.created_at DESC LIMIT 50`, [Number(id)]).catch(() => ({ rows: [] }));
+  return { ok: true, customer: r.rows[0], history: hist.rows, watchers: watch.rows, tasks: _lse.tasks, task_total: _lse.total, task_done: _lse.done, pct: _lse.pct, remarks: _rem.rows };
 }
 
 /** Move the journey forward. Only the accountable owner (or admin) may. */
@@ -729,6 +735,136 @@ async function api_customers_report(token, payload) {
   };
 }
 
+
+/* ===========================================================================
+ * DELIVERY_CHECKLIST_v1 (2026-08-12) — admin-defined checklist of tasks per
+ * delivery stage; the delivery team ticks them on each customer; % complete is
+ * auto-calculated; plus a per-customer delivery remark (+ remark history).
+ * New tables are NOT in db/pg.js SCHEMA, so ALL writes use raw db.query.
+ * ========================================================================= */
+let _taskSchemaReady = false;
+async function _ensureTaskSchema() {
+  if (_taskSchemaReady) return;
+  await db.query(`CREATE TABLE IF NOT EXISTS buyer_stage_tasks (
+      id SERIAL PRIMARY KEY, stage_id INTEGER NOT NULL, title TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 10, is_active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())`);
+  await db.query(`CREATE TABLE IF NOT EXISTS buyer_task_done (
+      id SERIAL PRIMARY KEY, customer_id INTEGER NOT NULL, task_id INTEGER NOT NULL,
+      done INTEGER DEFAULT 1, done_by INTEGER, done_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (customer_id, task_id))`);
+  await db.query(`CREATE TABLE IF NOT EXISTS buyer_remarks (
+      id SERIAL PRIMARY KEY, customer_id INTEGER NOT NULL, user_id INTEGER,
+      remark TEXT, created_at TIMESTAMPTZ DEFAULT now())`);
+  await db.query(`ALTER TABLE buyers ADD COLUMN IF NOT EXISTS delivery_remark TEXT`);
+  _taskSchemaReady = true;
+}
+
+async function _tasksForCustomer(buyer) {
+  await _ensureTaskSchema();
+  const sid = Number(buyer.stage_id) || 0;
+  if (!sid) return { tasks: [], total: 0, done: 0, pct: 0 };
+  const r = await db.query(
+    `SELECT t.id, t.title, t.sort_order,
+            CASE WHEN d.id IS NULL THEN 0 ELSE COALESCE(d.done,1) END AS done
+       FROM buyer_stage_tasks t
+       LEFT JOIN buyer_task_done d ON d.task_id = t.id AND d.customer_id = $1
+      WHERE t.stage_id = $2 AND COALESCE(t.is_active,1) = 1
+      ORDER BY t.sort_order, t.id`, [Number(buyer.id), sid]);
+  const tasks = r.rows.map(x => ({ id: x.id, title: x.title, done: Number(x.done) ? 1 : 0 }));
+  const total = tasks.length, done = tasks.filter(t => t.done).length;
+  return { tasks, total, done, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
+function _mayWork(me, buyer) {
+  return me.role === 'admin' || me.role === 'manager' ||
+         Number(buyer.owner_user_id) === Number(me.id) ||
+         Number(buyer.sales_user_id) === Number(me.id);
+}
+
+async function api_customers_stageTasks_list(token, stageId) {
+  await authUser(token);
+  _assertEnabled();
+  await _ensureTaskSchema();
+  const args = []; let wh = 'COALESCE(is_active,1)=1';
+  if (stageId) { args.push(Number(stageId)); wh += ' AND stage_id=$' + args.length; }
+  const r = await db.query(`SELECT * FROM buyer_stage_tasks WHERE ${wh} ORDER BY stage_id, sort_order, id`, args);
+  return { ok: true, tasks: r.rows };
+}
+
+async function api_customers_stageTasks_save(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Only an admin can edit the delivery checklist.');
+  await _ensureTaskSchema();
+  const p = payload || {};
+  const title = String(p.title || '').trim();
+  if (p.id) {
+    const sets = [], args = [];
+    if (p.title !== undefined) { if (!title) throw new Error('Task title required'); args.push(title); sets.push('title=$' + args.length); }
+    if (p.sort_order !== undefined) { args.push(Number(p.sort_order) || 10); sets.push('sort_order=$' + args.length); }
+    if (p.stage_id !== undefined) { args.push(Number(p.stage_id)); sets.push('stage_id=$' + args.length); }
+    if (p.is_active !== undefined) { args.push(p.is_active ? 1 : 0); sets.push('is_active=$' + args.length); }
+    sets.push('updated_at=now()');
+    args.push(Number(p.id));
+    await db.query(`UPDATE buyer_stage_tasks SET ${sets.join(', ')} WHERE id=$${args.length}`, args);
+    return { ok: true, id: Number(p.id) };
+  }
+  if (!title) throw new Error('Task title required');
+  if (!p.stage_id) throw new Error('stage_id required');
+  const r = await db.query(
+    `INSERT INTO buyer_stage_tasks (stage_id, title, sort_order, is_active, created_at, updated_at)
+     VALUES ($1,$2,$3,1,now(),now()) RETURNING id`,
+    [Number(p.stage_id), title, Number(p.sort_order) || 10]);
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_customers_stageTasks_delete(token, id) {
+  const me = await authUser(token);
+  _assertEnabled();
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Only an admin can edit the delivery checklist.');
+  await _ensureTaskSchema();
+  await db.query(`UPDATE buyer_stage_tasks SET is_active=0, updated_at=now() WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+async function api_customers_taskToggle(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  await _ensureTaskSchema();
+  const p = payload || {};
+  const buyer = await db.findById('buyers', Number(p.id));
+  if (!buyer) throw new Error('Customer not found');
+  if (!_mayWork(me, buyer)) throw new Error('You are not on this delivery.');
+  const taskId = Number(p.task_id);
+  if (!taskId) throw new Error('task_id required');
+  if (p.done) {
+    await db.query(
+      `INSERT INTO buyer_task_done (customer_id, task_id, done, done_by, done_at)
+       VALUES ($1,$2,1,$3,now())
+       ON CONFLICT (customer_id, task_id) DO UPDATE SET done=1, done_by=$3, done_at=now()`,
+      [Number(p.id), taskId, Number(me.id)]);
+  } else {
+    await db.query(`DELETE FROM buyer_task_done WHERE customer_id=$1 AND task_id=$2`, [Number(p.id), taskId]);
+  }
+  const info = await _tasksForCustomer(buyer);
+  return { ok: true, task_total: info.total, task_done: info.done, pct: info.pct };
+}
+
+async function api_customers_setRemark(token, payload) {
+  const me = await authUser(token);
+  _assertEnabled();
+  await _ensureTaskSchema();
+  const p = payload || {};
+  const buyer = await db.findById('buyers', Number(p.id));
+  if (!buyer) throw new Error('Customer not found');
+  if (!_mayWork(me, buyer)) throw new Error('You are not on this delivery.');
+  const remark = String(p.remark || '').trim();
+  await db.query(`UPDATE buyers SET delivery_remark=$1, updated_at=now() WHERE id=$2`, [remark, Number(p.id)]);
+  if (remark) { try { await db.query(`INSERT INTO buyer_remarks (customer_id, user_id, remark, created_at) VALUES ($1,$2,$3,now())`, [Number(p.id), Number(me.id), remark]); } catch (_) {} }
+  return { ok: true };
+}
+
 module.exports = {
   isEnabled, ensureSeed,
   api_customers_convert, api_customers_previewAssignee,
@@ -737,5 +873,7 @@ module.exports = {
   api_customers_stages, api_customers_stageSave,
   api_customers_rules, api_customers_ruleSave, api_customers_ruleDelete,
   api_customers_report,
-  api_customers_fields, api_customers_fieldSave, api_customers_fieldDelete
+  api_customers_fields, api_customers_fieldSave, api_customers_fieldDelete,
+  api_customers_stageTasks_list, api_customers_stageTasks_save, api_customers_stageTasks_delete,
+  api_customers_taskToggle, api_customers_setRemark
 };
