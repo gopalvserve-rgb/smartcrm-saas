@@ -321,6 +321,7 @@ async function expressRenderForm(req, res) {
 
     try { await db.query(`UPDATE forms SET view_count = view_count + 1 WHERE id = $1`, [form.id]); } catch (_) {}
 
+    let _logo = ''; try { _logo = (await db.getConfig('COMPANY_LOGO_URL', '')) || ''; } catch (_) {}
     const prefill = req.query || {};
     const themeColor = form.theme_color || '#4f46e5';
     const tenantSlug = req.tenantSlug || (req.tenant && req.tenant.slug) || '';
@@ -365,6 +366,7 @@ button[type=submit]:disabled { opacity: .55; cursor: progress; }
 <body>
 <div class="wrap">
   <div class="hdr">
+    ${_logo ? `<img src="${_esc(_logo)}" alt="" style="max-height:60px;max-width:220px;margin-bottom:.7rem;display:block">` : ''}
     <h1>${_esc(form.name)}</h1>
     ${form.description ? `<p>${_esc(form.description)}</p>` : ''}
   </div>

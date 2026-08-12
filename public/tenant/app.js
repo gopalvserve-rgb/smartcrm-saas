@@ -42610,7 +42610,7 @@ async function adminForms() {
     return wrap;
   }
 
-  const slug = CRM.user && CRM.user.tenant_slug ? CRM.user.tenant_slug : '';
+  const slug = (window.TENANT_SLUG || (CRM.user && CRM.user.tenant_slug) || '');
   const base = window.location.origin + (slug ? '/t/' + slug : '');
   forms.forEach(f => {
     const publicUrl = base + '/f/' + f.slug;
@@ -42857,7 +42857,7 @@ async function adminPages() {
     return wrap;
   }
 
-  const slug = CRM.user && CRM.user.tenant_slug ? CRM.user.tenant_slug : '';
+  const slug = (window.TENANT_SLUG || (CRM.user && CRM.user.tenant_slug) || '');
   const base = window.location.origin + (slug ? '/t/' + slug : '');
   pages.forEach(p => {
     const publicUrl = base + '/p/' + p.slug;
