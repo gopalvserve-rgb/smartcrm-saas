@@ -74,7 +74,7 @@ const pool = new Pool({
   // remove the keepAlive lines.
   keepAlive: true,
   keepAliveInitialDelayMillis: 10_000,
-  idleTimeoutMillis: 120_000,
+  idleTimeoutMillis: 30_000,   /* POOL_HEADROOM_v1 — reverted from 120s: local PG, fast reconnects; releases idle conns to keep well under the 700 cap */
   connectionTimeoutMillis: 10_000
 });
 

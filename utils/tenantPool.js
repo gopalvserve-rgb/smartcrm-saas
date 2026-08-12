@@ -135,7 +135,7 @@ function poolFor(tenant) {
     // REVERT: set idleTimeoutMillis back to 10_000 and drop the keepAlive lines.
     keepAlive: true,
     keepAliveInitialDelayMillis: 10_000,
-    idleTimeoutMillis: 120_000,
+    idleTimeoutMillis: 30_000,   /* POOL_HEADROOM_v1 — reverted from 120s: local PG, fast reconnects; releases idle conns to keep well under the 700 cap */
     // POOL_FIX_v1 — bumped 5s → 12s. Was timing out on login when PG was
     // momentarily saturated by background sweeps; 12s gives the LRU enough
     // breathing room to evict an idle pool and recover.
