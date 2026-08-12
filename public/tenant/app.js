@@ -26740,6 +26740,7 @@ VIEWS.admin = async (view) => {
       { id: 'integrations', label: '🧩 External Integrations', search: 'integrations make zapier pabbly external integrations third party' },
       { id: 'outwh',        label: '🚀 Outbound Webhooks',     search: 'webhook outbound webhook postback callback url' },
       { id: 'gconvexp',     label: '📈 Google Ads Export', roles: ['admin', 'manager'], search: 'google ads ads export offline conversion' },
+      { id: 'leadsheet',    label: '📤 Leads → Google Sheet', roles: ['admin'], search: 'google sheet export leads push mirror spreadsheet' },
       { id: 'metacapi',     label: '🎯 Meta Conversions API', roles: ['admin'], search: 'meta facebook conversions api offline events capi' },
       { id: 'gcalintg',     label: '📅 Google Calendar',       search: 'google calendar calendar integration meet' },
       { id: 'qrforms',      label: '📲 QR Lead Forms',         search: 'qr form qr lead scan form' },
@@ -26866,6 +26867,7 @@ async function showAdminTab(id) {
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'outwh') body.replaceChildren(await adminOutboundWebhooks());
     if (id === 'gconvexp') body.replaceChildren(await adminGoogleConvExport());
+    if (id === 'leadsheet') body.replaceChildren(await adminLeadSheetExport());
     if (id === 'metacapi') body.replaceChildren(await adminMetaCapi());
     if (id === 'gcalintg') body.replaceChildren(await adminGoogleCalendarTab());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
@@ -26971,6 +26973,102 @@ async function adminGoogleCalendarTab() {
 // ----------------------------------------------------------------
 // GOOGLE_CONV_EXPORT_v1 — Settings → Google Ads Export
 // ----------------------------------------------------------------
+async function adminLeadSheetExport() {
+  const wrap = h('div', { class: 'admin-section' });
+  wrap.appendChild(h('h2', {}, '\U0001F4E4 Leads → Google Sheet'));
+  wrap.appendChild(h('div', { class: 'muted', style: { marginBottom: '.8rem' } },
+    'Mirror your leads into a Google Sheet. Use the manual Push now button anytime, and/or turn on real-time so every new lead that matches your filter refreshes the sheet automatically. Each push rewrites the sheet fresh with the latest matching leads.'));
+  let data;
+  try { data = await api('api_leadSheetExport_get'); }
+  catch (e) { wrap.appendChild(h('div', { class: 'error-box' }, e.message)); return wrap; }
+  const s = data.settings || {};
+  const catalog = data.catalog || [];
+  const statuses = data.statuses || [];
+  const sources = data.sources || [];
+  const email = data.connected_email || '';
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '.8rem 1rem', marginBottom: '1rem', background: '#f0f9ff' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '① Share your Google Sheet'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+      email
+        ? ('Open your Google Sheet → Share → give ' + email + ' Editor access, then paste the link below.')
+        : 'Open your Google Sheet → Share → give the CRM connected Google account Editor access, then paste the link below. (If pushes fail with a permission error, your super-admin needs to connect Google Sheets once in SaaS settings.)')));
+  const urlInp = h('input', { type: 'text', style: { width: '100%', padding: '.45rem', boxSizing: 'border-box' }, placeholder: 'https://docs.google.com/spreadsheets/d/.../edit' });
+  urlInp.value = s.sheet_url || '';
+  const tabInp = h('input', { type: 'text', style: { width: '160px', padding: '.45rem' } });
+  tabInp.value = s.sheet_tab || 'Leads';
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('label', { style: { fontWeight: 600, display: 'block', marginBottom: '.4rem' } }, '② Sheet link'),
+    urlInp,
+    h('div', { style: { marginTop: '.6rem', display: 'flex', gap: '.5rem', alignItems: 'center' } },
+      h('span', { class: 'muted' }, 'Tab name:'), tabInp)));
+  const rtCb = h('input', { type: 'checkbox' });
+  rtCb.checked = !!s.realtime_enabled;
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('label', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', fontWeight: 600 } },
+      rtCb, '⚡ Real-time — auto-refresh the sheet when a matching lead arrives')));
+  const colCbs = {};
+  const colWrap = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.4rem 1rem' } });
+  const selCols = (s.columns && s.columns.length) ? s.columns : catalog.map(c => c.key);
+  catalog.forEach(c => {
+    const cb = h('input', { type: 'checkbox' });
+    if (selCols.indexOf(c.key) !== -1) cb.checked = true;
+    colCbs[c.key] = cb;
+    colWrap.appendChild(h('label', { style: { display: 'flex', gap: '.3rem', alignItems: 'center', fontSize: '.9rem' } }, cb, c.label));
+  });
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('label', { style: { fontWeight: 600, display: 'block', marginBottom: '.5rem' } }, '③ Columns to export'), colWrap));
+  const srcCbs = {};
+  const srcWrap = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.3rem 1rem' } });
+  (sources || []).forEach(src => {
+    const cb = h('input', { type: 'checkbox' });
+    if ((s.filter_sources || []).map(String).indexOf(String(src)) !== -1) cb.checked = true;
+    srcCbs[src] = cb;
+    srcWrap.appendChild(h('label', { style: { display: 'flex', gap: '.3rem', alignItems: 'center', fontSize: '.85rem' } }, cb, src));
+  });
+  const stCbs = {};
+  const stWrap = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.3rem 1rem' } });
+  (statuses || []).forEach(st => {
+    const cb = h('input', { type: 'checkbox' });
+    if ((s.filter_status_ids || []).map(Number).indexOf(Number(st.id)) !== -1) cb.checked = true;
+    stCbs[st.id] = cb;
+    stWrap.appendChild(h('label', { style: { display: 'flex', gap: '.3rem', alignItems: 'center', fontSize: '.85rem' } }, cb, st.name));
+  });
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('label', { style: { fontWeight: 600, display: 'block', marginBottom: '.4rem' } }, '④ Match condition (leave all unchecked = every lead)'),
+    h('div', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0' } }, 'By source:'),
+    (srcWrap.childNodes.length ? srcWrap : h('div', { class: 'muted', style: { fontSize: '.8rem' } }, '(no sources yet)')),
+    h('div', { class: 'muted', style: { fontSize: '.82rem', margin: '.6rem 0 .2rem' } }, 'By status:'), stWrap));
+  const statusLine = h('div', { class: 'muted', style: { fontSize: '.85rem', margin: '.4rem 0' } },
+    (s.last_push_at ? ('Last push: ' + fmtDt(s.last_push_at) + ' — ' + (s.last_push_rows || 0) + ' rows' + (s.last_push_error ? (' ⚠ ' + s.last_push_error) : '')) : 'Not pushed yet.'));
+  wrap.appendChild(statusLine);
+  function collect() {
+    return {
+      sheet_url: urlInp.value.trim(),
+      sheet_tab: tabInp.value.trim() || 'Leads',
+      enabled: true,
+      realtime_enabled: rtCb.checked,
+      columns: Object.keys(colCbs).filter(k => colCbs[k].checked),
+      filter_sources: Object.keys(srcCbs).filter(k => srcCbs[k].checked),
+      filter_status_ids: Object.keys(stCbs).filter(k => stCbs[k].checked).map(Number),
+      filter_campaign_ids: []
+    };
+  }
+  const saveBtn = _btn('\U0001F4BE Save', { onclick: async () => {
+    try { await api('api_leadSheetExport_save', collect()); toast('Saved', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  } });
+  const pushBtn = _btn('\U0001F4E4 Push now', { onclick: async () => {
+    try {
+      await api('api_leadSheetExport_save', collect());
+      const r = await api('api_leadSheetExport_pushNow');
+      toast('Pushed ' + (r.rows || 0) + ' leads to the sheet', 'ok');
+      statusLine.textContent = 'Last push: just now — ' + (r.rows || 0) + ' rows';
+    } catch (e) { toast(e.message, 'err'); }
+  } });
+  wrap.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', marginTop: '.6rem' } }, saveBtn, pushBtn));
+  return wrap;
+}
+
 async function adminGoogleConvExport() {
   const wrap = h('div', { class: 'admin-section' });
   wrap.appendChild(h('h2', {}, '📈 Google Ads Conversion Export'));

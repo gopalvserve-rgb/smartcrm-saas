@@ -1171,6 +1171,7 @@ async function api_leads_create(token, payload) {
   }
 
   const id = await db.insert('leads', base);
+  try { require('./leadSheetExport').onLeadChanged(); } catch (_) {}  // LEAD_SHEET_EXPORT_v1
 
   /* REMINDER_OPT_IN_v1 (2026-07-08) — NO auto-attach on create. Reminders
    * only queue if the payload explicitly includes reminder_flow_id (rare —
@@ -2773,6 +2774,7 @@ async function api_leads_bulkCreate(token, rows, assign) {
       results.skipped++; results.errors.push({ row: i + 1, error: String(e.message || e) });
     }
   }
+  try { require('./leadSheetExport').onLeadChanged(); } catch (_) {}  // LEAD_SHEET_EXPORT_v1
   return results;
 }
 

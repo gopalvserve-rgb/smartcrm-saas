@@ -694,6 +694,7 @@ async function _createLeadFromWebhook(lead) {
   }
 
   const id = await db.insert('leads', lead);
+  try { require('./leadSheetExport').onLeadChanged(); } catch (_) {}  // LEAD_SHEET_EXPORT_v1
 
   if (lead.assigned_to) {
     await db.insert('notifications', {
