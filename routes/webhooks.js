@@ -244,7 +244,17 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     updated_at: db.nowIso()
   };
   if (ctx.default_user_id) lead.assigned_to = ctx.default_user_id;
-  if (ctx.default_status_id) lead.status_id = ctx.default_status_id;
+  if (ctx.default_status_id) {
+    lead.status_id = ctx.default_status_id;
+  } else {
+    // FB_LEAD_STATUS_FIX (2026-08-13) — no page-level default configured: fall
+    // back to the tenant's first status ("New Lead") so Meta leadgen leads never
+    // land with a NULL status_id, which renders as a blank/grey status button.
+    try {
+      const _sr = await db.query('SELECT id FROM statuses ORDER BY id ASC LIMIT 1');
+      if (_sr.rows && _sr.rows[0]) lead.status_id = _sr.rows[0].id;
+    } catch (_e) { console.warn('[fb-ingest] default status fallback failed:', _e.message); }
+  }
   // Custom-field values from the mapping land in extra_json (same shape
   // as the leadsource webhook path produces).
   if (Object.keys(mappedExtras).length) {
