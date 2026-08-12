@@ -1089,6 +1089,14 @@
      * URLs need the auth token as a query param (browser can't set headers on
      * <img src>). Rewrite here; external URLs (Meta CDN etc.) pass through. */
     let murl = m.media_url || '';
+    /* WA_INBOUND_MEDIA_FIX (2026-08-13) — inbound messages carry only a Meta
+     * media_id (media_url is NULL). Render them through the server proxy
+     * /t/<slug>/api/wa/media/<msgId>, which resolves the id to bytes. Without
+     * this, inbound image/video/document/audio rendered as nothing. */
+    if (!murl && m.media_id && m.id &&
+        (mtype === 'image' || mtype === 'video' || mtype === 'audio' || mtype === 'document')) {
+      murl = '/t/' + SLUG + '/api/wa/media/' + m.id + '?token=' + encodeURIComponent(_tok());
+    }
     if (murl && /\/api\/wa-media\//.test(murl) && !/[?&]tok=/.test(murl)) {
       try { murl += (murl.indexOf('?') >= 0 ? '&' : '?') + 'tok=' + encodeURIComponent(_tok()); } catch (_) {}
     }
