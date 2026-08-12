@@ -96,8 +96,10 @@
   /* ══════════════════════════════════════════════════════════════════
    * ENTRY — always lands on the flow-list grid
    * ══════════════════════════════════════════════════════════════ */
-  async function viewFollowupReminders() {
-    var root = document.querySelector('main') || document.body;
+  async function viewFollowupReminders(view) {
+    /* FU_REMINDERS_LAYOUT_FIX_v1 — render into the SPA content container (#view)
+       instead of clobbering <main>, which wiped the nav/layout and broke Back. */
+    var root = view || document.getElementById('view') || document.querySelector('main') || document.body;
     root.innerHTML =
       '<div class="admin-content" id="rf-root">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;flex-wrap:wrap;gap:.5rem">' +
