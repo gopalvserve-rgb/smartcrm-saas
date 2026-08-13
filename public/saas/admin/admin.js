@@ -3910,6 +3910,12 @@ VIEWS.tickets = async (view) => {
   const catSel = h('select', { class: 'input' });
   catSel.appendChild(h('option', { value: '' }, 'All categories'));
   (cat.categories || []).forEach(c => catSel.appendChild(h('option', { value: c.id }, c.icon + ' ' + c.label)));
+  // TKT_LAST_REMARK_FILTER_v1 — filter by who left the last remark, so you can
+  // action tickets where the tenant replied last (waiting on us) first.
+  const lastReplySel = h('select', { class: 'input', title: 'Filter by who left the last remark' });
+  [['', 'Any last remark'], ['tenant', '🟠 Tenant replied last'], ['admin', '🟢 We replied last'], ['system', '⚙ System']]
+    .forEach(o => lastReplySel.appendChild(h('option', { value: o[0] }, o[1])));
+  lastReplySel.onchange = () => load();
   const searchIn = h('input', { class: 'input', placeholder: 'Search subject, ticket #, or tenant slug', style: { minWidth: '260px' } });
   const refreshBtn = h('button', { class: 'btn' }, '🔄 Refresh');
   const onlyUnassigned = h('label', { style: { display: 'inline-flex', gap: '.3rem', alignItems: 'center' } },
@@ -3921,7 +3927,7 @@ VIEWS.tickets = async (view) => {
     onclick: () => exportCsv('tickets-' + _csvTs() + '.csv', _lastTickets) }, '\u2b07 Export CSV');
 
   view.appendChild(h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '1rem 0' } },
-    statusBox, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn, exportBtn
+    statusBox, prioSel, catSel, lastReplySel, onlyUnassigned, searchIn, refreshBtn, exportBtn
   ));
 
   const statsRow = h('div', { id: 'tk-stats', style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } });
@@ -3946,7 +3952,8 @@ VIEWS.tickets = async (view) => {
         category: catSel.value || null,
         q: searchIn.value.trim() || null,
         unassigned: document.getElementById('tk-unassigned').checked ? 1 : null,
-        assignee_id: _tkAssigneeFilter || null
+        assignee_id: _tkAssigneeFilter || null,
+        last_reply_by: lastReplySel.value || null
       });
     } catch (e) {
       tableWrap.innerHTML = '';
