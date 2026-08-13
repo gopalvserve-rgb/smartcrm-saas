@@ -534,6 +534,15 @@ async function api_saas_tk_admin_listAll(token, filters) {
     params.push('%' + String(f.q).toLowerCase() + '%');
     where.push(`(LOWER(t.subject) LIKE $${params.length} OR LOWER(t.ticket_number) LIKE $${params.length} OR LOWER(t.tenant_slug) LIKE $${params.length})`);
   }
+  // TKT_LAST_REMARK_FILTER_v1 — filter tickets by who left the LAST reply
+  // ('tenant' = customer replied last / needs our response, 'admin' = our team
+  // replied last, 'system' = auto). Applied ONLY to the main list query because it
+  // references the lr LATERAL join; stats/byAssignee keep the shared where+params.
+  const listWhere = where.slice(); const listParams = params.slice();
+  if (f.last_reply_by && ['tenant', 'admin', 'system'].includes(f.last_reply_by)) {
+    listParams.push(f.last_reply_by);
+    listWhere.push(`lr.author_type = $${listParams.length}`);
+  }
   const sql = `
     SELECT t.*, te.org_name, sa.name AS assignee_name,
            lr.body        AS last_reply_body,
@@ -553,10 +562,10 @@ async function api_saas_tk_admin_listAll(token, filters) {
          ORDER BY r.created_at DESC
          LIMIT 1
       ) lr ON TRUE
-     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ${listWhere.length ? 'WHERE ' + listWhere.join(' AND ') : ''}
      ORDER BY COALESCE(t.last_reply_at, t.created_at) DESC
      LIMIT 1000`;
-  const r = await control.query(sql, params);
+  const r = await control.query(sql, listParams);
   // Stats card data
   const stats = (await control.query(`
     SELECT
