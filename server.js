@@ -240,6 +240,18 @@ app.use(bodyParser.json({ limit: '25mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' }));
 app.use(require('cookie-parser')());
 
+// WA_API_CAMPAIGN_v1 - AiSensy-style external WhatsApp API Campaign send endpoint.
+// Tenant resolved from apiKey in the body (not the URL); send runs in that tenant's pool.
+(function(){
+  try {
+    const _waCampaign = require('./routes/waCampaign');
+    const _h = (req, res) => _waCampaign.expressApiSend(req, res);
+    app.post('/campaign/t1/api/v2', _h);
+    app.post('/api/v2/wa/campaign', _h);
+  } catch (e) { console.error('[WA_API_CAMPAIGN_v1] mount failed:', e && e.message); }
+})();
+
+
 // ---- Cross-deployment AI usage ingest (Stockbox/Celeste -> here) ----
 // Other CRM clones POST every Gemini call result here so the AI Costing
 // dashboard aggregates spend across all deployments under our key.
