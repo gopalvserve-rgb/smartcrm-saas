@@ -134,6 +134,7 @@ const ROUTE_FILES = [
   'customReqTenant',    /* CUSTOM_REQ_TENANT_v1 — tenant submits custom requirements + chats with super-admin */
   'leadSheetExport',    /* LEAD_SHEET_EXPORT_v1 — push leads to a linked Google Sheet */
   'waCampaign',         /* WA_API_CAMPAIGN_v1 */
+  'webchat',            /* WEBCHAT_v1 */
 ];
 
 const API = {};

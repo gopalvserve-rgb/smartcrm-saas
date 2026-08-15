@@ -1902,7 +1902,9 @@ const NAV_GROUPS = [
     { id: 'socialpublish',  label: 'Social Publisher',     icon: '📤', search: 'publisher post schedule post social post' },
     { id: 'socialads',      label: 'Ads Manager',          icon: '📊', search: 'ads meta ads facebook ads instagram ads ads manager' },
     { id: 'whatsbot',       label: 'WhatsApp Bot',         icon: '💬', search: 'whatsapp whatsbot bot whatsapp automation chat' },
-    { id: 'aibot',          label: 'AI Assistant',         icon: '🤖', roles: ['admin', 'manager'], requiresBrandFlag: 'AI_BOT_ENABLED', search: 'ai bot assistant chatbot automation' }
+    { id: 'aibot',          label: 'AI Assistant',         icon: '🤖', roles: ['admin', 'manager'], requiresBrandFlag: 'AI_BOT_ENABLED', search: 'ai bot assistant chatbot automation' },
+    { id: 'waApiCampaigns', label: 'WhatsApp API Campaigns', icon: '🔌', roles: ['admin','manager'], search: 'whatsapp api campaign aisensy api key external send template trigger integration' },
+    { id: 'webchat', label: 'Web Chat', icon: '💬', roles: ['admin','manager'], search: 'web chat website chatbot ai gpt widget lead capture embed' }
   ] },
   { label: 'Reports & Analytics', icon: '📉', items: [
     { id: 'reports',       label: 'Reports Dashboard', icon: '📉', roles: ['admin', 'manager', 'team_leader'], search: 'reports analytics dashboard summary report' },
@@ -2623,6 +2625,326 @@ function navigateTo(id) {
 }
 
 const VIEWS = {};
+
+/* WEBCHAT_v1 — Web Chat settings screen. Additive VIEWS entry. Uses h()/api()/toast(). */
+VIEWS.webchat = async (view) => {
+  view.innerHTML = '';
+  const w = document.createElement('div'); w.style.padding = '1.5rem';
+  const card = (...k) => h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px' } }, ...k);
+  const inp = (v, ph) => h('input', { value: v == null ? '' : v, placeholder: ph || '', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+  const fld = (lab, el, hint) => h('div', { style: { marginTop: '.7rem' } }, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, lab), el, hint ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, hint) : null);
+
+  w.appendChild(h('h2', { style: { marginTop: 0 } }, '💬 Web Chat (AI chatbot for your website)'));
+  w.appendChild(h('p', { class: 'muted' }, 'A ChatGPT-style chat window you embed on your website. It greets visitors, captures Name + Mobile, creates a lead (source: Web Chat) and auto-assigns to an agent. Powered by your Gemini AI bot.'));
+
+  let cfg = {}, embed = '';
+  try { const r = await api('api_webchat_config_get'); cfg = (r && r.config) || {}; embed = (r && r.embed) || ''; }
+  catch (e) { toast('Could not load: ' + e.message, 'err'); }
+
+  const enabled = h('input', { type: 'checkbox' }); enabled.checked = !!cfg.enabled;
+  const title = inp(cfg.title, 'Chat with us');
+  const sub = inp(cfg.sub, 'AI · powered by Gemini');
+  const color = inp(cfg.color, '#128C7E');
+  const greeting = h('textarea', { rows: 2, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit' } }); greeting.value = cfg.greeting || '';
+  const buttons = inp(Array.isArray(cfg.buttons) ? cfg.buttons.join(', ') : (cfg.buttons || ''), 'Product info, Pricing, Support, Talk to a person');
+  const persona = h('textarea', { rows: 3, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit' } }); persona.value = cfg.persona || '';
+
+  const settings = card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '⚙️ Settings'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.4rem 0', fontWeight: 700, fontSize: '13px' } }, enabled, 'Enable Web Chat on my website'),
+    fld('Header title', title),
+    fld('Header subtitle', sub),
+    fld('Theme color', color, 'Hex, e.g. #128C7E'),
+    fld('Greeting (first message)', greeting),
+    fld('Quick-reply buttons', buttons, 'Comma-separated, up to 4'),
+    fld('AI persona / instructions', persona, 'How the assistant should behave. Your knowledge base still applies.')
+  );
+  const saveBtn = h('button', { class: 'btn primary', style: { padding: '9px 20px', background: '#128C7E', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, marginTop: '1rem' } }, '💾 Save');
+  const saveStatus = h('span', { style: { marginLeft: '.75rem', fontSize: '12.5px' } });
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    try {
+      await api('api_webchat_config_save', {
+        enabled: enabled.checked ? 1 : 0, title: title.value, sub: sub.value, color: color.value,
+        greeting: greeting.value, buttons: buttons.value.split(',').map(s => s.trim()).filter(Boolean), persona: persona.value
+      });
+      saveStatus.style.color = '#15803d'; saveStatus.textContent = '✓ Saved'; toast('Web Chat settings saved');
+    } catch (e) { saveStatus.style.color = '#dc2626'; saveStatus.textContent = '✗ ' + e.message; toast(e.message, 'err'); }
+    saveBtn.disabled = false;
+  };
+  settings.appendChild(h('div', { style: { marginTop: '.5rem' } }, saveBtn, saveStatus));
+  w.appendChild(settings);
+
+  // embed snippet
+  const ta = h('textarea', { readonly: 'readonly', rows: 2, style: { width: '100%', padding: '10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '12px', background: '#f8fafc' } });
+  ta.value = embed || '';
+  const copyBtn = h('button', { class: 'btn', style: { padding: '7px 14px', cursor: 'pointer', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', fontWeight: 600, marginTop: '.5rem' } }, '📋 Copy embed code');
+  copyBtn.onclick = () => { ta.select(); try { navigator.clipboard.writeText(ta.value); } catch (_) {} toast('Embed code copied'); };
+  w.appendChild(card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '🔗 Embed on your website'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: 0 } }, 'Paste this where you want the chat to appear (it fills that spot, ChatGPT-style). Omit the <div> to get a floating bubble instead.'),
+    ta, copyBtn
+  ));
+
+  w.appendChild(card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, 'ℹ️ Routing'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', margin: 0 } }, 'New Web Chat leads are auto-assigned round-robin using your WhatsApp Auto-assign agent pool (WhatsApp → Auto-assign). Set that pool to control who receives web leads.')
+  ));
+
+  view.appendChild(w);
+};
+
+
+/* WA_API_CAMPAIGN_v1 — WhatsApp API Campaigns admin screen (AiSensy-style).
+ * Purely additive: registers one VIEWS entry. Uses existing h()/api()/toast()/esc(). */
+VIEWS.waApiCampaigns = async (view) => {
+  view.innerHTML = '';
+  const BASE = location.origin;
+  const card = (...kids) => h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px' } }, ...kids);
+  const btn = (label, style) => h('button', { class: 'btn', style: Object.assign({ padding: '7px 14px', cursor: 'pointer', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', fontWeight: 600 }, style || {}) }, label);
+  const primaryBtn = (label) => h('button', { class: 'btn primary', style: { padding: '8px 18px', background: '#128C7E', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700 } }, label);
+  const inp = (attrs) => h('input', Object.assign({ style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } }, attrs || {}));
+  const muted = (t) => h('span', { class: 'muted', style: { fontSize: '12px' } }, t);
+  const w = document.createElement('div'); w.style.padding = '1.5rem';
+
+  w.appendChild(h('h2', { style: { marginTop: 0 } }, '🔌 WhatsApp API Campaigns'));
+  w.appendChild(h('p', { class: 'muted' }, 'Trigger approved WhatsApp template messages from any external system via a simple API — like AiSensy. Create a campaign, generate an API key, set it Live, and POST to the endpoint below.'));
+
+  // Load everything up front.
+  let templates = [], campaigns = [], keys = [], logs = [];
+  try {
+    const [t, c, k, l] = await Promise.all([
+      api('api_waCampaign_templates').catch(() => ({ templates: [] })),
+      api('api_waCampaign_list').catch(() => ({ campaigns: [] })),
+      api('api_waCampaign_keys_list').catch(() => ({ keys: [] })),
+      api('api_waCampaign_logs', { limit: 50 }).catch(() => ({ logs: [] }))
+    ]);
+    templates = (t && t.templates) || []; campaigns = (c && c.campaigns) || [];
+    keys = (k && k.keys) || []; logs = (l && l.logs) || [];
+  } catch (e) { toast('Could not load: ' + e.message, 'err'); }
+
+  const reload = () => VIEWS.waApiCampaigns(view);
+
+  // ---------- Endpoint box ----------
+  const epUrl = BASE + '/campaign/t1/api/v2';
+  const ep = card(
+    h('h3', { style: { margin: '0 0 .35rem' } }, '🌐 API Endpoint'),
+    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' } },
+      h('span', { style: { fontWeight: 700, color: '#0f766e', fontFamily: 'monospace', fontSize: '12px', background: '#ecfdf5', padding: '2px 8px', borderRadius: '5px' } }, 'POST'),
+      h('code', { style: { fontSize: '13px' } }, epUrl),
+      (() => { const b = btn('Copy'); b.onclick = () => { navigator.clipboard.writeText(epUrl); toast('Endpoint copied'); }; return b; })()
+    ),
+    h('p', { class: 'muted', style: { fontSize: '12px', margin: '.5rem 0 0' } }, 'Alias: ' + BASE + '/api/v2/wa/campaign · Auth: apiKey in JSON body · Content-Type: application/json')
+  );
+  w.appendChild(ep);
+
+  // ---------- API Keys ----------
+  const keysWrap = card();
+  keysWrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.75rem' } },
+    h('h3', { style: { margin: 0 } }, '🔑 API Keys'),
+    (() => { const b = primaryBtn('+ Create key'); b.style.marginLeft = 'auto'; b.onclick = () => openKeyModal(); return b; })()
+  ));
+  if (!keys.length) {
+    keysWrap.appendChild(h('p', { class: 'muted', style: { marginBottom: 0 } }, 'No API keys yet. Create one and store it securely — it is shown only once.'));
+  } else {
+    const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', marginTop: '.5rem', fontSize: '13px' } },
+      h('tr', {},
+        h('th', thS(), 'Key'), h('th', thS(), 'Label'), h('th', thS(), 'Status'),
+        h('th', thS(), 'Last used'), h('th', thS(), '')));
+    keys.forEach(k => {
+      const revoked = !k.active || k.revoked_at;
+      const row = h('tr', {},
+        h('td', tdS(), h('code', {}, (k.key_prefix || '') + '…')),
+        h('td', tdS(), esc(k.label || '—')),
+        h('td', tdS(), revoked ? h('span', { style: { color: '#dc2626' } }, 'revoked') : h('span', { style: { color: '#15803d' } }, 'active')),
+        h('td', tdS(), k.last_used_at ? new Date(k.last_used_at).toLocaleString() : '—'),
+        h('td', tdS(), revoked ? '' : (() => { const b = btn('Revoke', { color: '#dc2626', borderColor: '#fecaca' }); b.onclick = async () => { if (!confirm('Revoke this key? Integrations using it will stop working.')) return; try { await api('api_waCampaign_keys_revoke', k.id); toast('Key revoked'); reload(); } catch (e) { toast(e.message, 'err'); } }; return b; })())
+      );
+      tbl.appendChild(row);
+    });
+    keysWrap.appendChild(tbl);
+  }
+  w.appendChild(keysWrap);
+
+  // ---------- Campaigns ----------
+  const campWrap = card();
+  campWrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.75rem' } },
+    h('h3', { style: { margin: 0 } }, '📣 Campaigns'),
+    (() => { const b = primaryBtn('+ New campaign'); b.style.marginLeft = 'auto'; b.onclick = () => openCampaignModal(null); return b; })()
+  ));
+  if (!templates.length) {
+    campWrap.appendChild(h('div', { style: { background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '10px 12px', margin: '.5rem 0', fontSize: '13px' } },
+      '⚠️ No WhatsApp templates found. Create & get a template approved under WhatsApp → Templates first, then create a campaign here.'));
+  }
+  if (!campaigns.length) {
+    campWrap.appendChild(h('p', { class: 'muted', style: { marginBottom: 0 } }, 'No campaigns yet. Create one, pick an approved template, and set it Live.'));
+  } else {
+    const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', marginTop: '.5rem', fontSize: '13px' } },
+      h('tr', {},
+        h('th', thS(), 'Name'), h('th', thS(), 'Template'), h('th', thS(), 'Status'),
+        h('th', thS(), 'Sent'), h('th', thS(), 'Failed'), h('th', thS(), 'Actions')));
+    campaigns.forEach(c => {
+      const isLive = c.status === 'live';
+      const statusPill = h('span', { style: { fontSize: '12px', fontWeight: 700, padding: '2px 9px', borderRadius: '999px', background: isLive ? '#dcfce7' : (c.status === 'paused' ? '#fef9c3' : '#e2e8f0'), color: isLive ? '#166534' : (c.status === 'paused' ? '#854d0e' : '#475569') } }, c.status);
+      const toggle = btn(isLive ? 'Pause' : 'Set Live', isLive ? { color: '#854d0e' } : { color: '#166534', borderColor: '#bbf7d0' });
+      toggle.onclick = async () => { try { await api('api_waCampaign_setStatus', c.id, isLive ? 'paused' : 'live'); toast('Updated'); reload(); } catch (e) { toast(e.message, 'err'); } };
+      const testBtn = btn('Test'); testBtn.onclick = () => openTestModal(c);
+      const editBtn = btn('Edit'); editBtn.onclick = () => openCampaignModal(c);
+      const delBtn = btn('🗑', { color: '#dc2626' }); delBtn.onclick = async () => { if (!confirm('Delete campaign "' + c.name + '"?')) return; try { await api('api_waCampaign_delete', c.id); toast('Deleted'); reload(); } catch (e) { toast(e.message, 'err'); } };
+      tbl.appendChild(h('tr', {},
+        h('td', tdS(), h('b', {}, esc(c.name))),
+        h('td', tdS(), esc(c.template_name || '') + ' · ' + esc(c.template_language || '')),
+        h('td', tdS(), statusPill),
+        h('td', tdS(), String(c.total_sent || 0)),
+        h('td', tdS(), h('span', { style: { color: Number(c.failed) ? '#dc2626' : 'inherit' } }, String(c.failed || 0))),
+        h('td', tdS(), h('div', { style: { display: 'flex', gap: '.35rem', flexWrap: 'wrap' } }, toggle, testBtn, editBtn, delBtn))
+      ));
+    });
+    campWrap.appendChild(tbl);
+  }
+  w.appendChild(campWrap);
+
+  // ---------- Logs ----------
+  const logWrap = card();
+  logWrap.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, '📜 Recent sends'));
+  if (!logs.length) {
+    logWrap.appendChild(h('p', { class: 'muted', style: { marginBottom: 0 } }, 'No sends yet.'));
+  } else {
+    const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' } },
+      h('tr', {}, h('th', thS(), 'When'), h('th', thS(), 'Campaign'), h('th', thS(), 'To'), h('th', thS(), 'Name'), h('th', thS(), 'Status'), h('th', thS(), 'Detail')));
+    logs.forEach(l => {
+      const okS = l.status === 'sent';
+      tbl.appendChild(h('tr', {},
+        h('td', tdS(), l.created_at ? new Date(l.created_at).toLocaleString() : '—'),
+        h('td', tdS(), esc(l.campaign_name || '—')),
+        h('td', tdS(), esc(l.destination || '')),
+        h('td', tdS(), esc(l.user_name || '')),
+        h('td', tdS(), h('span', { style: { color: okS ? '#15803d' : '#dc2626', fontWeight: 600 } }, l.status)),
+        h('td', tdS(), esc(l.error_detail || l.error_code || (l.wa_message_id ? '✓' : '')))
+      ));
+    });
+    logWrap.appendChild(tbl);
+  }
+  w.appendChild(logWrap);
+  view.appendChild(w);
+
+  // ---------- helpers ----------
+  function thS() { return { style: { textAlign: 'left', borderBottom: '2px solid #e2e8f0', padding: '6px 8px', color: '#475569', fontWeight: 700 } }; }
+  function tdS() { return { style: { borderBottom: '1px solid #f1f5f9', padding: '6px 8px', verticalAlign: 'middle' } }; }
+
+  function overlay(contentBuilder) {
+    const ov = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 99999, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '3rem 1rem' }, onclick: (e) => { if (e.target === ov) ov.remove(); } });
+    const box = h('div', { style: { background: '#fff', borderRadius: '12px', width: 'min(560px,100%)', padding: '1.5rem', boxShadow: '0 20px 60px rgba(0,0,0,.3)' } });
+    contentBuilder(box, () => ov.remove());
+    ov.appendChild(box); document.body.appendChild(ov); return ov;
+  }
+
+  function openKeyModal() {
+    overlay((box, close) => {
+      box.appendChild(h('h3', { style: { marginTop: 0 } }, 'Create API key'));
+      const label = inp({ placeholder: 'Label (e.g. Website, Zapier)' });
+      box.appendChild(h('label', { style: { fontSize: '12px', fontWeight: 700 } }, 'Label'));
+      box.appendChild(label);
+      const save = primaryBtn('Create key');
+      save.onclick = async () => {
+        save.disabled = true;
+        try {
+          const r = await api('api_waCampaign_keys_create', { label: label.value || '' });
+          box.innerHTML = '';
+          box.appendChild(h('h3', { style: { marginTop: 0, color: '#166534' } }, '✅ Key created'));
+          box.appendChild(h('p', { style: { fontSize: '13px' } }, 'Copy it now — it will NOT be shown again.'));
+          const keyInp = inp({ value: r.apiKey, readonly: 'readonly', style: { width: '100%', padding: '10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '13px', background: '#f8fafc' } });
+          box.appendChild(keyInp);
+          const cp = primaryBtn('📋 Copy key'); cp.style.marginTop = '.75rem';
+          cp.onclick = () => { keyInp.select(); navigator.clipboard.writeText(r.apiKey); toast('Key copied'); };
+          const done = btn('Done'); done.style.marginLeft = '.5rem'; done.onclick = () => { close(); reload(); };
+          box.appendChild(h('div', { style: { marginTop: '.75rem' } }, cp, done));
+        } catch (e) { toast(e.message, 'err'); save.disabled = false; }
+      };
+      const cancel = btn('Cancel'); cancel.style.marginLeft = '.5rem'; cancel.onclick = close;
+      box.appendChild(h('div', { style: { marginTop: '1rem' } }, save, cancel));
+    });
+  }
+
+  function openCampaignModal(c) {
+    overlay((box, close) => {
+      box.appendChild(h('h3', { style: { marginTop: 0 } }, c ? 'Edit campaign' : 'New campaign'));
+      const name = inp({ value: c ? c.name : '', placeholder: 'welcome_offer' });
+      const tplSel = h('select', { style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+      tplSel.appendChild(h('option', { value: '' }, '— pick a template —'));
+      templates.forEach(t => {
+        const val = t.name + '||' + t.language;
+        const lbl = t.name + ' (' + t.language + ') · ' + t.status + ' · ' + (t.body_params || 0) + ' vars' + (t.header_type && t.header_type !== 'none' ? ' · ' + t.header_type : '');
+        const opt = h('option', { value: val }, lbl);
+        if (c && c.template_name === t.name && c.template_language === t.language) opt.selected = 'selected';
+        tplSel.appendChild(opt);
+      });
+      const src = inp({ value: c && c.default_source ? c.default_source : '', placeholder: 'Default lead source (optional)' });
+      const tags = inp({ value: c && c.default_tags ? c.default_tags : '', placeholder: 'Default tags, comma-separated (optional)' });
+      const statusSel = h('select', { style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+        h('option', { value: 'draft', selected: (!c || c.status === 'draft') ? 'selected' : null }, 'Draft'),
+        h('option', { value: 'live', selected: c && c.status === 'live' ? 'selected' : null }, 'Live'),
+        h('option', { value: 'paused', selected: c && c.status === 'paused' ? 'selected' : null }, 'Paused'));
+      const fld = (lab, el) => h('div', { style: { marginTop: '.6rem' } }, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, lab), el);
+      box.appendChild(fld('Campaign name *', name));
+      box.appendChild(fld('Template *', tplSel));
+      box.appendChild(fld('Default source', src));
+      box.appendChild(fld('Default tags', tags));
+      box.appendChild(fld('Status', statusSel));
+      const save = primaryBtn('Save');
+      save.onclick = async () => {
+        const tv = tplSel.value.split('||');
+        if (!name.value.trim()) { toast('Name required', 'err'); return; }
+        if (!tv[0]) { toast('Pick a template', 'err'); return; }
+        save.disabled = true;
+        try {
+          await api('api_waCampaign_save', { id: c ? c.id : undefined, name: name.value.trim(), template_name: tv[0], template_language: tv[1] || 'en_US', default_source: src.value.trim(), default_tags: tags.value.trim(), status: statusSel.value });
+          toast('Saved'); close(); reload();
+        } catch (e) { toast(e.message, 'err'); save.disabled = false; }
+      };
+      const cancel = btn('Cancel'); cancel.style.marginLeft = '.5rem'; cancel.onclick = close;
+      box.appendChild(h('div', { style: { marginTop: '1rem' } }, save, cancel));
+    });
+  }
+
+  function openTestModal(c) {
+    overlay((box, close) => {
+      box.appendChild(h('h3', { style: { marginTop: 0 } }, '🧪 Test send · ' + esc(c.name)));
+      box.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Template: ' + esc(c.template_name) + ' (' + esc(c.template_language) + ') · ' + (c.body_param_count || 0) + ' variable(s)' + (c.header_type && c.header_type !== 'none' ? ' · ' + c.header_type + ' header' : '')));
+      const dest = inp({ placeholder: '+919876543210' });
+      const uname = inp({ value: 'Test', placeholder: 'Recipient name' });
+      const params = inp({ placeholder: 'Variables comma-separated, in order' });
+      const media = inp({ placeholder: 'Media URL (only if template has a media header)' });
+      const fld = (lab, el) => h('div', { style: { marginTop: '.6rem' } }, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, lab), el);
+      box.appendChild(fld('Destination *', dest));
+      box.appendChild(fld('User name', uname));
+      if ((c.body_param_count || 0) > 0) box.appendChild(fld('Template variables (' + c.body_param_count + ')', params));
+      if (c.header_type && ['image', 'video', 'document'].indexOf(c.header_type) !== -1) box.appendChild(fld('Media URL', media));
+      const out = h('pre', { style: { display: 'none', background: '#0b0e13', color: '#d7e0ee', padding: '10px', borderRadius: '8px', marginTop: '.75rem', fontSize: '12px', whiteSpace: 'pre-wrap' } });
+      const send = primaryBtn('Send test');
+      send.onclick = async () => {
+        if (!dest.value.trim()) { toast('Destination required', 'err'); return; }
+        send.disabled = true; send.textContent = 'Sending…';
+        try {
+          const payload = { campaignId: c.id, destination: dest.value.trim(), userName: uname.value.trim() || 'Test' };
+          if (params.value.trim()) payload.templateParams = params.value.split(',').map(s => s.trim());
+          if (media.value.trim()) payload.media = { url: media.value.trim() };
+          const r = await api('api_waCampaign_test', payload);
+          out.style.display = 'block'; out.textContent = JSON.stringify(r, null, 2);
+          toast(r.success ? '✅ Sent' : ('⚠️ ' + (r.error || 'failed')), r.success ? 'ok' : 'err');
+          reloadLogsOnly();
+        } catch (e) { out.style.display = 'block'; out.textContent = e.message; toast(e.message, 'err'); }
+        send.disabled = false; send.textContent = 'Send test';
+      };
+      const cancel = btn('Close'); cancel.style.marginLeft = '.5rem'; cancel.onclick = close;
+      box.appendChild(h('div', { style: { marginTop: '1rem' } }, send, cancel));
+      box.appendChild(out);
+    });
+  }
+
+  async function reloadLogsOnly() { try { await api('api_waCampaign_logs', { limit: 50 }); } catch (_) {} setTimeout(reload, 900); }
+};
+
 // PACK_GLOBALS_FIX_v1 (2026-06-27) — expose VIEWS on window so the isolated
 // pack SPAs (solar.js / realestate.js / education.js / holiday.js) can
 // register their views. A top-level `const` is NOT a window property the way
@@ -60439,3 +60761,203 @@ VIEWS.ecorders = async (view) => {
 })();
 
 // Stub views — other pack sidebar items show "com
+
+/* INDEP_DAY_THEME_v1 (2026-08-15) — Independence Day festive theme.
+ * SCOPE: vserve tenant only. WINDOW: Aug 15–17, 2026 (IST) — auto-reverts after.
+ * Front-end only (no server/DB/data). KILL SWITCH: set _INDEP_ON = false to disable instantly. */
+(function(){
+  var _INDEP_ON = true;                                   // <-- kill switch
+  try{
+    if(!_INDEP_ON) return;
+    var slug=(location.pathname.match(/\/t\/([^\/]+)/)||[])[1]||'';
+    if(!slug) return;                           // vserve only
+    var now=Date.now();
+    var start=Date.UTC(2026,7,14,18,30,0);                // Aug 15 00:00 IST
+    var end  =Date.UTC(2026,7,17,18,30,0);                // Aug 18 00:00 IST (covers 15–17)
+    if(now<start || now>=end) return;                     // date gate
+
+    function chakraInner(){
+      var n='#000080',s='<circle cx="50" cy="50" r="46" fill="none" stroke="'+n+'" stroke-width="5"/><circle cx="50" cy="50" r="8" fill="'+n+'"/>';
+      for(var i=0;i<24;i++){var a=i*15*Math.PI/180,x=(50+44*Math.cos(a)).toFixed(1),y=(50+44*Math.sin(a)).toFixed(1);
+        s+='<line x1="50" y1="50" x2="'+x+'" y2="'+y+'" stroke="'+n+'" stroke-width="2.4"/><circle cx="'+x+'" cy="'+y+'" r="2.2" fill="'+n+'"/>';}
+      return s;
+    }
+    var INNER=chakraInner();
+    var chSvg='<svg viewBox="0 0 100 100">'+INNER+'</svg>';
+    var chData='data:image/svg+xml;utf8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'+INNER+'</svg>');
+
+    function injectCss(){
+      if(document.getElementById('indep-css')) return;
+      var st=document.createElement('style'); st.id='indep-css';
+      st.textContent=[
+        '#indep-ribbon{position:fixed;top:0;left:0;right:0;height:34px;z-index:6000;display:flex;align-items:center;justify-content:center;',
+          'background:linear-gradient(90deg,#FF9933 0 33%,#fff 33% 66%,#138808 66% 100%);color:#0b3d2e;font:700 13px/1.2 -apple-system,Segoe UI,Roboto,Arial}',
+        '#indep-ribbon .it{background:rgba(255,255,255,.9);padding:3px 15px;border-radius:999px;display:flex;align-items:center;gap:8px;box-shadow:0 1px 3px rgba(0,0,0,.08)}',
+        '#indep-ribbon .ic{width:19px;height:19px;display:inline-flex;animation:indepSpin 6s linear infinite}',
+        '#indep-ribbon .ic svg{width:100%;height:100%;display:block}',
+        '#indep-ribbon .ix{position:absolute;right:14px;cursor:pointer;background:rgba(255,255,255,.72);border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#334155;font-size:12px}',
+        '#app.indep{padding-top:34px}',
+        '#app.indep header.topbar{top:34px}',
+        'header.topbar{border-bottom:4px solid transparent;border-image:linear-gradient(90deg,#FF9933 0 33.3%,#fff 33.3% 66.6%,#138808 66.6% 100%) 1}',
+        'aside.sidebar{border-top:4px solid transparent;border-image:linear-gradient(90deg,#FF9933 0 33.3%,#fff 33.3% 66.6%,#138808 66.6% 100%) 1}',
+        '.loading::before{content:"";display:block;width:36px;height:36px;margin:0 auto 8px;background:url("'+chData+'") center/contain no-repeat;animation:indepSpin 3.2s linear infinite}',
+        '@keyframes indepSpin{to{transform:rotate(360deg)}}'
+      ].join('');
+      document.head.appendChild(st);
+    }
+
+    function ensure(){
+      try{
+        injectCss();
+        var app=document.getElementById('app');
+        var dismissed=false; try{ dismissed=sessionStorage.getItem('indepDismiss')==='1'; }catch(e){}
+        if(app && !document.getElementById('indep-ribbon') && !dismissed){
+          var r=document.createElement('div'); r.id='indep-ribbon';
+          r.innerHTML='<span class="it"><span class="ic">'+chSvg+'</span> Happy 80<sup style="font-size:8px">th</sup> Independence Day &nbsp;·&nbsp; Jai Hind</span><span class="ix" title="Dismiss">✕</span>';
+          document.body.appendChild(r);
+          app.classList.add('indep');
+          r.querySelector('.ix').onclick=function(){ r.remove(); app.classList.remove('indep'); try{ sessionStorage.setItem('indepDismiss','1'); }catch(e){} };
+        }
+      }catch(e){}
+    }
+
+    var t=0, iv=setInterval(function(){ t++; ensure(); if(t>60) clearInterval(iv); }, 800);
+    if(document.readyState!=='loading') ensure();
+    document.addEventListener('DOMContentLoaded', ensure);
+  }catch(e){}
+})();
+
+
+
+/* WEBCHAT_v1 — Web Chat settings screen. Additive VIEWS entry. Uses h()/api()/toast(). */
+VIEWS.webchat = async (view) => {
+  view.innerHTML = '';
+  const w = document.createElement('div'); w.style.padding = '1.5rem';
+  const card = (...k) => h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px' } }, ...k);
+  const inp = (v, ph) => h('input', { value: v == null ? '' : v, placeholder: ph || '', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+  const fld = (lab, el, hint) => h('div', { style: { marginTop: '.7rem' } }, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, lab), el, hint ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, hint) : null);
+  const esc2 = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  w.appendChild(h('h2', { style: { marginTop: 0 } }, '💬 Web Chat (AI chatbot for your website)'));
+  w.appendChild(h('p', { class: 'muted' }, 'A ChatGPT-style chat window you embed on your website. It greets visitors, captures Name + Mobile, creates a lead (source: Web Chat) and auto-assigns to an agent. Powered by your Gemini AI engine, grounded in its OWN knowledge base below (separate from the WhatsApp bot).'));
+
+  let cfg = {}, embed = '';
+  try { const r = await api('api_webchat_config_get'); cfg = (r && r.config) || {}; embed = (r && r.embed) || ''; }
+  catch (e) { toast('Could not load: ' + e.message, 'err'); }
+
+  const enabled = h('input', { type: 'checkbox' }); enabled.checked = !!cfg.enabled;
+  const title = inp(cfg.title, 'Chat with us');
+  const sub = inp(cfg.sub, 'AI · powered by Gemini');
+  const color = inp(cfg.color, '#128C7E');
+  const greeting = h('textarea', { rows: 2, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit' } }); greeting.value = cfg.greeting || '';
+  const buttons = inp(Array.isArray(cfg.buttons) ? cfg.buttons.join(', ') : (cfg.buttons || ''), 'Product info, Pricing, Support, Talk to a person');
+  const persona = h('textarea', { rows: 3, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit' } }); persona.value = cfg.persona || '';
+
+  const settings = card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '⚙️ Appearance & behaviour'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.4rem 0', fontWeight: 700, fontSize: '13px' } }, enabled, 'Enable Web Chat on my website'),
+    fld('Header title', title),
+    fld('Header subtitle', sub),
+    fld('Theme color', color, 'Hex, e.g. #128C7E'),
+    fld('Greeting (first message)', greeting),
+    fld('Quick-reply buttons', buttons, 'Comma-separated, up to 4'),
+    fld('AI persona / instructions', persona, 'How the assistant should behave (tone, role). The knowledge below is what it actually knows.')
+  );
+  const saveBtn = h('button', { class: 'btn primary', style: { padding: '9px 20px', background: '#128C7E', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, marginTop: '1rem' } }, '💾 Save');
+  const saveStatus = h('span', { style: { marginLeft: '.75rem', fontSize: '12.5px' } });
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    try {
+      await api('api_webchat_config_save', {
+        enabled: enabled.checked ? 1 : 0, title: title.value, sub: sub.value, color: color.value,
+        greeting: greeting.value, buttons: buttons.value.split(',').map(s => s.trim()).filter(Boolean), persona: persona.value
+      });
+      saveStatus.style.color = '#15803d'; saveStatus.textContent = '✓ Saved'; toast('Web Chat settings saved');
+    } catch (e) { saveStatus.style.color = '#dc2626'; saveStatus.textContent = '✗ ' + e.message; toast(e.message, 'err'); }
+    saveBtn.disabled = false;
+  };
+  settings.appendChild(h('div', { style: { marginTop: '.5rem' } }, saveBtn, saveStatus));
+  w.appendChild(settings);
+
+  // ---- Knowledge base (separate from WhatsApp bot) ----
+  const kbCard = card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '📚 Knowledge base (Web Chat only)'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: 0 } }, 'What the Web Chat AI knows about your business — products, pricing, FAQs, policies. This is SEPARATE from your WhatsApp bot; changes here never affect WhatsApp. Add each topic as its own entry. Only Active entries are used.')
+  );
+  const kbList = h('div', { style: { marginTop: '.5rem' } });
+  const kbEmpty = h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '.5rem 0' } }, 'No knowledge yet. Add your first entry below — e.g. a “Pricing” entry with your plans and rates.');
+
+  // add / edit form
+  const kbTitle = inp('', 'Entry title, e.g. Pricing');
+  const kbBody = h('textarea', { rows: 5, placeholder: 'Paste the info the bot should know for this topic…', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit' } });
+  let editId = null;
+  const kbSaveBtn = h('button', { class: 'btn primary', style: { padding: '8px 18px', background: '#128C7E', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700 } }, '➕ Add entry');
+  const kbCancel = h('button', { class: 'btn', style: { padding: '8px 14px', marginLeft: '.5rem', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', display: 'none' } }, 'Cancel');
+  const kbStatus = h('span', { style: { marginLeft: '.6rem', fontSize: '12px' } });
+
+  function resetForm() { editId = null; kbTitle.value = ''; kbBody.value = ''; kbSaveBtn.textContent = '➕ Add entry'; kbCancel.style.display = 'none'; kbStatus.textContent = ''; }
+  kbCancel.onclick = resetForm;
+
+  async function loadKb() {
+    kbList.innerHTML = '';
+    let items = [];
+    try { const r = await api('api_webchat_kb_list'); items = (r && r.items) || []; }
+    catch (e) { kbList.appendChild(h('div', { style: { color: '#dc2626', fontSize: '12.5px' } }, 'Could not load: ' + e.message)); return; }
+    if (!items.length) { kbList.appendChild(kbEmpty); return; }
+    items.forEach(it => {
+      const on = Number(it.is_active) === 1;
+      const row = h('div', { style: { border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.6rem .8rem', marginBottom: '.5rem', background: on ? '#fff' : '#f8fafc' } });
+      const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+        h('span', { style: { fontWeight: 700, fontSize: '13px' } }, it.title || '(untitled)'),
+        h('span', { style: { fontSize: '10.5px', padding: '1px 7px', borderRadius: '999px', background: on ? '#dcfce7' : '#e2e8f0', color: on ? '#15803d' : '#64748b' } }, on ? 'Active' : 'Off')
+      );
+      const prev = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '3px', whiteSpace: 'pre-wrap', maxHeight: '3.2em', overflow: 'hidden' } }, String(it.body || '').slice(0, 220));
+      const btns = h('div', { style: { marginTop: '.45rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
+      const mk = (label, cb, danger) => { const b = h('button', { class: 'btn', style: { padding: '4px 10px', fontSize: '12px', borderRadius: '6px', border: '1px solid ' + (danger ? '#fecaca' : '#cbd5e1'), background: '#fff', color: danger ? '#dc2626' : '#334155', cursor: 'pointer' } }, label); b.onclick = cb; return b; };
+      btns.appendChild(mk('✏️ Edit', () => { editId = it.id; kbTitle.value = it.title || ''; kbBody.value = it.body || ''; kbSaveBtn.textContent = '💾 Update entry'; kbCancel.style.display = 'inline-block'; kbTitle.focus(); }));
+      btns.appendChild(mk(on ? '⏸ Turn off' : '▶ Turn on', async () => { try { await api('api_webchat_kb_toggle', it.id, on ? 0 : 1); await loadKb(); } catch (e) { toast(e.message, 'err'); } }));
+      btns.appendChild(mk('🗑 Delete', async () => { if (!confirm('Delete this knowledge entry?')) return; try { await api('api_webchat_kb_delete', it.id); if (editId === it.id) resetForm(); await loadKb(); } catch (e) { toast(e.message, 'err'); } }, true));
+      row.appendChild(head); row.appendChild(prev); row.appendChild(btns);
+      kbList.appendChild(row);
+    });
+  }
+
+  kbSaveBtn.onclick = async () => {
+    if (!kbBody.value.trim()) { kbStatus.style.color = '#dc2626'; kbStatus.textContent = 'Content is required'; return; }
+    kbSaveBtn.disabled = true;
+    try {
+      await api('api_webchat_kb_save', { id: editId, title: kbTitle.value, body: kbBody.value });
+      kbStatus.style.color = '#15803d'; kbStatus.textContent = '✓ Saved'; toast('Knowledge saved');
+      resetForm(); await loadKb();
+    } catch (e) { kbStatus.style.color = '#dc2626'; kbStatus.textContent = '✗ ' + e.message; toast(e.message, 'err'); }
+    kbSaveBtn.disabled = false;
+  };
+
+  kbCard.appendChild(kbList);
+  kbCard.appendChild(h('div', { style: { marginTop: '.8rem', paddingTop: '.8rem', borderTop: '1px dashed #e2e8f0' } },
+    h('div', { style: { fontWeight: 700, fontSize: '12.5px', marginBottom: '.35rem' } }, 'Add / edit entry'),
+    fld('Title', kbTitle),
+    fld('Content', kbBody),
+    h('div', { style: { marginTop: '.6rem' } }, kbSaveBtn, kbCancel, kbStatus)
+  ));
+  w.appendChild(kbCard);
+  loadKb();
+
+  // ---- embed snippet ----
+  const ta = h('textarea', { readonly: 'readonly', rows: 2, style: { width: '100%', padding: '10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '12px', background: '#f8fafc' } });
+  ta.value = embed || '';
+  const copyBtn = h('button', { class: 'btn', style: { padding: '7px 14px', cursor: 'pointer', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', fontWeight: 600, marginTop: '.5rem' } }, '📋 Copy embed code');
+  copyBtn.onclick = () => { ta.select(); try { navigator.clipboard.writeText(ta.value); } catch (_) {} toast('Embed code copied'); };
+  w.appendChild(card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '🔗 Embed on your website'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: 0 } }, 'Paste this where you want the chat to appear (it fills that spot, ChatGPT-style). Omit the <div> to get a floating bubble instead.'),
+    ta, copyBtn
+  ));
+
+  w.appendChild(card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, 'ℹ️ Routing'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', margin: 0 } }, 'New Web Chat leads are auto-assigned round-robin using your WhatsApp Auto-assign agent pool (WhatsApp → Auto-assign). Set that pool to control who receives web leads.')
+  ));
+
+  view.appendChild(w);
+};

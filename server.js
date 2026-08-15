@@ -239,6 +239,15 @@ app.use(bodyParser.json({ limit: '25mb' }));
 // JSON.stringify.
 app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' }));
 app.use(require('cookie-parser')());
+// WEBCHAT_v1 - GPT-style website chat channel (additive; tenant-gated in routes/webchat.js)
+(function(){
+  try {
+    const _webchat = require('./routes/webchat');
+    app.get('/webchat/:slug/widget.js', (req,res)=>_webchat.expressWidget(req,res));
+    app.post('/webchat/:slug/start',   (req,res)=>_webchat.expressStart(req,res));
+    app.post('/webchat/:slug/message', (req,res)=>_webchat.expressMessage(req,res));
+  } catch(e){ console.error('[WEBCHAT_v1] mount failed:', e && e.message); }
+})();
 
 // WA_API_CAMPAIGN_v1 - AiSensy-style external WhatsApp API Campaign send endpoint.
 // Tenant resolved from apiKey in the body (not the URL); send runs in that tenant's pool.
