@@ -1,10 +1,12 @@
 /**
- * routes/webchat.js — WEBCHAT_v1 (2026-08-15) + WEBCHAT_KB_v1
- * A GPT-style website chat channel powered by the same Gemini brain as the AI bot,
- * but with its OWN, SEPARATE knowledge base (table webchat_kb) — it never reads or
- * touches the WhatsApp bot's ai_kb_documents.
- * SELF-CONTAINED / ADDITIVE: new public endpoints, new tables. Does NOT touch the
- * WhatsApp path. Gated to enabled tenants (default vserve) + an on/off config flag.
+ * routes/webchat.js — WEBCHAT_v1 (2026-08-15) + WEBCHAT_REUSE_v1
+ * A GPT-style website chat channel that runs the SAME AI bot the tenant already
+ * uses on WhatsApp — same config, same knowledge base (ai_bot_settings default
+ * row + ai_kb_documents), via aiBot.generateWebReply(). No separate bot, no
+ * separate KB. This file only adds the web CHANNEL (widget, lead capture,
+ * auto-assign); the brain is the existing AI Assistant.
+ * SELF-CONTAINED / ADDITIVE: new public endpoints + a sessions table. Does NOT
+ * touch the WhatsApp path. Gated to enabled tenants (default vserve) + a flag.
  *
  * Public (mounted in server.js, tenant resolved from :slug):
  *   GET  /webchat/:slug/widget.js          -> serves the embed widget
@@ -12,7 +14,7 @@
  *   POST /webchat/:slug/message {sessionId,text} -> { reply, buttons, done }
  *
  * Flow: greet -> capture Name -> capture Mobile -> create lead (source Web Chat)
- *       -> auto-assign (round-robin over pool) -> Gemini Q&A grounded in webchat_kb.
+ *       -> auto-assign (round-robin) -> chat answered by the existing AI bot.
  */
 'use strict';
 
@@ -20,7 +22,6 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db/pg');
-const gemini = require('../utils/geminiClient');
 
 // Which tenants may use web chat (safety gate). Extend later via config.
 const ALLOWED_SLUGS = ['vserve'];
@@ -43,16 +44,6 @@ async function _ensureTables() {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_webchat_sessions_updated ON webchat_sessions(updated_at)`);
-  // SEPARATE knowledge base for web chat (independent of WhatsApp ai_kb_documents)
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS webchat_kb (
-      id          SERIAL PRIMARY KEY,
-      title       TEXT,
-      body        TEXT NOT NULL,
-      is_active   INTEGER NOT NULL DEFAULT 1,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    )`);
   if (slug) _ensured.add(slug);
 }
 
@@ -67,26 +58,9 @@ async function _cfg() {
     color:    String(await g('WEBCHAT_COLOR', '#128C7E')),
     greeting: String(await g('WEBCHAT_GREETING', "👋 Hi! I'm your assistant. To get started, may I know your name?")),
     buttons:  String(await g('WEBCHAT_BUTTONS', 'Product info,Pricing,Support,Talk to a person')).split(',').map(s => s.trim()).filter(Boolean).slice(0, 4),
-    persona:  String(await g('WEBCHAT_PERSONA', 'You are a helpful, concise customer-support assistant.')),
     source:   String(await g('WEBCHAT_SOURCE', 'Web Chat')),
-    kbMaxChars: Math.max(1000, Math.min(60000, Number(await g('WEBCHAT_KB_MAX_CHARS', '6000')) || 6000)),
     pool:     String(await g('WA_AUTO_ASSIGN_POOL', '')).split(',').map(s => Number(s)).filter(n => n > 0)
   };
-}
-
-// Build the web chat's OWN knowledge-base block (from webchat_kb only).
-async function _loadKb(cap) {
-  cap = Math.max(1000, Number(cap || 6000));
-  try {
-    const r = await db.query(`SELECT title, body FROM webchat_kb WHERE is_active = 1 ORDER BY id ASC`);
-    let buf = '';
-    for (const d of r.rows) {
-      const block = `\n\n## ${d.title || 'Info'}\n${d.body || ''}`;
-      if (buf.length + block.length > cap) { buf += block.slice(0, cap - buf.length); break; }
-      buf += block;
-    }
-    return buf.trim() ? ('\n\n=== KNOWLEDGE BASE (answer using this) ===' + buf + '\n=== END KNOWLEDGE BASE ===') : '';
-  } catch (_) { return ''; }
 }
 
 // ------- tenant-gated wrapper for public endpoints -------
@@ -175,22 +149,12 @@ async function expressMessage(req, res) {
         return res.json({ reply: 'Perfect 👍 What can I help you with today?', buttons: cfg.buttons, done: false });
       }
 
-      // ---- Free chat (Gemini, grounded in the web chat's OWN KB) ----
+      // ---- Free chat: answered by the SAME AI bot as WhatsApp ----
       let history = Array.isArray(s.history) ? s.history : [];
-      const kb = await _loadKb(cfg.kbMaxChars);
-      const system = [
-        cfg.persona,
-        kb || null,
-        `The customer's name is ${s.name || 'unknown'} and their mobile is ${s.mobile || 'unknown'} — do NOT ask for these again.`,
-        kb ? `Answer using the KNOWLEDGE BASE above whenever it is relevant. If it does not cover the question, be honest and offer to have a team member follow up — do not invent facts, prices or URLs.` : null,
-        `Keep replies short (2-4 sentences), friendly and helpful. If you cannot help or they ask to speak to a person, tell them a team member will contact them shortly on their mobile.`,
-        `You may offer up to 3 tap-to-reply buttons. If useful, end your message with a line exactly like: [QR: option1 | option2 | option3]. If no buttons help, omit it.`
-      ].filter(Boolean).join('\n');
-
       let reply = '', buttons = [];
       try {
-        const r = await gemini.generate({ feature: 'ai_bot', system, history, prompt: text, maxOutputTokens: 400 });
-        try { await gemini.logUsage({ tenant_slug: _slug(), call_kind: 'webchat', lead_id: s.lead_id || null, result: r }); } catch (_) {}
+        const aiBot = require('./aiBot');
+        const r = await aiBot.generateWebReply({ text, history, leadId: s.lead_id || null });
         reply = (r && r.text || '').trim();
         const mm = reply.match(/\[QR:\s*([^\]]+)\]/i);
         if (mm) { buttons = mm[1].split('|').map(x => x.trim()).filter(x => x && x.toLowerCase() !== 'none').slice(0, 3); reply = reply.replace(mm[0], '').trim(); }
@@ -235,42 +199,10 @@ async function api_webchat_config_save(token, payload) {
   if (payload.color != null)    await set('WEBCHAT_COLOR', String(payload.color).slice(0, 20));
   if (payload.greeting != null) await set('WEBCHAT_GREETING', String(payload.greeting).slice(0, 500));
   if (payload.buttons != null)  await set('WEBCHAT_BUTTONS', (Array.isArray(payload.buttons) ? payload.buttons.join(',') : String(payload.buttons)).slice(0, 300));
-  if (payload.persona != null)  await set('WEBCHAT_PERSONA', String(payload.persona).slice(0, 1000));
-  return { ok: true };
-}
-
-// ------- admin: separate Web Chat knowledge base -------
-async function api_webchat_kb_list(token) {
-  await _me(token); await _ensureTables();
-  const r = await db.query(`SELECT id, title, body, is_active, updated_at FROM webchat_kb ORDER BY is_active DESC, id DESC`);
-  return { items: r.rows };
-}
-async function api_webchat_kb_save(token, payload) {
-  await _me(token); await _ensureTables();
-  payload = payload || {};
-  const title = String(payload.title || '').slice(0, 160);
-  const bodyTxt = String(payload.body || '').slice(0, 20000);
-  if (!bodyTxt.trim()) throw new Error('Content is required');
-  if (payload.id) {
-    await db.query(`UPDATE webchat_kb SET title=$1, body=$2, updated_at=now() WHERE id=$3`, [title, bodyTxt, Number(payload.id)]);
-    return { ok: true, id: Number(payload.id) };
-  }
-  const ins = await db.query(`INSERT INTO webchat_kb (title, body, is_active) VALUES ($1,$2,1) RETURNING id`, [title, bodyTxt]);
-  return { ok: true, id: ins.rows[0].id };
-}
-async function api_webchat_kb_delete(token, id) {
-  await _me(token); await _ensureTables();
-  await db.query(`DELETE FROM webchat_kb WHERE id=$1`, [Number(id)]);
-  return { ok: true };
-}
-async function api_webchat_kb_toggle(token, id, isActive) {
-  await _me(token); await _ensureTables();
-  await db.query(`UPDATE webchat_kb SET is_active=$1, updated_at=now() WHERE id=$2`, [isActive ? 1 : 0, Number(id)]);
   return { ok: true };
 }
 
 module.exports = {
   expressWidget, expressStart, expressMessage,
-  api_webchat_config_get, api_webchat_config_save,
-  api_webchat_kb_list, api_webchat_kb_save, api_webchat_kb_delete, api_webchat_kb_toggle
+  api_webchat_config_get, api_webchat_config_save
 };

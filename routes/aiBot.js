@@ -3151,8 +3151,45 @@ module.exports = {
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route
   maybeReplyToInbound,
+  generateWebReply,
   classifyAndAlertOnInbound,
   _saveKBFromUpload,
   // Re-engagement worker — invoked from server.js cross-tenant cron
   _reengageTick,
 };
+
+
+/* WEBCHAT_REUSE_v1 (2026-08-15) — let the website chat use the SAME AI bot.
+ * Loads the DEFAULT (WhatsApp) bot config + its knowledge base and returns a
+ * reply for a web message. Reuses _buildPrompt so persona, language, KB, the
+ * URL allowlist and lead context are IDENTICAL to the WhatsApp bot. The web
+ * session's own history is passed in (the WhatsApp chat-log history is ignored).
+ * ADDITIVE: new function only; the WhatsApp inbound path is untouched.
+ */
+async function generateWebReply({ text, history, leadId } = {}) {
+  const gemini = require('../utils/geminiClient');
+  let row = null;
+  try {
+    let r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+    if (!r.rows.length) r = await db.query(`SELECT * FROM ai_bot_settings WHERE id = 1`);
+    row = r.rows[0] || null;
+  } catch (e) { return { ok: false, text: '', error: 'no_bot_settings' }; }
+  if (!row) return { ok: false, text: '', error: 'no_bot_configured' };
+  const settings = _coerceSettings(row);
+  let built;
+  try { built = await _buildPrompt(settings, null, leadId || null, String(text || '')); }
+  catch (e) { return { ok: false, text: '', error: 'prompt_build_failed' }; }
+  let result;
+  try {
+    result = await gemini.generate({
+      feature: 'ai_bot',
+      system: built.system,
+      history: Array.isArray(history) ? history : [],
+      prompt: String(text || ''),
+      model: settings.model_override || null,
+      maxOutputTokens: 500
+    });
+  } catch (e) { return { ok: false, text: '', error: 'gemini_error' }; }
+  try { await gemini.logUsage({ call_kind: 'webchat', lead_id: leadId || null, result }); } catch (_) {}
+  return { ok: !!(result && result.ok), text: (result && result.text || '').trim(), model: result && result.model, error: result && result.error };
+}

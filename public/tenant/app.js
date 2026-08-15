@@ -60961,3 +60961,76 @@ VIEWS.webchat = async (view) => {
 
   view.appendChild(w);
 };
+
+
+/* WEBCHAT_v1 — Web Chat settings screen. Additive VIEWS entry. Uses h()/api()/toast(). */
+VIEWS.webchat = async (view) => {
+  view.innerHTML = '';
+  const w = document.createElement('div'); w.style.padding = '1.5rem';
+  const card = (...k) => h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px' } }, ...k);
+  const inp = (v, ph) => h('input', { value: v == null ? '' : v, placeholder: ph || '', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+  const fld = (lab, el, hint) => h('div', { style: { marginTop: '.7rem' } }, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, lab), el, hint ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, hint) : null);
+
+  w.appendChild(h('h2', { style: { marginTop: 0 } }, '💬 Web Chat (put your AI bot on your website)'));
+  w.appendChild(h('p', { class: 'muted' }, 'A ChatGPT-style chat window you embed on your website. It greets visitors, captures Name + Mobile, creates a lead (source: Web Chat) and auto-assigns to an agent.'));
+
+  // Note: brain + KB come from the WhatsApp AI bot — nothing to set up twice.
+  w.appendChild(h('div', { style: { marginTop: '1rem', padding: '.9rem 1.1rem', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '10px', fontSize: '13px', color: '#065f46' } },
+    h('b', {}, '🧠 Runs your existing AI Assistant. '),
+    'This chat is answered by the SAME AI bot you use on WhatsApp — same personality and the same Knowledge Base. To change how it talks or what it knows, edit your AI Assistant (WhatsApp) → Settings and its Knowledge Base. Changes apply to both automatically.'
+  ));
+
+  let cfg = {}, embed = '';
+  try { const r = await api('api_webchat_config_get'); cfg = (r && r.config) || {}; embed = (r && r.embed) || ''; }
+  catch (e) { toast('Could not load: ' + e.message, 'err'); }
+
+  const enabled = h('input', { type: 'checkbox' }); enabled.checked = !!cfg.enabled;
+  const title = inp(cfg.title, 'Chat with us');
+  const sub = inp(cfg.sub, 'AI · powered by Gemini');
+  const color = inp(cfg.color, '#128C7E');
+  const greeting = h('textarea', { rows: 2, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit' } }); greeting.value = cfg.greeting || '';
+  const buttons = inp(Array.isArray(cfg.buttons) ? cfg.buttons.join(', ') : (cfg.buttons || ''), 'Product info, Pricing, Support, Talk to a person');
+
+  const settings = card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '⚙️ Appearance & lead capture'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.4rem 0', fontWeight: 700, fontSize: '13px' } }, enabled, 'Enable Web Chat on my website'),
+    fld('Header title', title),
+    fld('Header subtitle', sub),
+    fld('Theme color', color, 'Hex, e.g. #128C7E'),
+    fld('Greeting (first message)', greeting),
+    fld('Quick-reply buttons', buttons, 'Comma-separated, up to 4 — shown after the visitor shares their number')
+  );
+  const saveBtn = h('button', { class: 'btn primary', style: { padding: '9px 20px', background: '#128C7E', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, marginTop: '1rem' } }, '💾 Save');
+  const saveStatus = h('span', { style: { marginLeft: '.75rem', fontSize: '12.5px' } });
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    try {
+      await api('api_webchat_config_save', {
+        enabled: enabled.checked ? 1 : 0, title: title.value, sub: sub.value, color: color.value,
+        greeting: greeting.value, buttons: buttons.value.split(',').map(s => s.trim()).filter(Boolean)
+      });
+      saveStatus.style.color = '#15803d'; saveStatus.textContent = '✓ Saved'; toast('Web Chat settings saved');
+    } catch (e) { saveStatus.style.color = '#dc2626'; saveStatus.textContent = '✗ ' + e.message; toast(e.message, 'err'); }
+    saveBtn.disabled = false;
+  };
+  settings.appendChild(h('div', { style: { marginTop: '.5rem' } }, saveBtn, saveStatus));
+  w.appendChild(settings);
+
+  // embed snippet
+  const ta = h('textarea', { readonly: 'readonly', rows: 2, style: { width: '100%', padding: '10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '12px', background: '#f8fafc' } });
+  ta.value = embed || '';
+  const copyBtn = h('button', { class: 'btn', style: { padding: '7px 14px', cursor: 'pointer', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', fontWeight: 600, marginTop: '.5rem' } }, '📋 Copy embed code');
+  copyBtn.onclick = () => { ta.select(); try { navigator.clipboard.writeText(ta.value); } catch (_) {} toast('Embed code copied'); };
+  w.appendChild(card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, '🔗 Embed on your website'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: 0 } }, 'Paste this where you want the chat to appear (it fills that spot, ChatGPT-style). Omit the <div> to get a floating bubble instead.'),
+    ta, copyBtn
+  ));
+
+  w.appendChild(card(
+    h('h3', { style: { margin: '0 0 .25rem' } }, 'ℹ️ Routing'),
+    h('p', { class: 'muted', style: { fontSize: '12.5px', margin: 0 } }, 'New Web Chat leads are auto-assigned round-robin using your WhatsApp Auto-assign agent pool (WhatsApp → Auto-assign). Set that pool to control who receives web leads.')
+  ));
+
+  view.appendChild(w);
+};
