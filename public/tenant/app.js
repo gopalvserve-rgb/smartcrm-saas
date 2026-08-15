@@ -61034,3 +61034,50 @@ VIEWS.webchat = async (view) => {
 
   view.appendChild(w);
 };
+
+
+/* WEBCHAT_AIBOT_TOGGLE_v1 (2026-08-15) — adds an "Also run this bot on my
+ * website (Web Chat)" toggle to the top of the AI Assistant (aibot) settings
+ * screen. Non-invasive: WRAPS VIEWS.aibot (renders original, then prepends the
+ * toggle). Flips the same WEBCHAT_ENABLED switch as the Web Chat screen. Saves
+ * instantly. vserve-only. Uses global h()/api()/toast(). */
+(function () {
+  try {
+    var _wcSlug = (location.pathname.match(/\/t\/([^\/]+)/) || [])[1] || '';
+    if (_wcSlug !== 'vserve') return;                       // vserve-only, matches feature gate
+    if (typeof VIEWS === 'undefined' || typeof VIEWS.aibot !== 'function') return;
+    var _origAibot = VIEWS.aibot;
+    VIEWS.aibot = async function (view) {
+      await _origAibot(view);
+      try {
+        if (!view || view.querySelector('#wc-inline-toggle')) return;   // avoid duplicate
+        var cb = h('input', { type: 'checkbox' });
+        var status = h('span', { style: { marginLeft: '.6rem', fontSize: '12px', color: '#065f46' } });
+        api('api_webchat_config_get')
+          .then(function (r) { cb.checked = !!(r && r.config && r.config.enabled); })
+          .catch(function () {});
+        cb.onchange = async function () {
+          cb.disabled = true;
+          try {
+            await api('api_webchat_config_save', { enabled: cb.checked ? 1 : 0 });
+            status.style.color = '#065f46';
+            status.textContent = cb.checked ? '✓ live on your website' : 'turned off';
+            toast(cb.checked ? 'Web Chat enabled on your website' : 'Web Chat turned off');
+          } catch (e) {
+            cb.checked = !cb.checked;
+            status.style.color = '#dc2626'; status.textContent = '✗ ' + (e && e.message || 'error');
+            toast((e && e.message) || 'Could not save', 'err');
+          }
+          cb.disabled = false;
+        };
+        var card = h('div', { id: 'wc-inline-toggle', class: 'card', style: { margin: '0 0 1rem', padding: '.9rem 1.15rem', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '10px' } },
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '.55rem', fontWeight: 700, fontSize: '13.5px', color: '#065f46', cursor: 'pointer' } },
+            cb, '🌐 Also run this bot on my website (Web Chat)', status),
+          h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '.35rem' } },
+            'This puts the SAME bot + knowledge base on a website chat widget that captures Name + Mobile as a lead. Greeting, colours and embed code: Marketing & Communication → Web Chat.')
+        );
+        view.insertBefore(card, view.firstChild);
+      } catch (e) {}
+    };
+  } catch (e) {}
+})();
