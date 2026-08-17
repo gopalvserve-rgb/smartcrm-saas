@@ -6302,7 +6302,9 @@ VIEWS.leads = async (view) => {
       { id: 'updated_asc',  name: '⏳ Updated — oldest first' },
       /* LEAD_SCORING_v1 P1.5 — sort by Smart Score. */
       { id: 'score_desc',   name: '🎯 Score — highest first' },
-      { id: 'score_asc',    name: '🎯 Score — lowest first' }
+      { id: 'score_asc',    name: '🎯 Score — lowest first' },
+    { id: 'followup_desc', name: '⏰ Follow-up — latest first' },
+    { id: 'followup_asc',  name: '⏰ Follow-up — earliest first' }
     ], CRM.prefs.filters.sort || 'created_desc')),
     // PIPELINE_STAGE_v1_LEADS_RULES — advanced rule builder with full
     // operator set (eq, neq, contains, not_contains, starts_with, ends_with,
@@ -7277,7 +7279,7 @@ function renderLeadsTable(rows) {
    * ascending (A-Z / oldest / lowest), second click flips to descending. Only
    * columns the backend can sort by a real lead field are clickable; the arrow
    * shows the active column + direction. */
-  const _SORTABLE_COL = { name:'name', phone:'phone', email:'email', whatsapp:'whatsapp', city:'city', created:'created', updated:'updated', last_change:'updated', followup:'followup', smart_score:'score' };
+  const _SORTABLE_COL = { email:'email', whatsapp:'whatsapp', city:'city', created:'created', updated:'updated', last_change:'updated', followup:'followup', smart_score:'score' };
   function _sortHeader(key, label) {
     const sf = _SORTABLE_COL[key];
     if (!sf) return h('th', {}, label);
@@ -17060,25 +17062,12 @@ async function _aibotBotsListView() {
     const modal = h('div', { class: 'modal-backdrop' });
     const dlg = h('div', { class: 'modal', style: { maxWidth: '480px' } });
     dlg.appendChild(h('h3', { style: { marginTop: 0 } }, '➕ Create a new bot'));
-    if (!phones.length) {
-      dlg.appendChild(h('div', { class: 'muted' }, 'No WhatsApp numbers connected yet. Connect a number on the WhatsApp page first.'));
-      dlg.appendChild(h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close'));
-      modal.appendChild(dlg);
-      document.body.appendChild(modal);
-      return;
-    }
-    if (!free.length) {
-      dlg.appendChild(h('div', { class: 'muted' }, 'Every connected number is already assigned to a bot. To create another bot, first remove a number from an existing bot (Manage numbers → untick it).'));
-      dlg.appendChild(h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '.85rem' } },
-        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close')));
-      modal.appendChild(dlg);
-      document.body.appendChild(modal);
-      return;
-    }
-    dlg.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Step 1 — pick a name and the WhatsApp number this bot will reply on. You can add more numbers and customise its training afterwards.'));
+    dlg.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Step 1 — pick a name and where this bot runs: a WhatsApp number, or a Chat Bot channel for your website. You can customise its training afterwards.'));
     const nameInp = h('input', { type: 'text', placeholder: 'e.g. Sales Bot', style: { width: '100%' } });
     const phSel = h('select', { style: { width: '100%' } },
-      ...free.map(p => h('option', { value: String(p.phone_number_id) }, '📱 ' + (p.display_phone_number || p.phone_number_id) + (p.label ? ' (' + p.label + ')' : ''))));
+      ...free.map(p => h('option', { value: String(p.phone_number_id) }, '📱 ' + (p.display_phone_number || p.phone_number_id) + (p.label ? ' (' + p.label + ')' : ''))),
+      h('option', { value: 'chat:1' }, '🌐 Chat Bot 1 (Website)'),
+      h('option', { value: 'chat:2' }, '🌐 Chat Bot 2 (Website)'));
     dlg.appendChild(h('div', { class: 'field' }, h('label', {}, 'Bot name'), nameInp));
     dlg.appendChild(h('div', { class: 'field' }, h('label', {}, 'Number to assign'), phSel));
     const footer = h('div', { style: { display: 'flex', gap: '.4rem', justifyContent: 'flex-end', marginTop: '.85rem' } });

@@ -916,7 +916,7 @@ async function expressAttachmentDownload(req, res) {
 }
 
 // ================================================================
-// TKT_AUTOCLOSE_v1 — remind the tenant at 24h then auto-close at 48h when a ticket
+// TKT_AUTOCLOSE_v1 — remind the tenant at 24h then auto-close at 7 days when a ticket
 // is waiting on the customer (last reply was ours). Run hourly from server.js.
 async function sweepStaleTickets() {
   await _ensureSchema();
@@ -935,7 +935,7 @@ async function sweepStaleTickets() {
         subject: '[' + t.ticket_number + '] Reminder — we will close this ticket soon',
         html: _renderEmail({ title: 'We are waiting to hear from you', brand, ticket: t,
           intro: 'We have not heard back on your ticket:',
-          bodyHtml: '<div style="background:#fff7ed;padding:.9rem;border-radius:6px;border-left:3px solid #f59e0b;font-size:.92rem">If we do not hear from you within the next <b>24 hours</b>, we will assume it is resolved and close this ticket. Just reply if you still need help.</div>',
+          bodyHtml: '<div style="background:#fff7ed;padding:.9rem;border-radius:6px;border-left:3px solid #f59e0b;font-size:.92rem">If we do not hear back from you, we will assume it is resolved and close this ticket. Just reply if you still need help.</div>',
           ctaLabel: 'Reply now', ctaUrl: _ticketLinkTenant(t.tenant_slug, t.id) }) });
     } catch (e) { console.warn('[tickets] warn notify failed:', e.message); }
     await control.query(`UPDATE support_tickets SET close_warned_at = NOW(), updated_at = NOW() WHERE id = $1`, [t.id]).catch(() => {});
@@ -945,17 +945,17 @@ async function sweepStaleTickets() {
   const closeRows = await control.query(
     `SELECT * FROM support_tickets
       WHERE status = 'waiting_customer' AND last_reply_by = 'admin'
-        AND last_reply_at < NOW() - INTERVAL '48 hours'
+        AND last_reply_at < NOW() - INTERVAL '7 days'
       LIMIT 300`).catch(() => ({ rows: [] }));
   for (const t of closeRows.rows) {
     await control.query(`UPDATE support_tickets SET status = 'closed', updated_at = NOW() WHERE id = $1`, [t.id]).catch(() => {});
-    try { await control.insert('support_ticket_replies', { ticket_id: t.id, author_type: 'system', author_id: 0, author_name: 'System', author_email: '', body: 'This ticket was automatically closed after 48 hours with no response. Reply anytime to reopen it.', is_internal: 0 }); } catch (_) {}
+    try { await control.insert('support_ticket_replies', { ticket_id: t.id, author_type: 'system', author_id: 0, author_name: 'System', author_email: '', body: 'This ticket was automatically closed after 7 days with no response. Reply anytime to reopen it.', is_internal: 0 }); } catch (_) {}
     try {
       if (t.contact_email) await _notify({ to: t.contact_email,
         subject: '[' + t.ticket_number + '] Ticket closed — no response',
         html: _renderEmail({ title: 'Ticket closed', brand, ticket: t,
           intro: 'We closed your ticket as we did not hear back:',
-          bodyHtml: '<div style="background:#f9fafb;padding:.9rem;border-radius:6px;border-left:3px solid #6b7280;font-size:.92rem">We closed this ticket after <b>48 hours</b> with no reply. If you still need help, just reply and it will reopen automatically.</div>',
+          bodyHtml: '<div style="background:#f9fafb;padding:.9rem;border-radius:6px;border-left:3px solid #6b7280;font-size:.92rem">We closed this ticket after <b>7 days</b> with no reply. If you still need help, just reply and it will reopen automatically.</div>',
           ctaLabel: 'Reopen / reply', ctaUrl: _ticketLinkTenant(t.tenant_slug, t.id) }) });
     } catch (e) { console.warn('[tickets] close notify failed:', e.message); }
     closed++;
