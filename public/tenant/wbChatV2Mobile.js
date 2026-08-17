@@ -840,7 +840,7 @@
             h('span', { style: {
               background: stColors.bg, color: stColors.fg,
               fontSize:'9px', fontWeight:'700', padding:'1px 6px', borderRadius:'100px', flexShrink:'0'
-            }}, t.status_name || 'New'),
+            }}, (function(){ try { if (S.lead && Array.isArray(S.statuses)) { for (var _si=0;_si<S.statuses.length;_si++){ if (Number(S.statuses[_si].id)===Number(S.lead.status_id)) return S.statuses[_si].name || (t.status_name||'New'); } } } catch(_e){} return t.status_name || 'New'; })()),
             t.company ? h('span', { style: { color: C.textDarkMeta, fontSize:'11px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}, t.company) : null
           )
         ),
@@ -1118,7 +1118,7 @@
           else rerender();
         }
       }, ICON.file(C.chipTpl.fg), 'Templates'),
-      chip(C.chipAttach.bg, C.chipAttach.border, C.chipAttach.fg, '📎 Attach', function () { toast('Attachment picker opens on native platform', 'info'); }),
+      chip(C.chipAttach.bg, C.chipAttach.border, C.chipAttach.fg, '📎 Attach', function () { wbv2mPickAttachment(); }),
       chip(C.chipLoc.bg,    C.chipLoc.border,    C.chipLoc.fg,    '📍 Location', function () { toast('Location share opens on native platform', 'info'); }),
       chip(C.chipAudio.bg,  C.chipAudio.border,  C.chipAudio.fg,  '🎵 Audio', function () { toast('Audio recording opens on native platform', 'info'); })
     );
@@ -1148,6 +1148,41 @@
       /* Make sure it stays above absolute-positioned parents */
       position:'relative', zIndex:'2'
     }}, quickRow, inputRow);
+  }
+
+  function wbv2mPickAttachment() {
+    var t = S.activeThread;
+    if (!t) { toast('No thread selected', 'err'); return; }
+    var fi = document.createElement('input');
+    fi.type = 'file';
+    fi.accept = 'image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv';
+    fi.style.position = 'fixed'; fi.style.left = '-9999px'; fi.style.opacity = '0';
+    document.body.appendChild(fi);
+    fi.onchange = function () {
+      var f = fi.files && fi.files[0];
+      try { document.body.removeChild(fi); } catch (_e) {}
+      if (!f) return;
+      if (f.size > 25 * 1024 * 1024) { toast('File too large (25 MB max)', 'err'); return; }
+      toast('Uploading' + '…', 'info');
+      var fd = new FormData(); fd.append('file', f);
+      var tok = (window.CRM && CRM.token) || '';
+      fetch('/api/wa/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: fd })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j || {} }; }); })
+        .then(function (res) {
+          if (!res.ok || res.j.error) throw new Error(res.j.error || ('upload failed (' + res.status + ')'));
+          var j = res.j;
+          var mime = String(j.mime_type || f.type || '');
+          var mt = (/^image\//.test(mime)) ? 'image' : (/^video\//.test(mime)) ? 'video' : (/^audio\//.test(mime)) ? 'audio' : 'document';
+          var pid = S.sendFromId || t.phone_number_id;
+          var payload = { phone: t.phone, media_id: j.wa_media_id, media_type: mt, media_url: j.url, filename: j.filename || f.name };
+          if (pid) payload.from_phone_number_id = pid;
+          return api('api_wb_chat_send', payload);
+        })
+        .then(function () { return loadMessages(t.phone); })
+        .then(function () { rerender(); toast('Sent', 'ok'); })
+        .catch(function (e) { toast((e && e.message) || 'Attachment failed', 'err'); });
+    };
+    fi.click();
   }
 
   function handleSend() {
