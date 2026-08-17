@@ -895,7 +895,6 @@ public class MainActivity extends BridgeActivity {
         // ==== CALLLOG_SYNC_v1 — device call-log batch read + per-SIM selection ====
 
         /** Active SIMs as JSON: [{slot, subId, label}]. Needs READ_PHONE_STATE. */
-        @JavascriptInterface
         /* ====================================================================
          * DIAL_INTENT_FIX_v1 (2026-07-15) — "the dialer opens with the PREVIOUS number".
          *
@@ -951,6 +950,7 @@ public class MainActivity extends BridgeActivity {
             }
         }
 
+        @JavascriptInterface
         public String getSims() {
             org.json.JSONArray arr = new org.json.JSONArray();
             try {
