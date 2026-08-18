@@ -496,7 +496,7 @@
   function loadLead(id) {
     if (!id) { S.lead = null; return Promise.resolve(); }
     return api('api_leads_get', id)
-      .then(function (r) { S.lead = r || null; })
+      .then(function (r) { S.lead = (r && r.lead) ? r.lead : (r || null); })
       .catch(function () { S.lead = null; });
   }
   function loadTimeline(id) {
