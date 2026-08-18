@@ -297,6 +297,23 @@ async function api_saas_tk_submit(token, payload) {
   const p = payload || {};
   const { tenant, user } = await _authTenantUser(token);
 
+  // TKT_RATE_LIMIT_v1 — one support ticket per tenant per 24 hours.
+  let _lastTicketAt = null;
+  try {
+    const _rl = await control.query(
+      `SELECT created_at FROM support_tickets WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [tenant.id]);
+    _lastTicketAt = _rl.rows && _rl.rows[0] && _rl.rows[0].created_at;
+  } catch (_) { /* fail open: never block a ticket on a check error */ }
+  if (_lastTicketAt) {
+    const _dayMs = 24 * 60 * 60 * 1000;
+    const _ageMs = Date.now() - new Date(_lastTicketAt).getTime();
+    if (_ageMs >= 0 && _ageMs < _dayMs) {
+      const _hrs = Math.max(1, Math.ceil((_dayMs - _ageMs) / 3600000));
+      throw new Error('You can raise only one support ticket every 24 hours. Please try again in about ' + _hrs + ' hour' + (_hrs === 1 ? '' : 's') + ', or reply on your existing open ticket.');
+    }
+  }
+
   // Sanitize + validate
   const category = String(p.category || '').toLowerCase();
   const priority = String(p.priority || 'normal').toLowerCase();
