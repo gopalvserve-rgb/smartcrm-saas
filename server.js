@@ -2398,6 +2398,7 @@ app.get('/LeadCRM.apk', (req, res) => {
 // (handled by the earlier app.get('/') registration above).
 app.get('/', (req, res, next) => {
   if (!req.tenant) return next();          // no tenant Ã¢ÂÂ fall through to landing/static
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
 });
 
