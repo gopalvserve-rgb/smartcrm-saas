@@ -988,6 +988,27 @@
       header, banner, messagesArea, composer);
   }
 
+  function _wbv2mMedia(m) {
+    var mt = String(m.message_type || m.media_type || '').toLowerCase();
+    var url = m.media_url || '';
+    var isMedia = mt === 'image' || mt === 'video' || mt === 'audio' || mt === 'document' || mt === 'sticker' || (!!url && mt && mt !== 'text');
+    if (!isMedia) return null;
+    if (mt === 'image' && url) {
+      return h('a', { href: url, target: '_blank', rel: 'noopener', style: { display: 'block', margin: '0 0 4px' } },
+        h('img', { src: url, alt: 'image', style: { maxWidth: '220px', maxHeight: '240px', borderRadius: '8px', display: 'block' } }));
+    }
+    var icon = mt === 'video' ? '\uD83C\uDFAC' : mt === 'audio' ? '\uD83C\uDFB5' : (mt === 'image' || mt === 'sticker') ? '\uD83D\uDDBC\uFE0F' : '\uD83D\uDCC4';
+    var label = mt === 'video' ? 'Video' : mt === 'audio' ? 'Audio' : mt === 'image' ? 'Image' : mt === 'sticker' ? 'Sticker' : 'Document';
+    var fname = '';
+    try { fname = decodeURIComponent((url.split('?')[0].split('/').pop() || '')); } catch (_) { fname = ''; }
+    if (fname && fname.length <= 44 && /\.[a-z0-9]{2,5}$/i.test(fname)) label = fname;
+    var chip = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.06)', borderRadius: '8px', padding: '8px 10px', margin: '0 0 4px', maxWidth: '240px' } },
+      h('span', { style: { fontSize: '18px' } }, icon),
+      h('span', { style: { fontSize: '13px', fontWeight: '600', color: C.textPri, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, label),
+      url ? h('span', { style: { fontSize: '11px', color: C.textMeta, marginLeft: 'auto' } }, 'Open') : null);
+    if (url) return h('a', { href: url, target: '_blank', rel: 'noopener', style: { display: 'block', textDecoration: 'none' } }, chip);
+    return chip;
+  }
   function renderMessage(m) {
     var dir = (m.direction || '').toLowerCase();
     var isIn = dir === 'in' || dir === 'inbound';
@@ -1044,7 +1065,7 @@
         padding:'7px 10px 5px',
         boxShadow:'0 1px 1px rgba(0,0,0,0.08)'
       }},
-        h('p', { style: { margin:'0 0 4px', fontSize:'14px', color: C.textPri, lineHeight:'1.5', whiteSpace:'pre-wrap' }}, body),
+        _wbv2mMedia(m), (body ? h('p', { style: { margin:'0 0 4px', fontSize:'14px', color: C.textPri, lineHeight:'1.5', whiteSpace:'pre-wrap' }}, body) : null),
         h('span', { style: { fontSize:'10.5px', color: C.textMeta, display:'block', textAlign:'right' }}, time)
       );
       row.appendChild(bIn);
@@ -1057,7 +1078,7 @@
       padding:'7px 10px 5px',
       boxShadow:'0 1px 1px rgba(0,0,0,0.08)'
     }},
-      h('p', { style: { margin:'0 0 4px', fontSize:'14px', color: C.textPri, lineHeight:'1.5', whiteSpace:'pre-wrap' }}, body),
+      _wbv2mMedia(m), (body ? h('p', { style: { margin:'0 0 4px', fontSize:'14px', color: C.textPri, lineHeight:'1.5', whiteSpace:'pre-wrap' }}, body) : null),
       h('div', { style: { display:'flex', justifyContent:'flex-end', alignItems:'center', gap:'3px' }},
         h('span', { style: { fontSize:'10.5px', color: C.textMeta }}, time),
         h('span', { style: { color: C.readTick, fontSize:'14px', lineHeight:'1' }}, '✓✓')
