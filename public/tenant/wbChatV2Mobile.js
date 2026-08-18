@@ -2156,7 +2156,19 @@ api('api_leads_update', lid, { status_id: opt.id })
       loadMessages(t.phone),
       t.lead_id ? loadLead(t.lead_id) : Promise.resolve(),
       t.lead_id ? loadRemarks(t.lead_id) : Promise.resolve()
-    ]).then(rerender).catch(function () {});
+    ]).then(function () {
+      try {
+        var L = S.lead;
+        if (L && S.activeThread) {
+          var nm = L.status_name, col = L.status_color;
+          if (!nm && L.status_id != null && Array.isArray(S.statuses)) {
+            for (var i = 0; i < S.statuses.length; i++) { if (Number(S.statuses[i].id) === Number(L.status_id)) { nm = S.statuses[i].name; col = col || S.statuses[i].color; break; } }
+          }
+          if (nm) { S.activeThread.status_name = nm; if (col) S.activeThread.status_color = col; }
+        }
+      } catch (_e) {}
+      rerender();
+    }).catch(function () {});
   }
   function openLead(id) {
     if (!id) return toast('No linked lead', 'err');
