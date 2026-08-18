@@ -443,7 +443,8 @@
     if (S.search) opts.q = String(S.search).trim();
     if (S.filter && S.filter !== 'all') opts.status_filter = String(S.filter);
     if (loadMoreOpts && loadMoreOpts.page) opts.page = loadMoreOpts.page;
-    return api('api_wb_chat_threads', opts)
+    return (S.statuses && S.statuses.length ? Promise.resolve() : loadStatuses())
+      .then(function () { return api('api_wb_chat_threads', opts); })
       .then(function (list) {
         /* v1_3 — track hasMore for Load More button. */
         var incoming = Array.isArray(list) ? list : [];
@@ -453,6 +454,17 @@
         } else {
           S.threads = incoming;
         }
+        // WA_MOBILE_STATUS_v1 — threads carry status_id only; resolve the live
+        // status name/color from the statuses cache so list rows show the real
+        // status instead of falling back to 'New'.
+        var _sidx = {};
+        (S.statuses || []).forEach(function (s) { _sidx[Number(s.id)] = s; });
+        S.threads.forEach(function (t) {
+          if (t && t.status_id != null) {
+            var s = _sidx[Number(t.status_id)];
+            if (s) { t.status_name = s.name; if (s.color) t.status_color = s.color; }
+          }
+        });
         S.hasMore = incoming.length === (S.pageSize || 50);
         S.threads.sort(function (a, b) {
           var ta = new Date(a.last_msg_at || 0).getTime();
