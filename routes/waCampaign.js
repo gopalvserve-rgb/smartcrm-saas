@@ -294,7 +294,7 @@ async function _me(token) {
 
 async function api_waCampaign_templates(token) {
   await _me(token); await _ensureTenantTables();
-  const r = await db.query(`SELECT name, language, status, COALESCE(body_params,0) AS body_params, COALESCE(header_type,'none') AS header_type, COALESCE(has_buttons,false) AS has_buttons FROM wa_templates ORDER BY name, language`);
+  const r = await db.query(`SELECT name, language, status, COALESCE(body_params,0) AS body_params, COALESCE(header_type,'none') AS header_type, COALESCE(has_buttons,0) AS has_buttons FROM wa_templates ORDER BY name, language`);
   return { templates: r.rows };
 }
 

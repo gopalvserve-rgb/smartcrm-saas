@@ -2714,7 +2714,7 @@ VIEWS.waApiCampaigns = async (view) => {
   let templates = [], campaigns = [], keys = [], logs = [];
   try {
     const [t, c, k, l] = await Promise.all([
-      api('api_waCampaign_templates').catch(() => ({ templates: [] })),
+      api('api_waCampaign_templates').catch(e => { toast('Could not load templates: ' + (e && e.message ? e.message : e), 'err'); return { templates: [], _error: String((e && e.message) || e) }; }),
       api('api_waCampaign_list').catch(() => ({ campaigns: [] })),
       api('api_waCampaign_keys_list').catch(() => ({ keys: [] })),
       api('api_waCampaign_logs', { limit: 50 }).catch(() => ({ logs: [] }))
