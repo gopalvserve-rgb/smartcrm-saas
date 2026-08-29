@@ -1299,6 +1299,9 @@ function fmtDate(s, opts) {
     const d = new Date(s);
     if (opts === 'short') return d.toLocaleDateString();
     if (opts === 'time') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // TIMELINE_ABS_TIME_v1 - compact absolute stamp for the activity timeline.
+    // "5h ago" alone is useless when reconciling against a phone's call log.
+    if (opts === 'short-time') return d.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
     if (opts === 'relative') {
       const diff = Date.now() - d.getTime();
       const abs = Math.abs(diff);
@@ -12045,7 +12048,7 @@ function actionTimelineBlock(leadId) {
           ),
           sub ? h('div', { class: 'tl-sub muted', style: { fontSize: '.85rem', marginTop: '.15rem' } }, String(sub).slice(0, 240) + (String(sub).length > 240 ? '…' : '')) : null,
           h('div', { class: 'tl-meta muted' },
-            fmtDate(r.created_at, 'relative'),
+            fmtDate(r.created_at, 'short-time') + ' · ' + fmtDate(r.created_at, 'relative'),
             r.action_type !== 'created' ? ' · +' + fmtAge(r.created_at) + ' since received' : ''
           )
         )
