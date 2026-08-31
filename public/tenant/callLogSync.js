@@ -384,6 +384,12 @@
     return !!(window.LeadCRMNative) || /Capacitor|LeadCRM/i.test(navigator.userAgent || '');
   }
   function injectFab() {
+    /* LEAD_UI_DECLUTTER_v1 (2026-08-29) - FAB removed on request: it floated
+     * over the WhatsApp inbox and lead rows on phones. Nothing is lost -
+     * autoSync('app-open') already runs on every app open/resume, and the
+     * manual dialog is still on the Call Activity page. */
+    return;
+    /* eslint-disable no-unreachable */
     if (!isMobileApp()) return;                 // desktop web: no FAB
     if (!token()) return;                        // only when logged in
     if (document.getElementById('cls-fab')) return;

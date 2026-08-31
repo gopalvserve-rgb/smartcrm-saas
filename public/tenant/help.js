@@ -191,7 +191,7 @@
     '.ph-foot{border-top:1px solid #eee;padding:10px 12px;font-size:11.5px;color:#94a3b8;text-align:center}',
     '.ph-hl{outline:3px solid #f59e0b !important;outline-offset:3px;border-radius:8px;transition:.15s}',
     '.ph-tip{position:fixed;z-index:2147483003;background:#1f2937;color:#fff;font-size:12px;padding:7px 11px;border-radius:8px;max-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3)}',
-    '@media(max-width:640px){#ph-fab{bottom:92px;left:12px;padding:11px 16px;font-size:14px}#ph-drawer{width:100vw;max-width:100vw}}'
+    '@media(max-width:640px){#ph-fab{display:none!important}#ph-drawer{width:100vw;max-width:100vw}}'
   ].join('');
   document.head.appendChild(css);
 

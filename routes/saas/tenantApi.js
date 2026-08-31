@@ -58,6 +58,7 @@ const ROUTE_FILES = [
   'inventory',
   'knowledgeBase',
   'leads',
+  'leadCallDuration', /* LEAD_LIST_CALL_DURATION_v1 - last-call duration column */
   'notifications',
   'permissions',
   'personalWaTemplates',

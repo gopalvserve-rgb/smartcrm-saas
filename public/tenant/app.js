@@ -5478,6 +5478,8 @@ const LEAD_COLUMNS = [
   { key: 'updated',     label: 'Last Updated',  default: false },
   /* CALL_DIAL_COUNT_v4 — last outgoing-dial date/time. Off by default; auto-injected once. */
   { key: 'last_dialed', label: 'Last Dialed',   default: false },
+  /* LEAD_LIST_CALL_DURATION_v1 - length of the most recent outgoing call. Off by default. */
+  { key: 'call_duration', label: 'Call Duration', default: false },
   /* LEAD_SCORING_v1 P1.5 — Smart Score column. On by default when Lead Scoring is enabled. */
   { key: 'smart_score', label: 'AI Score',       default: true }
 ];
@@ -7109,6 +7111,9 @@ async function loadLeads(opts) {
       if (_ids.length) {
         const _dc = await api('api_leads_dialCounts', _ids).catch(() => ({}));
         (res.leads || []).forEach(l => { const e = (_dc && _dc[l.id]) || null; l._dialCount = (e && Number(e.count)) || 0; l._lastDialedAt = (e && e.last) || null; });
+        /* LEAD_LIST_CALL_DURATION_v1 - same best-effort pattern; never blocks the table. */
+        const _cdm = await api('api_leads_callDurations', _ids).catch(() => ({}));
+        (res.leads || []).forEach(l => { const e2 = (_cdm && _cdm[l.id]) || null; l._lastCallDurationS = e2 ? e2.duration_s : null; l._lastCallAt = e2 ? e2.at : null; });
       }
     } catch (_) {}
     renderLeadsTable(res.leads);
@@ -8476,6 +8481,26 @@ function renderCell(col, l, statuses) {
       return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: _ttl },
         h('div', {}, _isPulled ? h('span', { style: { color: '#0284c7', fontWeight: '600' } }, '♻ ' + _dateStr) : _dateStr),
         h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr)
+      );
+    }
+    case 'call_duration': {
+      // LEAD_LIST_CALL_DURATION_v1 - duration of the MOST RECENT outgoing call.
+      // A 0s call was dialled but never answered; showing that plainly is more
+      // useful than a dash, and it matches how the timeline labels no_answer.
+      const _cd = l._lastCallDurationS;
+      if (_cd === null || _cd === undefined) return h('td', { class: 'muted' }, '\u2014');
+      const _cn = Number(_cd) || 0;
+      const _cwhen = (l._lastCallAt && typeof fmtDate === 'function') ? fmtDate(l._lastCallAt, 'relative') : '';
+      if (_cn === 0) {
+        return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: 'Last call was not answered' + (_cwhen ? ' (' + _cwhen + ')' : '') },
+          h('div', { style: { color: '#b45309', fontWeight: '600' } }, '0s'),
+          h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, 'no answer')
+        );
+      }
+      const _ctxt = _cn >= 60 ? (Math.floor(_cn / 60) + 'm ' + (_cn % 60) + 's') : (_cn + 's');
+      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: 'Last call' + (_cwhen ? ' ' + _cwhen : '') },
+        h('div', { style: { color: '#15803d', fontWeight: '600' } }, '\u23f1 ' + _ctxt),
+        _cwhen ? h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _cwhen) : null
       );
     }
     case 'last_dialed': {
