@@ -668,22 +668,39 @@ async function _createLeadFromWebhook(lead) {
     if (ruleAssignee) lead.assigned_to = ruleAssignee;
   } catch (e) { console.warn('[webhook] rule eval skipped:', e.message); }
 
-  // 3. Duplicate check (within window). Always runs — we mark every dupe so
-  // the "⚠️ Duplicates only" filter and the bulk-Dedupe button can see them.
-  const policy = process.env.DUPLICATE_POLICY || 'allow';
-  const hours = Number(process.env.DUPLICATE_WINDOW_HOURS) || 24;
-  const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-  const phoneDigits = String(lead.phone || '').replace(/\D/g, '');
-  const emailLower  = String(lead.email || '').toLowerCase();
-  const dup = (phoneDigits || emailLower)
-    ? (await db.getAll('leads')).find(l => {
-        if (String(l.created_at) < since) return false;
-        const lp = String(l.phone || '').replace(/\D/g, '');
-        const le = String(l.email || '').toLowerCase();
-        return (phoneDigits && lp === phoneDigits) ||
-               (emailLower && le === emailLower);
-      })
-    : null;
+  /* 3. Duplicate check (within window). Always runs — we mark every dupe so
+   * the "⚠️ Duplicates only" filter and the bulk-Dedupe button can see them.
+   *
+   * WEBHOOK_DUP_CONFIG_v1 (2026-09-02) — THE reason "duplicate rule set up but
+   * still getting duplicates". This block used to read:
+   *
+   *     const policy = process.env.DUPLICATE_POLICY || 'allow';
+   *     const hours  = Number(process.env.DUPLICATE_WINDOW_HOURS) || 24;
+   *
+   * The admin screen writes those settings to the TENANT'S config table via
+   * api_admin_setConfig. process.env is a different place entirely, and it is
+   * shared across the whole Node process, so in a DB-per-tenant app it could
+   * never be right for more than one tenant anyway. With no env var set the
+   * policy was hard-'allow' forever: every webhook lead inserted unconditionally,
+   * whatever the tenant had chosen. Measured on tenant `basic`: policy 'reject',
+   * 240 duplicate clusters, 996 redundant rows, is_duplicate set on ZERO of
+   * 1728 leads, and 100% of the duplicated rows arrived via this path.
+   *
+   * routes/leads.js fixed exactly this bug in its own copy months ago (see the
+   * comment on _findDuplicate) — the fix was never carried across. So rather
+   * than repair a third copy, this now calls the SAME matcher leads.js uses.
+   * That gets us tenant-scoped config, DUPLICATE_MATCH_FIELDS support, the
+   * phone<->whatsapp cross-match, and the case normalisation, for free.
+   *
+   * ignorePolicy:true preserves this path's own behaviour of flagging dupes
+   * even when the policy is 'allow'. */
+  const policy = String(await db.getConfig('DUPLICATE_POLICY', 'flag') || 'flag');
+  let dup = null;
+  try {
+    dup = await require('./leads')._findDuplicate(lead, { ignorePolicy: true });
+  } catch (e) {
+    console.warn('[webhook] duplicate check failed (lead still created):', e.message);
+  }
 
   if (dup) {
     // Always flag — visible to the dedupe filter even under the default 'allow' policy

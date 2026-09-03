@@ -128,7 +128,11 @@ async function _loadCoOwnerMap() {
 }
 
 // Duplicate detection
-async function _findDuplicate(payload) {
+/* opts.ignorePolicy — return the match even when DUPLICATE_POLICY is 'allow'.
+ * routes/webhooks.js needs this: it flags every duplicate (so the "Duplicates
+ * only" filter and the bulk-Dedupe button can see them) regardless of whether
+ * the policy blocks the insert. */
+async function _findDuplicate(payload, opts) {
   // CAMPAIGN_UPLOAD_v1 — skip when caller has already done its own dup
   // detection (the per-campaign CSV upload uses its own Set-based scan
   // so the policy choice (skip/add) is honoured even when the tenant's
@@ -144,11 +148,30 @@ async function _findDuplicate(payload) {
   // don't block the insert) — matches the dedupe UI which expects a
   // visible warning, not silent rejection.
   const policy = (await db.getConfig('DUPLICATE_POLICY', 'flag')) || 'flag';
-  if (policy === 'allow') return null;
+  if (policy === 'allow' && !(opts && opts.ignorePolicy)) return null;
   const hours = Number(await db.getConfig('DUPLICATE_WINDOW_HOURS', '720')) || 720;
+  /* DUP_MATCH_FIELDS_CASE_v1 (2026-09-02) — THE reason tenant `basic` had 240
+   * duplicate clusters with the rule fully configured. The admin typed "PHONE"
+   * into DUPLICATE_MATCH_FIELDS. This split/trimmed but never lowercased, so
+   * `fields.includes('phone')` below was false, the loop compared NOTHING, and
+   * _findDuplicate returned null for every lead. Policy said 'reject'; nothing
+   * was ever rejected and is_duplicate was never set on a single row.
+   * The field is free text with a lowercase hint and no validation, so this is
+   * a trap any admin can walk into. Normalise on READ so no stored value can
+   * silently disable duplicate detection again. */
   const fields = String(await db.getConfig('DUPLICATE_MATCH_FIELDS', 'phone,email'))
+    .toLowerCase()
     .split(',').map(s => s.trim()).filter(Boolean);
   if (!hours || !fields.length) return null;
+  /* Accept the obvious synonyms an admin might type, and FAIL LOUD rather than
+   * silently matching nothing when the value is unrecognisable. */
+  const wantPhone = fields.some(f => ['phone', 'mobile', 'whatsapp', 'number'].includes(f));
+  const wantEmail = fields.includes('email');
+  if (!wantPhone && !wantEmail) {
+    console.warn('[dup] DUPLICATE_MATCH_FIELDS matched no known field (' +
+                 fields.join(',') + ') — duplicate detection is OFF. Use "phone" and/or "email".');
+    return null;
+  }
 
   const phone = String(payload.phone || '').replace(/\D/g, '');
   const email = String(payload.email || '').trim().toLowerCase();
@@ -161,11 +184,11 @@ async function _findDuplicate(payload) {
     const lp = String(l.phone || '').replace(/\D/g, '');
     const lw = String(l.whatsapp || '').replace(/\D/g, '');
     const le = String(l.email || '').trim().toLowerCase();
-    if (fields.includes('phone')) {
+    if (wantPhone) {
       if (phone && (phone === lp || phone === lw)) return l;
       if (wa && (wa === lp || wa === lw)) return l;
     }
-    if (fields.includes('email')) {
+    if (wantEmail) {
       if (email && email === le) return l;
     }
   }
@@ -3968,6 +3991,10 @@ module.exports = {
   api_leads_pull, api_leads_pullInfo,
   api_leads_assignToCampaign,
   api_leads_rescanDuplicates,
+  /* DUP_SHARED_MATCH_v1 — exported so routes/webhooks.js uses THIS matcher
+   * instead of its own copy. Three copies of duplicate detection is how the
+   * webhook path drifted onto process.env and stopped honouring tenant config. */
+  _findDuplicate,
   api_leads_merge,
   api_leads_activityTimeline,  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
   api_leads_shareWith, api_leads_unshare, api_leads_listCoOwners, api_leads_bulkShare,  /* SHARE_LEAD_v1 */
