@@ -336,10 +336,17 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   // FB_META_QNA_REMARK_v1 — add a remark row so the Q&A shows up in the
   // lead timeline. `remarks` table columns match what api_leads_addRemark
   // uses so it renders in the standard timeline UI.
-  if (_qnaForRemark && _created && _created.id) {
+  /* FB_QNA_DUP_REMARK_v1 (2026-09-04) — when the Duplicate Rule rejects or
+   * merges this enquiry no new row exists, and keying the remark off
+   * _created.id alone silently threw the Facebook form answers away. The
+   * answers still belong to the lead this enquiry matched — that IS the
+   * record the rep will open. Fall back to matched_id so a repeat Lead Ad
+   * submission adds its Q&A to the original instead of vanishing. */
+  const _remarkLeadId = (_created && (_created.id || _created.matched_id)) || null;
+  if (_qnaForRemark && _remarkLeadId) {
     try {
       await db.insert('remarks', {
-        lead_id:    _created.id,
+        lead_id:    _remarkLeadId,
         user_id:    null,           // system-generated remark
         remark:     _qnaForRemark,
         created_at: db.nowIso()
@@ -693,27 +700,18 @@ async function _createLeadFromWebhook(lead) {
    * phone<->whatsapp cross-match, and the case normalisation, for free.
    *
    * ignorePolicy:true preserves this path's own behaviour of flagging dupes
-   * even when the policy is 'allow'. */
-  const policy = String(await db.getConfig('DUPLICATE_POLICY', 'flag') || 'flag');
-  let dup = null;
-  try {
-    dup = await require('./leads')._findDuplicate(lead, { ignorePolicy: true });
-  } catch (e) {
-    console.warn('[webhook] duplicate check failed (lead still created):', e.message);
-  }
-
-  if (dup) {
-    // Always flag — visible to the dedupe filter even under the default 'allow' policy
-    lead.is_duplicate = 1;
-    lead.duplicate_of = dup.id;
-    if (policy === 'reject') {
-      return { duplicate: true, matched_id: dup.id, skipped: true };
-    }
-    if (policy === 'assign_same_user' && dup.assigned_to) {
-      lead.assigned_to = dup.assigned_to;
-    }
-    if (policy === 'skip_assignment') lead.assigned_to = null;
-    lead.notes = (lead.notes || '') + '\n[DUPLICATE of lead #' + dup.id + ']';
+   * even when the policy is 'allow'.
+   *
+   * DUP_INGEST_SHARED_v1 (2026-09-04) — the policy handling that used to sit
+   * inline here now lives in _applyDupToIngest in routes/leads.js, shared with
+   * routes/integrations.js (the aggregator + Sheet-sync path, which was running
+   * no duplicate check at all). Folding the copies together also fixed 'merge'
+   * being ignored on this path: it fell through to flag-and-insert, so a tenant
+   * on the policy the admin screen recommends still collected a fresh row for
+   * every repeat enquiry. */
+  const _dup = await require('./leads')._applyDupToIngest(lead);
+  if (_dup.skip) {
+    return { duplicate: true, matched_id: _dup.matched_id, merged: !!_dup.merged, skipped: true };
   }
   // Also flag is_duplicate=1 if the row's tag explicitly says "Duplicate"
   if (!lead.is_duplicate && /\b(duplicate|dup)\b/i.test(String(lead.tags || ''))) {

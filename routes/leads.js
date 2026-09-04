@@ -179,20 +179,59 @@ async function _findDuplicate(payload, opts) {
   if (!phone && !email && !wa) return null;
 
   const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-  const leads = (await db.getAll('leads')).filter(l => String(l.created_at) >= since);
-  for (const l of leads) {
-    const lp = String(l.phone || '').replace(/\D/g, '');
-    const lw = String(l.whatsapp || '').replace(/\D/g, '');
-    const le = String(l.email || '').trim().toLowerCase();
-    if (wantPhone) {
-      if (phone && (phone === lp || phone === lw)) return l;
-      if (wa && (wa === lp || wa === lw)) return l;
-    }
-    if (wantEmail) {
-      if (email && email === le) return l;
+
+  /* DUP_MATCH_SQL_v1 (2026-09-04) — this used to be db.getAll('leads') followed
+   * by an in-memory scan. Every ingest path now runs this matcher, and the
+   * aggregator webhooks deliver BATCHES (IndiaMART posts an array), so a batch
+   * of 50 meant 50 full loads of the leads table before a single row was
+   * written — the kind of thing that turns into webhook timeouts on the exact
+   * tenants with enough leads to need duplicate detection. Same comparison,
+   * done in Postgres: digits-only on both sides for phone/whatsapp, lowercased
+   * trim for email, and ORDER BY id ASC LIMIT 1 to keep the previous
+   * first-match-wins result. */
+  const conds = [], args = [since];
+  const D = (col) => `regexp_replace(COALESCE(${col},''), '[^0-9]', '', 'g')`;
+  /* DUP_PHONE_TAIL_v1 (2026-09-04) — match on the last 10 digits, not the whole
+   * string. The aggregators send the country code ('+91 98765-43210' -> 12
+   * digits) while the CRM almost always holds the bare 10-digit number, so
+   * exact digit-string equality quietly missed the very duplicates the rule
+   * exists to catch. _runNativePull in routes/integrations.js has compared on
+   * .slice(-10) all along; this brings the shared matcher in line with it.
+   * Both sides must actually HAVE 10 digits — a 5-digit extension or a partial
+   * number still compares exactly, so short values can't collide. */
+  if (wantPhone) {
+    for (const v of [phone, wa]) {
+      if (!v) continue;
+      if (v.length >= 10) {
+        args.push(v.slice(-10));
+        const n = '$' + args.length;
+        conds.push(`((length(${D('phone')}) >= 10 AND right(${D('phone')}, 10) = ${n})
+                  OR (length(${D('whatsapp')}) >= 10 AND right(${D('whatsapp')}, 10) = ${n}))`);
+      } else {
+        args.push(v);
+        const n = '$' + args.length;
+        conds.push(`(${D('phone')} = ${n} OR ${D('whatsapp')} = ${n})`);
+      }
     }
   }
-  return null;
+  if (wantEmail && email) {
+    args.push(email);
+    conds.push(`LOWER(TRIM(COALESCE(email,''))) = $${args.length}`);
+  }
+  if (!conds.length) return null;
+
+  try {
+    const r = await db.query(
+      `SELECT * FROM leads
+        WHERE created_at >= $1 AND (${conds.join(' OR ')})
+        ORDER BY id ASC LIMIT 1`, args);
+    return r.rows[0] || null;
+  } catch (e) {
+    /* Never let a matcher failure lose an incoming lead — the callers treat a
+     * null as "not a duplicate" and insert. */
+    console.warn('[dup] match query failed, treating as no-match:', e.message);
+    return null;
+  }
 }
 
 async function _applyDuplicatePolicy(payload, fallbackUserId) {
@@ -215,6 +254,67 @@ async function _applyDuplicatePolicy(payload, fallbackUserId) {
     return { payload: out, duplicate: true, merged: true, matched_id: match.id, skipped: true };
   }
   return { payload: out, duplicate: true, matched_id: match.id, matched_assigned_to: match.assigned_to || '' };
+}
+
+/* DUP_INGEST_SHARED_v1 (2026-09-04) — ONE duplicate applier for every
+ * non-interactive ingest path (webhooks, aggregator pushes, Sheet sync).
+ *
+ * _applyDuplicatePolicy above serves api_leads_create, which builds its payload
+ * and inserts through a different route. The ingest paths each grew their own
+ * copy of "check for a dupe, then decide what to do", and every copy drifted:
+ * webhooks.js read process.env until WEBHOOK_DUP_CONFIG_v1 fixed it, and
+ * integrations.js never checked at all (see the call site there). The copies
+ * also all silently ignored the 'merge' policy — the one the admin screen
+ * labels "(recommended)" — degrading it to flag-and-insert, so a tenant who
+ * picked merge still got a second row for every repeat enquiry.
+ *
+ * Call this immediately before inserting an ingested lead. It MUTATES `lead`
+ * (is_duplicate / duplicate_of / assigned_to / notes) and returns:
+ *   { duplicate: false }                                   → insert it
+ *   { duplicate: true, skip: false, matched_id }           → insert it, flagged
+ *   { duplicate: true, skip: true, matched_id, merged? }   → do NOT insert
+ *
+ * Flagging happens under every policy including 'allow' (ignorePolicy), because
+ * the "⚠️ Duplicates only" filter and the bulk-Dedupe button read is_duplicate.
+ * A failed check never blocks the lead — losing an enquiry is worse than
+ * storing a duplicate. */
+async function _applyDupToIngest(lead) {
+  const policy = String(await db.getConfig('DUPLICATE_POLICY', 'flag') || 'flag');
+  let dup = null;
+  try {
+    dup = await _findDuplicate(lead, { ignorePolicy: true });
+  } catch (e) {
+    console.warn('[dup] ingest check failed (lead still created):', e.message);
+    return { duplicate: false };
+  }
+  if (!dup) return { duplicate: false };
+
+  lead.is_duplicate = 1;
+  lead.duplicate_of = dup.id;
+
+  if (policy === 'reject') return { duplicate: true, skip: true, matched_id: dup.id };
+
+  if (policy === 'merge') {
+    /* _foldIntoLead reads custom fields off payload.extra (an object), but the
+     * ingest paths carry them as an extra_json STRING. Hand it both shapes or
+     * the merge quietly drops every custom field. */
+    const foldPayload = Object.assign({}, lead);
+    if (!foldPayload.extra && typeof lead.extra_json === 'string') {
+      try { foldPayload.extra = JSON.parse(lead.extra_json || '{}'); } catch (_) {}
+    }
+    try {
+      await _foldIntoLead(dup.id, foldPayload);
+      return { duplicate: true, skip: true, merged: true, matched_id: dup.id };
+    } catch (e) {
+      // Fall through to flag-and-insert rather than lose the enquiry.
+      console.warn('[dup] merge fold failed, inserting flagged instead:', e.message);
+    }
+  }
+
+  if (policy === 'assign_same_user' && dup.assigned_to) lead.assigned_to = dup.assigned_to;
+  if (policy === 'skip_assignment') lead.assigned_to = null;
+  lead.notes = (lead.notes || '') + '\n[DUPLICATE of lead #' + dup.id + ']';
+  return { duplicate: true, skip: false, matched_id: dup.id };
 }
 
 /**
@@ -1262,10 +1362,15 @@ async function api_leads_create(token, payload) {
   }
 
   if (dup.duplicate) {
-    // Flag on the new (duplicate) row.
+    // Flag on the new (duplicate) row. The policy shown here is the TENANT's,
+    // read from config — process.env is empty in the SaaS deployment, so this
+    // used to print '(policy: allow)' on every duplicate remark no matter what
+    // the admin had actually chosen, which is a confusing thing to read while
+    // investigating why duplicates are or aren't being blocked.
+    const _dupPolicy = String(await db.getConfig('DUPLICATE_POLICY', 'flag') || 'flag');
     await db.insert('remarks', {
       lead_id: id, user_id: me.id,
-      remark: '⚠️ Duplicate of lead #' + dup.matched_id + ' (policy: ' + (process.env.DUPLICATE_POLICY || 'allow') + ')',
+      remark: '⚠️ Duplicate of lead #' + dup.matched_id + ' (policy: ' + _dupPolicy + ')',
       status_id: ''
     });
     // Trail on the ORIGINAL row so its recent-remark column tells the rep
@@ -3995,6 +4100,7 @@ module.exports = {
    * instead of its own copy. Three copies of duplicate detection is how the
    * webhook path drifted onto process.env and stopped honouring tenant config. */
   _findDuplicate,
+  _applyDupToIngest,   /* DUP_INGEST_SHARED_v1 — webhooks.js + integrations.js */
   api_leads_merge,
   api_leads_activityTimeline,  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
   api_leads_shareWith, api_leads_unshare, api_leads_listCoOwners, api_leads_bulkShare,  /* SHARE_LEAD_v1 */

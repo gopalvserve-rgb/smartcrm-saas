@@ -35,9 +35,22 @@ const { authUser } = require('../utils/auth');
 
 /* ════════════════════════════ SCHEMA ════════════════════════════ */
 
-let _schemaReady = false;
+/* ENSURE_SCHEMA_TENANT_v1 (2026-09-03) — was a module-level boolean. One Node
+ * process serves every tenant (a DB per tenant, picked by db.tenantStorage), so the
+ * first tenant through here flipped the flag for everyone and every other tenant
+ * skipped the DDL, then died on `relation "..." does not exist`. Same defect as
+ * BUYER_TASK_SCHEMA_TENANT_v1 in routes/customers.js. Caches MUST be tenant-keyed
+ * — CLAUDE_PRIMER 3.4. */
+function _ensureSchemaTenantKey() {
+  try {
+    const st = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (st && st.slug) ? String(st.slug) : '__default__';
+  } catch (_) { return '__default__'; }
+}
+const _schemaReady = new Set();
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  const _tenantKey = _ensureSchemaTenantKey();
+  if (_schemaReady.has(_tenantKey)) return;
 
   // Audit + dedup row per sent reminder.
   await db.query(`
@@ -80,7 +93,7 @@ async function _ensureSchema() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_drc_user_open
     ON demo_reminder_cards(user_id) WHERE dismissed_at IS NULL AND acted_at IS NULL`);
 
-  _schemaReady = true;
+  _schemaReady.add(_tenantKey);
 }
 
 /* ════════════════════════════ HELPERS ════════════════════════════ */

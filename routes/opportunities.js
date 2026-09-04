@@ -33,10 +33,23 @@
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
-let _schemaReady = false;
+/* ENSURE_SCHEMA_TENANT_v1 (2026-09-03) — was a module-level boolean. One Node
+ * process serves every tenant (a DB per tenant, picked by db.tenantStorage), so the
+ * first tenant through here flipped the flag for everyone and every other tenant
+ * skipped the DDL, then died on `relation "..." does not exist`. Same defect as
+ * BUYER_TASK_SCHEMA_TENANT_v1 in routes/customers.js. Caches MUST be tenant-keyed
+ * — CLAUDE_PRIMER 3.4. */
+function _ensureSchemaTenantKey() {
+  try {
+    const st = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (st && st.slug) ? String(st.slug) : '__default__';
+  } catch (_) { return '__default__'; }
+}
+const _schemaReady = new Set();
 
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  const _tenantKey = _ensureSchemaTenantKey();
+  if (_schemaReady.has(_tenantKey)) return;
 
   await db.query(`CREATE TABLE IF NOT EXISTS opportunity_types (
     id SERIAL PRIMARY KEY,
@@ -164,7 +177,7 @@ async function _ensureSchema() {
   try { await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS creates_opportunity INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
   // Cross-table opp_id columns are opt-in — added by their own pack hooks later
 
-  _schemaReady = true;
+  _schemaReady.add(_tenantKey);
 }
 
 // ──────────────────────────────────────────────────────────────────────

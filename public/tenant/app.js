@@ -10521,6 +10521,15 @@ async function openLeadModal(id) {
           const wrap = inp.closest('.f-row, .f-cell, .field-wrap, div');
           if (wrap && wrap !== form) wrap.style.display = 'none';
           else inp.style.display = 'none';
+          /* HIDDEN_REQUIRED_FIX_v1 (2026-09-03) — a hidden field the user cannot
+           * fill must not also be mandatory: the HTML5 `required` attribute on a
+           * display:none input makes the browser refuse to submit with the
+           * unfocusable-control error, and the JS check below toasts
+           * `"<label>" is required` for a field that isn't on screen. Either way
+           * the lead can never be saved. Hiding a field means dropping its
+           * requirement with it. */
+          inp.removeAttribute('required');
+          try { inp.dataset.leadHidden = '1'; } catch (_) {}
         }
       });
       /* Qualified-lead toggle uses a custom checkbox — hide by label text */
@@ -10916,7 +10925,20 @@ async function openLeadModal(id) {
     if (CRM.user.role !== 'admin' && !_skipRequired) {
       for (const cf of (customFields || [])) {
         if (!cf.is_required) continue;
+        // CF_RESERVED_KEY_REQUIRED_FIX_v1 (2026-09-03) — a custom field whose key
+        // collides with a built-in (city, email, notes, budget_max, ...) is never
+        // rendered: the loop below skips it in favour of the hardcoded input. This
+        // validator still demanded it, looked for the cf_<key> input that was never
+        // drawn, read '' and blocked the save with `"City" is required` on a form
+        // where City was plainly filled in — unsatisfiable, no way past it (Apna
+        // E-cycle). The built-in input carries the value, so skip reserved keys here
+        // exactly as the renderer does.
+        if (RESERVED_FIELD_KEYS.has(String(cf.key || '').toLowerCase())) continue;
         const key = 'cf_' + cf.key;
+        // Hidden via LEAD_HIDDEN_FIELDS — not on screen, so not demandable.
+        // HIDDEN_REQUIRED_FIX_v1.
+        const _hidEl = form.querySelector(`[name="${key}"]`);
+        if (_hidEl && _hidEl.dataset && _hidEl.dataset.leadHidden === '1') continue;
         let val;
         if (cf.field_type === 'multiselect') val = (new FormData(form)).getAll(key).join(',');
         else val = form.querySelector(`[name="${key}"]`)?.value || '';
@@ -10932,6 +10954,10 @@ async function openLeadModal(id) {
     const fd = new FormData(form);
     const extra = {};
     (customFields || []).forEach(cf => {
+      // Same reason as above: no cf_<key> input exists for a reserved key, so
+      // collecting it would only write '' into extra and blank whatever the
+      // built-in field had stored. CF_RESERVED_KEY_REQUIRED_FIX_v1.
+      if (RESERVED_FIELD_KEYS.has(String(cf.key || '').toLowerCase())) return;
       const key = 'cf_' + cf.key;
       if (cf.field_type === 'multiselect') extra[cf.key] = fd.getAll(key).join(',');
       else extra[cf.key] = fd.get(key) || '';
