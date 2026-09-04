@@ -12,8 +12,11 @@
  *    sulekha, googleads, wordpress, googleforms, pabbly, zapier, make,
  *    leadsquared, zoho, hubspot, salesforce, generic.
  *
- * Both call api_leads_create internally so the existing duplicate
- * policy / cap / round-robin / auto-assignment all apply uniformly.
+ * Both funnel through _internalCreateLead below, which applies the tenant's
+ * auto-assignment rules, campaign matching and — since DUP_INGEST_NOCHECK_v1
+ * — the Duplicate Rule. It is NOT api_leads_create (that serves the SPA and
+ * takes a token); the two are separate implementations, so a change to
+ * lead-creation behaviour has to be made in both or neither.
  */
 const crypto = require('crypto');
 const fetch = require('node-fetch');
@@ -245,7 +248,11 @@ async function _runSheetSync(integration) {
       await db.insert('sheet_imported_rows', {
         integration_id: integration.id, row_hash: hash, imported_at: db.nowIso(), lead_id: created.id || null
       });
-      imported++;
+      /* A row the Duplicate Rule rejected or merged is still recorded (so it
+       * isn't retried every poll) but must not be reported as imported — the
+       * admin would go hunting for a lead deliberately never created. */
+      if (created.skipped) { skipped++; skipped_reasons.duplicate++; }
+      else imported++;
     } catch (e) {
       console.warn('[sheetSync] row failed:', e.message);
       await db.insert('sheet_imported_rows', {
@@ -361,6 +368,27 @@ async function _internalCreateLead(payload, asUserId) {
       lead.campaign_id = Number(payload.campaign_id);
     }
   } catch (e) { console.warn('[integrations] campaign match lookup failed:', e.message); }
+  /* DUP_INGEST_NOCHECK_v1 (2026-09-04) — this path ran NO duplicate check at
+   * all, while the header of this file claimed "Both call api_leads_create
+   * internally so the existing duplicate policy / cap / round-robin / auto-
+   * assignment all apply uniformly". They don't: _internalCreateLead is a
+   * separate implementation that inserted straight into leads. So the Duplicate
+   * Rule was inert for EVERY aggregator push (/hook/leadsource/<source>/<key>:
+   * IndiaMART, JustDial, MagicBricks, 99acres, Housing, NoBroker, TradeIndia,
+   * Sulekha, Google Ads, WordPress, Zapier, Make, Zoho, HubSpot, Salesforce,
+   * generic) and for Google Sheet sync — precisely the sources that re-push the
+   * same enquiry. WEBHOOK_DUP_CONFIG_v1 fixed the /hook/website path last week;
+   * this is the same rule going unapplied one file over.
+   *
+   * Sheet sync has its own row-hash dedupe, but that only catches a row it has
+   * already imported — it can't see the same person arriving on a new row, or
+   * from a different source entirely. */
+  const _dup = await require('./leads')._applyDupToIngest(lead);
+  if (_dup.skip) {
+    return { id: _dup.matched_id, duplicate: true, skipped: true,
+             merged: !!_dup.merged, matched_id: _dup.matched_id };
+  }
+
   const id = await db.insert('leads', lead);
   // SHARE_LEAD_v1: auto-share rules from campaign + source for webhook leads.
   try {
@@ -468,7 +496,10 @@ async function sheetPushWebhook(req, res) {
       }
       try {
         const created = await _internalCreateLead(lower, integ.created_by);
-        results.push({ ok: true, lead_id: created.id });
+        // created:false = the Duplicate Rule rejected or merged it, and
+        // lead_id points at the lead it matched rather than a new row.
+        results.push({ ok: true, lead_id: created.id, duplicate: !!created.duplicate,
+                       merged: !!created.merged, created: !created.skipped });
         /* SHEET_SYNC_v2 — log push imports so 'already_imported_rows' in
          * diagnose reflects push leads too, and the same row can\'t be
          * imported twice if the script accidentally re-sends it. */
@@ -483,7 +514,8 @@ async function sheetPushWebhook(req, res) {
         results.push({ ok: false, error: String(e.message || e) });
       }
     }
-    const okCount = results.filter(r => r.ok).length;
+    const okCount = results.filter(r => r.ok && r.created).length;
+    const dupCount = results.filter(r => r.ok && !r.created).length;
     if (okCount) {
       await db.update('sheet_integrations', integ.id, {
         last_synced_at: db.nowIso(),
@@ -491,7 +523,7 @@ async function sheetPushWebhook(req, res) {
         last_error: ''
       });
     }
-    return res.json({ ok: true, processed: results.length, created: okCount, results });
+    return res.json({ ok: true, processed: results.length, created: okCount, duplicates: dupCount, results });
   } catch (e) {
     console.error('[sheetPush] error:', e.message);
     return res.status(500).json({ ok: false, error: String(e.message || e) });
@@ -1709,22 +1741,27 @@ async function leadSourceWebhook(req, res) {
       if (!it.phone && !it.email && !it.name) continue;
       try {
         const r = await _internalCreateLead(it, owner.id);
-        // Update webhook_log row as processed
-        results.push({ ok: true, lead_id: r.id, name: it.name });
+        // Update webhook_log row as processed. A duplicate suppressed by the
+        // tenant's Duplicate Rule reports the lead it matched, not a new id.
+        results.push({ ok: true, lead_id: r.id, name: it.name,
+                       duplicate: !!r.duplicate, merged: !!r.merged, created: !r.skipped });
       } catch (e) {
         results.push({ ok: false, name: it.name, error: e.message });
       }
     }
 
-    const okCount = results.filter(r => r.ok).length;
+    const okCount = results.filter(r => r.ok && r.created).length;
+    const dupCount = results.filter(r => r.ok && !r.created).length;
     // Update the log row to processed
     try {
       const logs = await db.getAll('webhook_log');
       const last = logs.filter(l => l.source === source).sort((a, b) => b.id - a.id)[0];
-      if (last) await db.update('webhook_log', last.id, { processed: okCount > 0 ? 1 : 0 });
+      // A batch that was all duplicates was still processed correctly — don't
+      // leave the log row looking like a failed delivery.
+      if (last) await db.update('webhook_log', last.id, { processed: (okCount + dupCount) > 0 ? 1 : 0 });
     } catch (_) {}
 
-    return res.json({ ok: true, source, processed: results.length, created: okCount, results });
+    return res.json({ ok: true, source, processed: results.length, created: okCount, duplicates: dupCount, results });
   } catch (e) {
     console.error('[leadsource] webhook error:', e.message);
     return res.status(500).json({ ok: false, error: String(e.message || e) });
