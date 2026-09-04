@@ -19,9 +19,22 @@ const gemini = require('../utils/geminiClient');
 
 /* ════════════════════════════ SCHEMA ════════════════════════════ */
 
-let _schemaReady = false;
+/* ENSURE_SCHEMA_TENANT_v1 (2026-09-03) — was a module-level boolean. One Node
+ * process serves every tenant (a DB per tenant, picked by db.tenantStorage), so the
+ * first tenant through here flipped the flag for everyone and every other tenant
+ * skipped the DDL, then died on `relation "..." does not exist`. Same defect as
+ * BUYER_TASK_SCHEMA_TENANT_v1 in routes/customers.js. Caches MUST be tenant-keyed
+ * — CLAUDE_PRIMER 3.4. */
+function _ensureSchemaTenantKey() {
+  try {
+    const st = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (st && st.slug) ? String(st.slug) : '__default__';
+  } catch (_) { return '__default__'; }
+}
+const _schemaReady = new Set();
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  const _tenantKey = _ensureSchemaTenantKey();
+  if (_schemaReady.has(_tenantKey)) return;
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS ai_manager_rules (
@@ -137,7 +150,7 @@ async function _ensureSchema() {
     try { await db.query(sql); } catch (e) { console.error('[AI_MGR_SCHEMA]', sql.slice(0, 60), e.message); }
   }
 
-  _schemaReady = true;
+  _schemaReady.add(_tenantKey);
 }
 
 /* ════════════════════════════ HELPERS ════════════════════════════ */

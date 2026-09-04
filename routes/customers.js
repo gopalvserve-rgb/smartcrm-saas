@@ -742,9 +742,17 @@ async function api_customers_report(token, payload) {
  * auto-calculated; plus a per-customer delivery remark (+ remark history).
  * New tables are NOT in db/pg.js SCHEMA, so ALL writes use raw db.query.
  * ========================================================================= */
-let _taskSchemaReady = false;
+/* BUYER_TASK_SCHEMA_TENANT_v1 (2026-09-03) — this used to be a single module-level
+ * `let _taskSchemaReady = false`. One Node process serves every tenant (one DB per
+ * tenant, selected by db.tenantStorage), so the FIRST tenant to open the Customer
+ * module created its tables and flipped the flag for everyone; every other tenant
+ * then skipped the DDL and api_customers_list died with
+ * `relation "buyer_stage_tasks" does not exist` (StudentsBro pvt ltd).
+ * Any cache in this codebase MUST be keyed by tenant — CLAUDE_PRIMER 3.4. */
+const _taskSchemaReady = new Set();
 async function _ensureTaskSchema() {
-  if (_taskSchemaReady) return;
+  const _tenant = _slug() || '__default__';
+  if (_taskSchemaReady.has(_tenant)) return;
   await db.query(`CREATE TABLE IF NOT EXISTS buyer_stage_tasks (
       id SERIAL PRIMARY KEY, stage_id INTEGER NOT NULL, title TEXT NOT NULL,
       sort_order INTEGER DEFAULT 10, is_active INTEGER DEFAULT 1,
@@ -757,7 +765,7 @@ async function _ensureTaskSchema() {
       id SERIAL PRIMARY KEY, customer_id INTEGER NOT NULL, user_id INTEGER,
       remark TEXT, created_at TIMESTAMPTZ DEFAULT now())`);
   await db.query(`ALTER TABLE buyers ADD COLUMN IF NOT EXISTS delivery_remark TEXT`);
-  _taskSchemaReady = true;
+  _taskSchemaReady.add(_tenant);
 }
 
 async function _tasksForCustomer(buyer) {

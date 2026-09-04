@@ -41,9 +41,22 @@ const TEXT_COLS = ['autolead_mode', 'autolead_on_duplicate', 'sim_slots',
                    'sync_directions', 'autolead_directions'];
 const ALL_COLS  = BOOL_COLS.concat(INT_COLS, TEXT_COLS);
 
-let _ready = false;
+/* ENSURE_SCHEMA_TENANT_v1 (2026-09-03) — was a module-level boolean. One Node
+ * process serves every tenant (a DB per tenant, picked by db.tenantStorage), so the
+ * first tenant through here flipped the flag for everyone and every other tenant
+ * skipped the DDL, then died on `relation "..." does not exist`. Same defect as
+ * BUYER_TASK_SCHEMA_TENANT_v1 in routes/customers.js. Caches MUST be tenant-keyed
+ * — CLAUDE_PRIMER 3.4. */
+function _ensureSchemaTenantKey() {
+  try {
+    const st = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (st && st.slug) ? String(st.slug) : '__default__';
+  } catch (_) { return '__default__'; }
+}
+const _ready = new Set();
 async function _ensure() {
-  if (_ready) return;
+  const _tenantKey = _ensureSchemaTenantKey();
+  if (_ready.has(_tenantKey)) return;
   try {
     await db.query(
       `CREATE TABLE IF NOT EXISTS user_call_prefs (
@@ -71,7 +84,7 @@ async function _ensure() {
       ADD COLUMN IF NOT EXISTS sync_directions     TEXT,
       ADD COLUMN IF NOT EXISTS autolead_directions TEXT`);
   } catch (e) { /* best-effort */ }
-  _ready = true;
+  _ready.add(_tenantKey);
 }
 
 /** Normalise a CSV / array of directions to a clean sorted array of in|missed|out. */

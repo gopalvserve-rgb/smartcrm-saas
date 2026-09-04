@@ -272,10 +272,23 @@ const PACK_THRESHOLDS = {
 // Schema
 // ──────────────────────────────────────────────────────────────────────
 
-let _schemaReady = false;
+/* ENSURE_SCHEMA_TENANT_v1 (2026-09-03) — was a module-level boolean. One Node
+ * process serves every tenant (a DB per tenant, picked by db.tenantStorage), so the
+ * first tenant through here flipped the flag for everyone and every other tenant
+ * skipped the DDL, then died on `relation "..." does not exist`. Same defect as
+ * BUYER_TASK_SCHEMA_TENANT_v1 in routes/customers.js. Caches MUST be tenant-keyed
+ * — CLAUDE_PRIMER 3.4. */
+function _ensureSchemaTenantKey() {
+  try {
+    const st = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (st && st.slug) ? String(st.slug) : '__default__';
+  } catch (_) { return '__default__'; }
+}
+const _schemaReady = new Set();
 
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  const _tenantKey = _ensureSchemaTenantKey();
+  if (_schemaReady.has(_tenantKey)) return;
   // ---- Heal legacy v1 schema -------------------------------------------------
   // OPPORTUNITIES_v1 migration originally shipped lead_score_rules/settings/log/overrides
   // with completely different columns. Drop legacy tables so the canonical schema
@@ -389,7 +402,7 @@ async function _ensureSchema() {
   // Ensure singleton settings row
   await db.query(`INSERT INTO lead_score_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
 
-  _schemaReady = true;
+  _schemaReady.add(_tenantKey);
 }
 
 // ──────────────────────────────────────────────────────────────────────
