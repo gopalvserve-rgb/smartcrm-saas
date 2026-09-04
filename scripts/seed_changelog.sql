@@ -1282,3 +1282,30 @@ VALUES (
   '2026-07-03',
   true
 );
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Customer module opens for every workspace',
+  'The Customers page could fail to open with a database error about a missing table. The delivery-checklist tables were only ever created for the first workspace that opened the module after a restart, so everyone else hit the error. The tables are now created per workspace, and the same fix was applied to five other modules that shared the fault.',
+  'fix',
+  '2026-09-05',
+  true
+);
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Lead form no longer blocks on a filled-in field',
+  'Saving a lead could fail with a "field is required" message for a field that was clearly filled in — for example City. This happened when a custom field used the same name as one of the built-in fields: the form showed the built-in box but checked the hidden custom one. Required fields that an admin has hidden from the lead form no longer block the save either.',
+  'fix',
+  '2026-09-05',
+  true
+);
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Duplicate Rule now applies to every incoming lead',
+  'Your Duplicate Rule was only being applied to some sources. Leads arriving from the aggregator and API webhooks (IndiaMART, JustDial, Zapier, generic API and others) and from Google Sheet sync skipped the check entirely, and the recommended "merge" option was ignored on all incoming paths. Phone matching now ignores the country code, so a number sent as +91 98765-43210 is recognised as the same person as 9876543210.',
+  'fix',
+  '2026-09-05',
+  true
+);
