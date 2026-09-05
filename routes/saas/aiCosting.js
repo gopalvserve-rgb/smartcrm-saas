@@ -73,7 +73,15 @@ async function api_saas_ai_costing_summary(token, opts) {
     `SELECT
         COALESCE(NULLIF(tenant_slug, ''), '(unattributed)') AS tenant_slug,
         COUNT(*) FILTER (WHERE error_text IS NULL)::int       AS calls,
-        COUNT(*) FILTER (WHERE error_text IS NOT NULL)::int   AS failed_calls,
+        /* AI_NOISE_FILTER_v1 (2026-09-05) — exclude the metering-bug rows.
+         * Until AI_AUTOLOG_v1, copilotProactive + leadQuickNote called logUsage
+         * with flat fields instead of a result object, so the guard wrote a zero-token
+         * row stamped with this error. 67,108 of them existed, which made this
+         * dashboard report a ~73% failure rate when real Gemini failures were a
+         * few hundred. They are logging artefacts, not failed AI calls. */
+        COUNT(*) FILTER (WHERE error_text IS NOT NULL
+                           AND error_text <> 'logUsage called without a result object')::int AS failed_calls,
+        COUNT(*) FILTER (WHERE error_text = 'logUsage called without a result object')::int AS unmetered_calls,
         COALESCE(SUM(input_tokens) FILTER (WHERE error_text IS NULL), 0)::int    AS input_tokens,
         COALESCE(SUM(output_tokens) FILTER (WHERE error_text IS NULL), 0)::int   AS output_tokens,
         COALESCE(SUM(cost_usd) FILTER (WHERE error_text IS NULL), 0)             AS cost_usd,
@@ -108,7 +116,8 @@ async function api_saas_ai_costing_summary(token, opts) {
   const failsRes = await control.query(
     `SELECT COUNT(*)::int AS fails
        FROM ai_usage_log
-      WHERE created_at >= $1 AND created_at < $2 AND error_text IS NOT NULL`,
+      WHERE created_at >= $1 AND created_at < $2 AND error_text IS NOT NULL
+        AND error_text <> 'logUsage called without a result object'`,   /* AI_NOISE_FILTER_v1 */
     [r.fromIso, r.toIso]
   );
 
@@ -133,6 +142,7 @@ async function api_saas_ai_costing_summary(token, opts) {
       tenant_slug:       x.tenant_slug,
       calls:             Number(x.calls || 0),
       failed_calls:      Number(x.failed_calls || 0),
+      unmetered_calls:   Number(x.unmetered_calls || 0),   /* AI_NOISE_FILTER_v1 */
       input_tokens:      Number(x.input_tokens || 0),
       output_tokens:     Number(x.output_tokens || 0),
       cost_usd:          Number(Number(x.cost_usd || 0).toFixed(6)),
@@ -281,10 +291,100 @@ async function api_saas_ai_recentErrors(token, opts) {
   return { rows: r.rows, by_reason: byReason, count: r.rows.length };
 }
 
+
+/**
+ * AI_TOKENS_BY_SERVICE_v1 (2026-09-05)
+ *
+ * Tenant-wise token usage broken down by service, for the super-admin
+ * "AI Tokens" view. Pure token accounting - no pricing, no markup.
+ *
+ * The numbers are Gemini's own usageMetadata (promptTokenCount /
+ * candidatesTokenCount) recorded per call, verified against the per-tenant
+ * ai_chat_log / crm_copilot_log / lead_recordings tables: they agreed to
+ * within 0.03% for August 2026, so this is the authoritative token source.
+ *
+ * Rows carrying error_text are excluded from token sums - a failed call
+ * returns no usageMetadata, so it contributes nothing to spend.
+ *
+ *   api_saas_ai_tokens_summary(token, { from, to, tenant_slug? })
+ *     -> { range, totals, per_tenant:[{ tenant_slug, input_tokens,
+ *          output_tokens, total_tokens, calls, services:[{ call_kind,
+ *          calls, input_tokens, output_tokens, total_tokens }] }] }
+ */
+async function api_saas_ai_tokens_summary(token, opts) {
+  await requireSuperAdmin(token);
+  const r = _parseRange(opts);
+  const params = [r.fromIso, r.toIso];
+  let extra = '';
+  if (opts && opts.tenant_slug) { params.push(String(opts.tenant_slug)); extra = ' AND tenant_slug = $3'; }
+
+  const res = await control.query(
+    `SELECT COALESCE(NULLIF(tenant_slug, ''), '(unattributed)') AS tenant_slug,
+            COALESCE(NULLIF(call_kind, ''), 'other')            AS call_kind,
+            COUNT(*)::int                            AS calls,
+            COALESCE(SUM(input_tokens), 0)::bigint   AS input_tokens,
+            COALESCE(SUM(output_tokens), 0)::bigint  AS output_tokens
+       FROM ai_usage_log
+      WHERE created_at >= $1 AND created_at < $2
+        AND error_text IS NULL` + extra + `
+      GROUP BY 1, 2
+      ORDER BY 1, 5 DESC`,
+    params
+  );
+
+  const byTenant = new Map();
+  for (const x of res.rows) {
+    const inTok = Number(x.input_tokens || 0), outTok = Number(x.output_tokens || 0);
+    if (!byTenant.has(x.tenant_slug)) {
+      byTenant.set(x.tenant_slug, {
+        tenant_slug: x.tenant_slug, calls: 0,
+        input_tokens: 0, output_tokens: 0, total_tokens: 0, services: []
+      });
+    }
+    const t = byTenant.get(x.tenant_slug);
+    t.calls         += Number(x.calls || 0);
+    t.input_tokens  += inTok;
+    t.output_tokens += outTok;
+    t.total_tokens  += inTok + outTok;
+    t.services.push({
+      call_kind:     x.call_kind,
+      calls:         Number(x.calls || 0),
+      input_tokens:  inTok,
+      output_tokens: outTok,
+      total_tokens:  inTok + outTok
+    });
+  }
+  const per_tenant = [...byTenant.values()].sort((a, b) => b.total_tokens - a.total_tokens);
+
+  const totals = per_tenant.reduce((a, t) => {
+    a.calls += t.calls; a.input_tokens += t.input_tokens;
+    a.output_tokens += t.output_tokens; a.total_tokens += t.total_tokens; return a;
+  }, { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 });
+
+  // Platform-wide per-service rollup, for the summary strip above the table.
+  const byService = new Map();
+  per_tenant.forEach(t => t.services.forEach(sv => {
+    const cur = byService.get(sv.call_kind) ||
+                { call_kind: sv.call_kind, calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+    cur.calls += sv.calls; cur.input_tokens += sv.input_tokens;
+    cur.output_tokens += sv.output_tokens; cur.total_tokens += sv.total_tokens;
+    byService.set(sv.call_kind, cur);
+  }));
+
+  return {
+    range: { from: r.fromDate, to: r.toDate },
+    totals,
+    tenants: per_tenant.length,
+    by_service: [...byService.values()].sort((a, b) => b.total_tokens - a.total_tokens),
+    per_tenant
+  };
+}
+
 module.exports = {
   api_saas_ai_costing_summary,
   api_saas_ai_costing_daily,
   api_saas_ai_costing_recent,
   api_saas_ai_diag,
-  api_saas_ai_recentErrors
+  api_saas_ai_recentErrors,
+  api_saas_ai_tokens_summary   /* AI_TOKENS_BY_SERVICE_v1 */
 };

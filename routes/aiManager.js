@@ -243,7 +243,8 @@ Output ONLY this JSON shape (no commentary):
       system,
       maxOutputTokens: 240,
       temperature: 0.1,
-      featureKey: 'ai_manager_rule_parse'
+      featureKey: 'ai_manager_rule_parse',
+      call_kind: 'ai_manager_rule_parse'   // AI_AUTOLOG_v1 — was unmetered
     });
   } catch (e) {
     console.error('[AI_MGR_PARSE]', e.message);
@@ -1051,7 +1052,7 @@ async function generateCoachingDigest(userId) {
         'Follow-ups completed: ' + totalFu + ' done, ' + totalMiss + ' missed\n' +
         'Top violations: ' + v.rows.map(r => r.violation_type + ' (' + r.cnt + ')').join(', ') + '\n\n' +
         'Return JSON: {"summary":"one-line praise/observation","tips":["tip1","tip2","tip3"]}';
-      const r = await gemini.generate({ prompt, maxTokens: 200 });
+      const r = await gemini.generate({ prompt, maxTokens: 200, call_kind: 'ai_manager' });   // AI_AUTOLOG_v1 — was unmetered
       if (r && r.ok && r.text) {
         const m = r.text.match(/\{[\s\S]*\}/);
         if (m) {
@@ -1901,7 +1902,7 @@ async function api_aiManager_ask(token, payload) {
     const gemini = require('../utils/geminiClient');
     if (gemini && gemini.generate) {
       const prompt = `You are an AI sales admin. Answer this admin question in 1-2 short lines, no SQL: "${q}". If you need data, say what.`;
-      const r = await gemini.generate({ prompt, maxTokens: 120 });
+      const r = await gemini.generate({ prompt, maxTokens: 120, call_kind: 'ai_manager' });   // AI_AUTOLOG_v1 — was unmetered
       if (r && r.ok) return { answer_type: 'llm', text: r.text };
     }
   } catch (_) {}

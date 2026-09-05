@@ -715,7 +715,7 @@ async function api_saas_tk_admin_aiSuggest(token, payload) {
   let text = '';
   try {
     const gemini = require('../../utils/geminiClient');
-    const r = await gemini.generate({ system, prompt, maxOutputTokens: 700, temperature: 0.4 });
+    const r = await gemini.generate({ system, prompt, maxOutputTokens: 700, temperature: 0.4, call_kind: 'support_ticket' });   // AI_AUTOLOG_v1 — was unmetered
     text = String((r && r.text) || '').trim();
   } catch (e) {
     throw new Error('AI is not available: ' + (e.message || e) + ' (set the platform Gemini key in AI settings).');
@@ -1018,7 +1018,7 @@ async function api_saas_tk_aiHelp(token, payload) {
   let text = '';
   try {
     const gemini = require('../../utils/geminiClient');
-    const r = await gemini.generate({ system, prompt, maxOutputTokens: 650, temperature: 0.3 });
+    const r = await gemini.generate({ system, prompt, maxOutputTokens: 650, temperature: 0.3, call_kind: 'support_ticket' });   // AI_AUTOLOG_v1 — was unmetered
     text = String((r && r.text) || '').trim();
   } catch (e) {
     throw new Error('AI help is unavailable right now — please submit the ticket. (' + (e.message || e) + ')');

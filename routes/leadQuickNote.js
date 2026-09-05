@@ -177,6 +177,7 @@ async function api_leads_quickNote(token, payload) {
         model: 'gemini-3.1-flash-lite',     // cheapest, fastest, JSON-friendly
         maxOutputTokens: 250,
         temperature: 0.2,
+        call_kind: 'lead_quicknote',   // AI_AUTOLOG_v1 — generate() now meters this
       });
     } catch (e) {
       // Surface a clean error — rep can fall back to the manual lead modal
@@ -193,17 +194,9 @@ async function api_leads_quickNote(token, payload) {
       // Soft-fail: still save the remark verbatim even if Gemini's JSON is broken
       parsed.remark = text;
     }
-    // Log usage so it shows in AI Costing (uses same crm_copilot_log path
-    // as Copilot via geminiClient if available).
-    try {
-      if (geminiClient.logUsage) {
-        await geminiClient.logUsage({
-          user_id: me.id, feature: 'lead_quicknote',
-          input_tokens: resp.input_tokens || 0, output_tokens: resp.output_tokens || 0,
-          cost_inr: resp.cost_inr_billed || 0,
-        });
-      }
-    } catch (_) {}
+    /* AI_AUTOLOG_v1 — the explicit logUsage removed from here passed flat fields
+     * (and invented keys user_id / feature / cost_inr that logUsage never read), so
+     * every Quick Note call logged as a zero-token error row. generate() meters it now. */
   }
 
   // ----- Build the patch (slash status wins over Gemini hint) -----

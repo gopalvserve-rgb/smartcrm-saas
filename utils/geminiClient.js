@@ -207,7 +207,42 @@ async function _demoBlocked(args) {
            finish_reason: null, error: 'AI Audit / Summary is disabled on showcase / demo tenants. Copilot and Quick Note still work (limited to 30 / day).', raw_status: null };
 }
 
+/* AI_AUTOLOG_v1 (2026-09-05) — token metering is no longer opt-in.
+ *
+ * WHY: logUsage() used to be the caller's job. Result, measured in production:
+ *   - routes/aiManager.js (3 call sites), routes/saas/tickets.js (2) and the
+ *     store_* scans in routes/packs/whatsapp.js never logged at all, so their
+ *     tokens appeared in NO tenant's usage;
+ *   - routes/copilotProactive.js and routes/leadQuickNote.js passed the fields
+ *     FLAT instead of inside `result`, so logUsage's defensive guard replaced
+ *     them with zeros and stamped error_text. That produced 67,108 zero-token
+ *     rows which made the super-admin error rate read ~73% when the real
+ *     Gemini failure count was a few hundred.
+ *
+ * Metering is now automatic: every generate()/generateWithTools() call logs
+ * itself. A caller that logs explicitly (aiBot, crmCopilot, aiCallSummary —
+ * they attach phone / lead_id / wa_message_id we don't have here) passes
+ * skipUsageLog:true so we never double-count.
+ *
+ * Pass `call_kind` in the args to label the row; unlabelled calls land as
+ * 'other' rather than silently masquerading as bot replies. */
 async function generate(args) {
+  const a = args || {};
+  const r = await _generateRaw(a);
+  if (!a.skipUsageLog) {
+    try {
+      await logUsage({
+        call_kind: a.call_kind || 'other',
+        phone:     a.phone   || null,
+        lead_id:   a.lead_id || null,
+        result:    r
+      });
+    } catch (_) { /* metering must never break the caller */ }
+  }
+  return r;
+}
+
+async function _generateRaw(args) {
   const blocked = await _demoBlocked(args);
   if (blocked) return blocked;
   const settings = await loadSettings();
@@ -437,7 +472,24 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
  * Returns: { ok, text, model, input_tokens, output_tokens, cost_*,
  *            tools_called: [{ name, args, result }], error }
  */
+/* AI_AUTOLOG_v1 — same automatic metering as generate(); see the note there. */
 async function generateWithTools(args) {
+  const a = args || {};
+  const r = await _generateWithToolsRaw(a);
+  if (!a.skipUsageLog) {
+    try {
+      await logUsage({
+        call_kind: a.call_kind || 'other',
+        phone:     a.phone   || null,
+        lead_id:   a.lead_id || null,
+        result:    r
+      });
+    } catch (_) { /* metering must never break the caller */ }
+  }
+  return r;
+}
+
+async function _generateWithToolsRaw(args) {
   // Copilot calls this; pass feature='copilot' so it's allowed on demo tenants.
   // If caller forgot the feature label and we're on a demo tenant, default
   // to allow (Copilot is the primary user of this method — block-by-default

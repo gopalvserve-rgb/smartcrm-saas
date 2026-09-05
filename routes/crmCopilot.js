@@ -2420,6 +2420,7 @@ IMPORTANT RULES:
 
   const result = await gemini.generateWithTools({
     feature: 'copilot',  // SHOWCASE_AI_v2 — allowed on demo tenants
+    skipUsageLog: true,   // AI_AUTOLOG_v1 — logged explicitly below with user context
     system, history: hist, prompt: text,
     tools: TOOLS,
     runTool: (name, args) => _runTool(name, args, ctx),

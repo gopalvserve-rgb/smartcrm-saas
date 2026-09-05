@@ -526,7 +526,8 @@ No preamble. Output ONLY the JSON object.`;
         // on this API key) to the proven-working default. Alias map
         // also covers it, this is belt-and-braces.
         system, temperature: 0.35, maxOutputTokens: 450,
-        model: 'gemini-3.1-flash-lite'
+        model: 'gemini-3.1-flash-lite',
+        call_kind: 'copilot_lead_summary'   // AI_AUTOLOG_v1 — generate() now meters this
       });
       if (res && res.ok && res.text) {
         const m = res.text.match(/\{[\s\S]*\}/);
@@ -536,8 +537,10 @@ No preamble. Output ONLY the JSON object.`;
           nextAction = j.next_action || null;
           draftMsg = j.draft_msg || null;
         }
-        try { await gemini.logUsage({ feature: 'copilot_lead_summary', model: res.model,
-              input_tokens: res.input_tokens, output_tokens: res.output_tokens, cost_usd: res.cost_usd }); } catch {}
+        /* AI_AUTOLOG_v1 — the explicit logUsage that used to sit here passed its
+         * fields FLAT instead of inside `result`, so logUsage's guard replaced them
+         * with zeros and stamped error_text. That single bug produced 67,108
+         * zero-token rows mislabelled 'reply'. generate() meters this call now. */
       } else if (res && !res.ok) {
         // LEAD_AI_SUMMARY_GEMINI_v1 — was silently catching here, hiding model-
         // unavailable + auth + quota failures so the deterministic fallback

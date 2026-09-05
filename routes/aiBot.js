@@ -1664,6 +1664,7 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
 
   const result = await gemini.generate({
     feature: 'ai_bot',  // SHOWCASE_AI_v2 — allowed on demo tenants
+    skipUsageLog: true,   // AI_AUTOLOG_v1 — this path logs explicitly below (adds phone + lead_id)
     system, history, prompt,
     model: settings.model_override || null,
     maxOutputTokens: 500
@@ -3183,6 +3184,7 @@ async function generateWebReply({ text, history, leadId } = {}) {
   try {
     result = await gemini.generate({
       feature: 'ai_bot',
+      skipUsageLog: true,   // AI_AUTOLOG_v1 — webchat path logs explicitly below
       system: built.system,
       history: Array.isArray(history) ? history : [],
       prompt: String(text || ''),
