@@ -332,13 +332,30 @@ async function api_saas_ai_tokens_summary(token, opts) {
     params
   );
 
+  /* AI_TOKEN_RATE_v1 — price the report with the super admin's rates, applied at
+   * REPORT time. Never frozen onto ai_usage_log rows: change a rate and history
+   * re-prices correctly, so a corrected invoice is always reproducible.
+   * Each tenant uses its own override when set, else the global rate. */
+  let rates = { global: { in: 0, out: 0 }, for: () => ({ in: 0, out: 0 }) };
+  try { rates = await require('./aiSettings').resolveRates(); }
+  catch (e) { console.warn('[aiCosting] rate lookup failed, billing as 0:', e.message); }
+  const money = n => Number(Number(n || 0).toFixed(2));
+  const priceOf = (slug, inTok, outTok) => {
+    const r = rates.for(slug);
+    return money((inTok / 1e5) * (r.in || 0) + (outTok / 1e5) * (r.out || 0));
+  };
+
   const byTenant = new Map();
   for (const x of res.rows) {
     const inTok = Number(x.input_tokens || 0), outTok = Number(x.output_tokens || 0);
     if (!byTenant.has(x.tenant_slug)) {
+      const r = rates.for(x.tenant_slug);
       byTenant.set(x.tenant_slug, {
         tenant_slug: x.tenant_slug, calls: 0,
-        input_tokens: 0, output_tokens: 0, total_tokens: 0, services: []
+        input_tokens: 0, output_tokens: 0, total_tokens: 0,
+        rate_in: r.in, rate_out: r.out,
+        uses_global_rate: !Object.prototype.hasOwnProperty.call(rates.per_tenant || {}, x.tenant_slug),
+        billable_inr: 0, services: []
       });
     }
     const t = byTenant.get(x.tenant_slug);
@@ -351,29 +368,37 @@ async function api_saas_ai_tokens_summary(token, opts) {
       calls:         Number(x.calls || 0),
       input_tokens:  inTok,
       output_tokens: outTok,
-      total_tokens:  inTok + outTok
+      total_tokens:  inTok + outTok,
+      billable_inr:  priceOf(x.tenant_slug, inTok, outTok)
     });
   }
+  byTenant.forEach(t => { t.billable_inr = priceOf(t.tenant_slug, t.input_tokens, t.output_tokens); });
   const per_tenant = [...byTenant.values()].sort((a, b) => b.total_tokens - a.total_tokens);
 
   const totals = per_tenant.reduce((a, t) => {
     a.calls += t.calls; a.input_tokens += t.input_tokens;
-    a.output_tokens += t.output_tokens; a.total_tokens += t.total_tokens; return a;
-  }, { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 });
+    a.output_tokens += t.output_tokens; a.total_tokens += t.total_tokens;
+    a.billable_inr += t.billable_inr; return a;
+  }, { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, billable_inr: 0 });
+  totals.billable_inr = money(totals.billable_inr);
 
   // Platform-wide per-service rollup, for the summary strip above the table.
   const byService = new Map();
   per_tenant.forEach(t => t.services.forEach(sv => {
     const cur = byService.get(sv.call_kind) ||
-                { call_kind: sv.call_kind, calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+                { call_kind: sv.call_kind, calls: 0, input_tokens: 0, output_tokens: 0,
+                  total_tokens: 0, billable_inr: 0 };
     cur.calls += sv.calls; cur.input_tokens += sv.input_tokens;
     cur.output_tokens += sv.output_tokens; cur.total_tokens += sv.total_tokens;
+    cur.billable_inr = money(cur.billable_inr + sv.billable_inr);
     byService.set(sv.call_kind, cur);
   }));
 
   return {
     range: { from: r.fromDate, to: r.toDate },
     totals,
+    /* The rate card in force for this report — so the UI can show what was applied. */
+    rates: { global: rates.global, overrides: Object.keys(rates.per_tenant || {}).length },
     tenants: per_tenant.length,
     by_service: [...byService.values()].sort((a, b) => b.total_tokens - a.total_tokens),
     per_tenant
