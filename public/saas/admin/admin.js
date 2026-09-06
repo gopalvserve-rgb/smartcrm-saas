@@ -108,7 +108,18 @@ async function api(fn, ...args) {
  * always succeeds. It is safe to leave in permanently.
  */
 async function apiFleet(fn, ...args) {
-  const MAX = 10;
+  /* MIXED_FLEET_RETRY_v2 (2026-09-06) — v1 used 10 attempts 120ms apart and still
+   * failed for the operator, even though a probe proved one backend HAD the
+   * function. Cause: nginx runs `least_conn` with `keepalive 32`, so a rapid
+   * burst of requests can ride the same pooled upstream connection and land on
+   * the same worker every time. Tight uniform spacing made that worse, not
+   * better.
+   *
+   * Now: more attempts, and a jittered backoff that grows to ~1s. Spreading the
+   * attempts over several seconds gives the keepalive pool time to rotate, so
+   * successive tries actually reach different workers. Still only retries
+   * "Unknown SaaS function" — any real error surfaces on the first attempt. */
+  const MAX = 20;
   let lastErr = null;
   for (let i = 0; i < MAX; i++) {
     try {
@@ -116,12 +127,14 @@ async function apiFleet(fn, ...args) {
     } catch (e) {
       lastErr = e;
       if (!/Unknown SaaS function/i.test(e && e.message || '')) throw e;
-      await new Promise(r => setTimeout(r, 120));
+      const wait = Math.min(1000, 100 + i * 90) + Math.floor(Math.random() * 120);
+      await new Promise(r => setTimeout(r, wait));
     }
   }
-  throw new Error((lastErr && lastErr.message ? lastErr.message : 'request failed') +
-    ' — tried ' + MAX + ' times across the worker pool. The workers serving this ' +
-    'request have not picked up the latest deploy yet.');
+  throw new Error('This feature is deployed but the app workers have not been '
+    + 'restarted yet, so only some of them can serve it. Tried ' + MAX + ' times '
+    + 'and kept landing on an outdated worker. Ask your server admin to run: '
+    + 'sudo bash /home/crm.smartcrmsolution.com/tmp/restart.sh');
 }
 
 
