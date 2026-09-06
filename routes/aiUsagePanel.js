@@ -54,9 +54,12 @@ async function api_ai_myUsage(token, opts) {
   try { pol = (await billing.loadPolicy()).for(slug); }
   catch (_) { pol = { rate_in: 0, rate_out: 0, markup_pct: 0, cap_inr: 0, blocked_at: null }; }
 
+  /* GST_v1 — quote the tenant the SAME payable figure the invoice will show:
+   * base + markup + GST. Using a different formula here is how the earlier
+   * AI Tokens / AI Billing mismatch happened, so this defers to billing.priceOf. */
   const price = (i, o) => {
-    const base = (Number(i || 0) / 1e5) * pol.rate_in + (Number(o || 0) / 1e5) * pol.rate_out;
-    return money(base * (1 + Number(pol.markup_pct || 0) / 100));
+    try { return billing.priceOf(pol, i, o).total_inr; }
+    catch (_) { return 0; }
   };
 
   const rows = (await control.query(
@@ -102,7 +105,8 @@ async function api_ai_myUsage(token, opts) {
 
   return {
     range: r, slug, totals, by_service, cap,
-    rate: { in_per_lakh: pol.rate_in, out_per_lakh: pol.rate_out, markup_pct: pol.markup_pct },
+    rate: { in_per_lakh: pol.rate_in, out_per_lakh: pol.rate_out,
+            markup_pct: pol.markup_pct, gst_percent: pol.gst_percent == null ? 18 : pol.gst_percent },
     invoices_pending, overdue,
     ai_blocked: !!pol.blocked_at
   };
@@ -116,8 +120,8 @@ async function api_ai_myInvoices(token) {
   try {
     const rows = (await control.query(
       `SELECT id, period_from, period_to, calls, input_tokens, output_tokens,
-              base_inr, markup_pct, markup_inr, total_inr, status, due_at,
-              generated_at, paid_at,
+              base_inr, markup_pct, markup_inr, subtotal_inr, gst_percent, gst_inr,
+              total_inr, status, due_at, generated_at, paid_at, paid_via,
               (status = 'pending' AND due_at < NOW()) AS is_overdue
          FROM ai_invoices WHERE tenant_slug = $1
         ORDER BY generated_at DESC LIMIT 60`, [slug])).rows;
@@ -125,4 +129,26 @@ async function api_ai_myInvoices(token) {
   } catch (_) { return { invoices: [] }; }
 }
 
-module.exports = { api_ai_myUsage, api_ai_myInvoices };
+
+/**
+ * api_ai_payInvoice(token, { invoice_id })
+ *   -> { payment_session_id, order_id, amount_inr }
+ *
+ * PAY_NOW_v1 — starts a Cashfree checkout for one of THIS tenant's AI invoices.
+ * The slug comes from tenantStorage, and aiBilling.createPaymentOrder looks the
+ * invoice up by id AND slug together, so passing another tenant's invoice id
+ * returns "not found" rather than starting a payment against their bill.
+ */
+async function api_ai_payInvoice(token, payload) {
+  const me = await authUser(token);
+  const slug = _mySlug();
+  if (!slug) throw new Error('Tenant context not resolved');
+  const id = Number((payload || {}).invoice_id);
+  if (!id) throw new Error('invoice_id required');
+  const billing = require('./saas/aiBilling');
+  return await billing.createPaymentOrder(slug, id, {
+    name: me && me.name, email: me && me.email, phone: me && me.phone
+  });
+}
+
+module.exports = { api_ai_myUsage, api_ai_myInvoices, api_ai_payInvoice };

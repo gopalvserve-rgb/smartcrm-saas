@@ -47,7 +47,8 @@ async function ensureSchema() {
     `ALTER TABLE ai_settings
        ADD COLUMN IF NOT EXISTS default_markup_pct DECIMAL(6,2)  NOT NULL DEFAULT 0,
        ADD COLUMN IF NOT EXISTS default_cap_inr    DECIMAL(12,2) NOT NULL DEFAULT 0,
-       ADD COLUMN IF NOT EXISTS grace_days         INTEGER       NOT NULL DEFAULT 3`);
+       ADD COLUMN IF NOT EXISTS grace_days         INTEGER       NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS gst_percent        DECIMAL(5,2)  NOT NULL DEFAULT 18.00`);
   await control.query(
     `ALTER TABLE tenants
        ADD COLUMN IF NOT EXISTS ai_markup_pct DECIMAL(6,2),
@@ -68,7 +69,10 @@ async function ensureSchema() {
        base_inr       DECIMAL(12,2) NOT NULL DEFAULT 0,
        markup_pct     DECIMAL(6,2)  NOT NULL DEFAULT 0,
        markup_inr     DECIMAL(12,2) NOT NULL DEFAULT 0,
-       total_inr      DECIMAL(12,2) NOT NULL DEFAULT 0,
+       subtotal_inr   DECIMAL(12,2) NOT NULL DEFAULT 0,   -- base + markup, before tax
+       gst_percent    DECIMAL(5,2)  NOT NULL DEFAULT 0,
+       gst_inr        DECIMAL(12,2) NOT NULL DEFAULT 0,
+       total_inr      DECIMAL(12,2) NOT NULL DEFAULT 0,   -- subtotal + GST — what the tenant pays
        status         TEXT NOT NULL DEFAULT 'pending',   -- pending | paid | cancelled
        due_at         TIMESTAMPTZ NOT NULL,
        generated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -76,6 +80,24 @@ async function ensureSchema() {
        paid_ref       TEXT,
        notes          TEXT
      )`);
+  /* GST_v1 (2026-09-06) — invoices raised before this migration stored a
+   * pre-tax figure in total_inr. Backfill so old and new rows mean the same
+   * thing: subtotal = the old total, GST added on top, total = the payable
+   * amount. Runs once — the WHERE clause makes it idempotent. */
+  await control.query(
+    `ALTER TABLE ai_invoices
+       ADD COLUMN IF NOT EXISTS subtotal_inr DECIMAL(12,2) NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS gst_percent  DECIMAL(5,2)  NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS gst_inr      DECIMAL(12,2) NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS pay_order_id TEXT,
+       ADD COLUMN IF NOT EXISTS paid_via     TEXT`);
+  await control.query(
+    `UPDATE ai_invoices
+        SET subtotal_inr = total_inr,
+            gst_percent  = COALESCE((SELECT gst_percent FROM ai_settings WHERE id = 1), 18),
+            gst_inr      = ROUND(total_inr * COALESCE((SELECT gst_percent FROM ai_settings WHERE id = 1), 18) / 100, 2),
+            total_inr    = ROUND(total_inr * (1 + COALESCE((SELECT gst_percent FROM ai_settings WHERE id = 1), 18) / 100), 2)
+      WHERE subtotal_inr = 0 AND total_inr > 0`);
   await control.query(`CREATE INDEX IF NOT EXISTS idx_ai_inv_tenant ON ai_invoices(tenant_slug, generated_at DESC)`);
   await control.query(`CREATE INDEX IF NOT EXISTS idx_ai_inv_status ON ai_invoices(status, due_at)`);
   _colsDone = true;
@@ -91,14 +113,16 @@ async function loadPolicy() {
             COALESCE(rate_inr_per_lakh_output,0) AS rout,
             COALESCE(default_markup_pct,0)       AS mk,
             COALESCE(default_cap_inr,0)          AS cap,
-            COALESCE(grace_days,3)               AS grace
+            COALESCE(grace_days,0)               AS grace,
+            COALESCE(gst_percent,18)             AS gst
        FROM ai_settings WHERE id = 1`)).rows[0] || {};
   const g = {
     rate_in:  Number(s.rin  || 0),
     rate_out: Number(s.rout || 0),
     markup_pct: Number(s.mk || 0),
     cap_inr:  Number(s.cap  || 0),
-    grace_days: Number(s.grace || 3)
+    grace_days: Number(s.grace || 0),
+    gst_percent: s.gst == null ? 18 : Number(s.gst)
   };
   const rows = (await control.query(
     `SELECT id, slug,
@@ -114,6 +138,7 @@ async function loadPolicy() {
       rate_out: t.rout == null ? g.rate_out : Number(t.rout),
       markup_pct: t.mk  == null ? g.markup_pct : Number(t.mk),
       cap_inr:    t.cap == null ? g.cap_inr    : Number(t.cap),
+      gst_percent: g.gst_percent,
       blocked_at: t.ai_blocked_at || null,
       uses_global: { rate: t.rin == null && t.rout == null, markup: t.mk == null, cap: t.cap == null }
     };
@@ -121,10 +146,28 @@ async function loadPolicy() {
   return { global: g, per, for: slug => per[slug] || Object.assign({ slug, blocked_at: null }, g) };
 }
 
+/* GST_v1 — the full ladder, in one place:
+ *   base     = tokens x rate
+ *   markup   = base x markup_pct
+ *   subtotal = base + markup
+ *   gst      = subtotal x gst_percent      (18% by default)
+ *   total    = subtotal + gst              <- what the tenant actually pays
+ * total_inr stays the payable amount so every existing caller keeps meaning
+ * the same thing; the breakdown is additive. */
 function priceOf(pol, inTok, outTok) {
   const base = (Number(inTok || 0) / 1e5) * pol.rate_in + (Number(outTok || 0) / 1e5) * pol.rate_out;
   const markup = base * (Number(pol.markup_pct || 0) / 100);
-  return { base_inr: money(base), markup_inr: money(markup), total_inr: money(base + markup) };
+  const subtotal = base + markup;
+  const gstPct = pol.gst_percent == null ? 18 : Number(pol.gst_percent);
+  const gst = subtotal * (gstPct / 100);
+  return {
+    base_inr: money(base),
+    markup_inr: money(markup),
+    subtotal_inr: money(subtotal),
+    gst_percent: gstPct,
+    gst_inr: money(gst),
+    total_inr: money(subtotal + gst)
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -179,10 +222,14 @@ async function runBillingTick(opts) {
       await control.query(
         `INSERT INTO ai_invoices
            (tenant_id, tenant_slug, period_from, period_to, calls, input_tokens, output_tokens,
-            rate_in, rate_out, base_inr, markup_pct, markup_inr, total_inr, status, due_at, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending', NOW() + ($14 || ' days')::interval, $15)`,
+            rate_in, rate_out, base_inr, markup_pct, markup_inr,
+            subtotal_inr, gst_percent, gst_inr, total_inr,
+            status, due_at, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+                 'pending', NOW() + ($17 || ' days')::interval, $18)`,
         [p.id || null, slug, u.period_from, u.period_to, u.calls, u.input_tokens, u.output_tokens,
-         p.rate_in, p.rate_out, price.base_inr, p.markup_pct, price.markup_inr, price.total_inr,
+         p.rate_in, p.rate_out, price.base_inr, p.markup_pct, price.markup_inr,
+         price.subtotal_inr, price.gst_percent, price.gst_inr, price.total_inr,
          String(pol.global.grace_days),
          'Auto-raised: unbilled AI usage reached the ₹' + p.cap_inr + ' cap']);
     }
@@ -272,6 +319,7 @@ async function api_saas_ai_billing_setGlobal(token, payload) {
   if (p.default_markup_pct != null) { sets.push(`default_markup_pct = $${i++}`); vals.push(Math.max(0, Number(p.default_markup_pct) || 0)); }
   if (p.default_cap_inr    != null) { sets.push(`default_cap_inr = $${i++}`);    vals.push(Math.max(0, Number(p.default_cap_inr) || 0)); }
   if (p.grace_days         != null) { sets.push(`grace_days = $${i++}`);         vals.push(Math.max(0, parseInt(p.grace_days, 10) || 0)); }
+  if (p.gst_percent        != null) { sets.push(`gst_percent = $${i++}`);        vals.push(Math.max(0, Number(p.gst_percent) || 0)); }
   if (sets.length) await control.query(`UPDATE ai_settings SET ${sets.join(', ')} WHERE id = 1`, vals);
   return await api_saas_ai_billing_config(token);
 }
@@ -363,11 +411,15 @@ async function api_saas_ai_invoice_generateNow(token, payload) {
   const r = await control.query(
     `INSERT INTO ai_invoices
        (tenant_id, tenant_slug, period_from, period_to, calls, input_tokens, output_tokens,
-        rate_in, rate_out, base_inr, markup_pct, markup_inr, total_inr, status, due_at, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending', NOW() + ($14 || ' days')::interval, $15)
+        rate_in, rate_out, base_inr, markup_pct, markup_inr,
+        subtotal_inr, gst_percent, gst_inr, total_inr,
+        status, due_at, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+             'pending', NOW() + ($17 || ' days')::interval, $18)
      RETURNING id`,
     [p.id || null, slug, u.period_from, u.period_to, u.calls, u.input_tokens, u.output_tokens,
-     p.rate_in, p.rate_out, price.base_inr, p.markup_pct, price.markup_inr, price.total_inr,
+     p.rate_in, p.rate_out, price.base_inr, p.markup_pct, price.markup_inr,
+     price.subtotal_inr, price.gst_percent, price.gst_inr, price.total_inr,
      String(pol.global.grace_days), 'Raised manually by super admin']);
   return { ok: true, id: r.rows[0].id, total_inr: price.total_inr };
 }
@@ -396,6 +448,68 @@ function startBillingWorker() {
   console.log('[ai-billing] worker started, every ' + Math.round(every / 60000) + ' min');
 }
 
+
+/* ------------------------------------------------------------------ *
+ * PAY_NOW_v1 (2026-09-06) — tenant-initiated payment for an AI invoice.
+ *
+ * Reuses the Cashfree integration already used for signup rather than adding a
+ * second gateway path. The order id embeds the invoice id so the existing
+ * webhook can settle it, and we store it on the invoice so a duplicate click
+ * reuses the same order instead of creating a second one.
+ *
+ * Called from the TENANT side, so the invoice is looked up by id AND slug —
+ * passing another tenant's invoice id returns "not found", never their data.
+ * ------------------------------------------------------------------ */
+async function createPaymentOrder(slug, invoiceId, customer) {
+  await ensureSchema();
+  const r = await control.query(
+    `SELECT id, tenant_slug, total_inr, status, pay_order_id
+       FROM ai_invoices WHERE id = $1 AND tenant_slug = $2`, [Number(invoiceId), String(slug)]);
+  const inv = r.rows[0];
+  if (!inv) throw new Error('Invoice not found');
+  if (inv.status === 'paid') throw new Error('This invoice is already paid');
+  if (inv.status === 'cancelled') throw new Error('This invoice was cancelled');
+  if (Number(inv.total_inr) <= 0) throw new Error('Nothing to pay on this invoice');
+
+  const cashfree = require('./cashfree');
+  const orderId = inv.pay_order_id || ('AIINV' + inv.id + 'T' + Date.now().toString(36).toUpperCase());
+  const base = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const order = await cashfree.createOrder({
+    orderId,
+    amountInr: Number(inv.total_inr),
+    customerName:  (customer && customer.name)  || slug,
+    customerEmail: (customer && customer.email) || 'billing@' + slug + '.invalid',
+    customerPhone: (customer && customer.phone) || '',
+    returnUrl: base + '/t/' + slug + '/#/aiusage',
+    notifyUrl: base + '/webhook/cashfree'
+  });
+  await control.query(`UPDATE ai_invoices SET pay_order_id = $2 WHERE id = $1`, [inv.id, orderId]);
+  return {
+    ok: true, invoice_id: inv.id, order_id: orderId,
+    amount_inr: Number(inv.total_inr),
+    payment_session_id: order.payment_session_id
+  };
+}
+
+/** Settle an invoice paid through the gateway (called by the webhook path). */
+async function markPaidByOrder(orderId, ref) {
+  await ensureSchema();
+  const r = await control.query(
+    `UPDATE ai_invoices SET status='paid', paid_at=NOW(), paid_via='cashfree', paid_ref=$2
+      WHERE pay_order_id = $1 AND status = 'pending' RETURNING id, tenant_slug`,
+    [String(orderId), ref ? String(ref).slice(0, 120) : null]);
+  if (!r.rows.length) return { ok: false, reason: 'no matching pending invoice' };
+  const slug = r.rows[0].tenant_slug;
+  await control.query(
+    `UPDATE tenants t SET ai_blocked_at = NULL
+      WHERE t.slug = $1
+        AND NOT EXISTS (SELECT 1 FROM ai_invoices i
+                         WHERE i.tenant_slug = t.slug AND i.status='pending' AND i.due_at < NOW())`,
+    [slug]);
+  clearBlockCache();
+  return { ok: true, id: r.rows[0].id, tenant_slug: slug };
+}
+
 module.exports = {
   ensureSchema, loadPolicy, priceOf, unbilledFor, runBillingTick,
   isTenantAiBlocked, clearBlockCache, startBillingWorker,
@@ -406,5 +520,6 @@ module.exports = {
   api_saas_ai_invoice_markPaid,
   api_saas_ai_invoice_cancel,
   api_saas_ai_invoice_generateNow,
-  api_saas_ai_billing_runNow
+  api_saas_ai_billing_runNow,
+  createPaymentOrder, markPaidByOrder   /* PAY_NOW_v1 */
 };
