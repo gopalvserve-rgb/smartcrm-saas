@@ -162,6 +162,7 @@ const NAV = [
   { id: 'errors',        label: '🐞 Errors',             requiresPerm: 'errors.view' },
   { id: 'crashes',       label: '🚨 Crashes',            requiresPerm: 'crashes.view' },
   { id: 'ai_costing',    label: '🤖 AI Costing',         requiresPerm: 'ai_costing.view' },
+  { id: 'ai_tokens',     label: '🎟️ AI Tokens',          requiresPerm: 'ai_costing.view' },  /* AI_TOKENS_UI_v1 */
   { id: 'finance',       label: '💰 Finance',            requiresPerm: 'finance.view' },     /* FIN_DASH_v1 */
   { id: 'wl_billing',    label: '🏷️ White-Label Billing', requiresPerm: 'wl_billing.view' },  /* WL_BILLING_v1 */
   { id: 'announcements', label: '📣 Updates',            requiresPerm: 'announcements.view' },
@@ -6225,3 +6226,259 @@ function _openTxnCreateModal(tenants, onDone, existing) {
   card.appendChild(fl('Payment mode', modeSel)); card.appendChild(fl('Transaction ID / ref', idInp)); card.appendChild(fl('Date', dateInp)); card.appendChild(fl('Sold by', soldBySel)); card.appendChild(fl('Remarks', notesInp)); card.appendChild(out);
   card.appendChild(h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' } }, h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close'), save));
 }
+
+
+// ============================================================
+// AI_TOKENS_UI_v1 (2026-09-06) — tenant-wise Gemini token usage
+//
+// Pure token accounting plus a billing rate the super admin sets.
+// Deliberately separate from the AI Costing screen: that one reports
+// VENDOR cost (what Gemini charges us, in USD, with markup). This one
+// reports what the TENANT consumed and what we charge them, priced in
+// plain rupees per 1,00,000 tokens.
+//
+// Token counts are Gemini's own usageMetadata recorded per request.
+// Rows with error_text are excluded — a failed call returns no
+// usageMetadata, so it is not spend.
+//
+// GRACEFUL DEGRADATION: api_saas_ai_tokens_summary and the rate fields
+// ship in the same release as the metering fix. Until every worker has
+// restarted onto that code, some requests land on an old worker that
+// does not have them. So we fall back to api_saas_ai_costing_summary
+// (per-tenant tokens, no service split) and to localStorage for the
+// rates, and tell the operator which mode they are in rather than
+// showing a broken screen.
+// ============================================================
+VIEWS.ai_tokens = async (view) => {
+  view.appendChild(h('h1', {}, '\U0001F39F️ AI Tokens'));
+
+  const LS_RATE = 'saas_ai_token_rates_v1';
+  const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_RATE) || '{}') || {}; } catch (e) { return {}; } };
+  const lsSet = (o) => { try { localStorage.setItem(LS_RATE, JSON.stringify(o)); } catch (e) {} };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + '01';
+  const fromInp = h('input', { type: 'date', value: monthStart });
+  const toInp   = h('input', { type: 'date', value: today });
+  const qInp    = h('input', { type: 'text', placeholder: 'Filter tenant…', style: { minWidth: '11rem' } });
+  const rInInp  = h('input', { type: 'number', min: '0', step: '0.5', style: { width: '5.5rem' } });
+  const rOutInp = h('input', { type: 'number', min: '0', step: '0.5', style: { width: '5.5rem' } });
+  const saveBtn = h('button', { class: 'btn primary' }, '\U0001F4BE Save rate');
+  const refresh = h('button', { class: 'btn ghost' }, '↻ Refresh');
+
+  const cached = lsGet();
+  rInInp.value  = cached.rate_in  != null ? cached.rate_in  : 5;
+  rOutInp.value = cached.rate_out != null ? cached.rate_out : 5;
+
+  const preset = (label, days) => {
+    const b = h('button', { class: 'btn ghost', style: { fontSize: '.75rem', padding: '.25rem .55rem' } }, label);
+    b.onclick = () => {
+      const end = new Date();
+      const start = new Date(); start.setDate(start.getDate() - days);
+      fromInp.value = (days === 0 ? monthStart : start.toISOString().slice(0, 10));
+      toInp.value = end.toISOString().slice(0, 10);
+      reload();
+    };
+    return b;
+  };
+
+  view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+    h('label', {}, 'From '), fromInp, h('label', {}, ' To '), toInp,
+    preset('This month', 0), preset('30d', 30), preset('90d', 90),
+    qInp, refresh));
+
+  view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+    h('strong', { style: { fontSize: '.85rem' } }, 'Billing rate — ₹ per 1,00,000 tokens:'),
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'input'), rInInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'output'), rOutInp,
+    saveBtn,
+    h('span', { class: 'muted', style: { fontSize: '.72rem' } },
+      'Input and output are charged separately because Gemini prices them ~4× apart. Set both the same for one flat rate.')));
+
+  const noteCard   = h('div');
+  const totalsCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading…'));
+  const svcCard    = h('div', { class: 'card' });
+  const tableCard  = h('div', { class: 'card' });
+  view.appendChild(noteCard); view.appendChild(totalsCard);
+  view.appendChild(svcCard); view.appendChild(tableCard);
+
+  const nf = n => Number(n || 0).toLocaleString('en-IN');
+  const money = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const rateIn  = () => Math.max(0, Number(rInInp.value)  || 0);
+  const rateOut = () => Math.max(0, Number(rOutInp.value) || 0);
+  const costOf  = (i, o) => (Number(i || 0) / 1e5) * rateIn() + (Number(o || 0) / 1e5) * rateOut();
+
+  function kpi(label, value, hint, accent) {
+    return h('div', { style: { padding: '.6rem .8rem', background: accent ? '#eef4fd' : '#f1f5f9',
+                               borderRadius: '8px', border: accent ? '1px solid #2a78d6' : '1px solid transparent' } },
+      h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+      h('div', { style: { fontSize: '1.2rem', fontWeight: '700' } }, value),
+      hint ? h('div', { class: 'muted', style: { fontSize: '.72rem' } }, hint) : null);
+  }
+
+  // ---- rates: try the server, fall back to localStorage ----
+  let ratesServerBacked = false;
+  try {
+    const cfg = await api('api_saas_ai_settings_get');
+    if (cfg && cfg.rate_inr_per_lakh_input != null) {
+      ratesServerBacked = true;
+      rInInp.value  = cfg.rate_inr_per_lakh_input;
+      rOutInp.value = cfg.rate_inr_per_lakh_output;
+    }
+  } catch (e) { /* old worker — keep localStorage values */ }
+
+  saveBtn.onclick = async () => {
+    const body = { rate_inr_per_lakh_input: rateIn(), rate_inr_per_lakh_output: rateOut() };
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const r = await api('api_saas_ai_settings_save', body);
+      if (r && r.rate_inr_per_lakh_input != null) {
+        ratesServerBacked = true;
+        alert('Rate saved. It now applies to every tenant that has no override.');
+      } else {
+        throw new Error('This worker has not picked up the rate fields yet.');
+      }
+    } catch (e) {
+      lsSet({ rate_in: rateIn(), rate_out: rateOut() });
+      alert('Saved on this browser only — the server has not restarted onto the new code yet, so the rate could not be stored centrally.\n\n(' + e.message + ')');
+    } finally {
+      saveBtn.disabled = false; saveBtn.textContent = '\U0001F4BE Save rate';
+      lsSet({ rate_in: rateIn(), rate_out: rateOut() });
+      reload();
+    }
+  };
+  rInInp.oninput = rOutInp.oninput = () => { lsSet({ rate_in: rateIn(), rate_out: rateOut() }); repaint(); };
+  refresh.onclick = () => reload();
+  qInp.oninput = () => repaint();
+
+  let DATA = null, MODE = 'full';
+
+  async function reload() {
+    totalsCard.innerHTML = ''; svcCard.innerHTML = ''; tableCard.innerHTML = ''; noteCard.innerHTML = '';
+    totalsCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+    const args = { from: fromInp.value, to: toInp.value };
+    try {
+      DATA = await api('api_saas_ai_tokens_summary', args);
+      MODE = 'full';
+    } catch (e) {
+      // Old worker — no per-service split available. Use the costing endpoint.
+      try {
+        const c = await api('api_saas_ai_costing_summary', args);
+        DATA = {
+          range: c.range,
+          totals: { calls: c.totals.calls, input_tokens: c.totals.input_tokens,
+                    output_tokens: c.totals.output_tokens,
+                    total_tokens: c.totals.input_tokens + c.totals.output_tokens },
+          by_service: [],
+          per_tenant: (c.per_tenant || []).map(t => ({
+            tenant_slug: t.tenant_slug, calls: t.calls,
+            input_tokens: t.input_tokens, output_tokens: t.output_tokens,
+            total_tokens: t.input_tokens + t.output_tokens, services: []
+          }))
+        };
+        MODE = 'fallback';
+      } catch (e2) {
+        totalsCard.innerHTML = '';
+        totalsCard.appendChild(h('div', { class: 'error-box' }, e2.message));
+        return;
+      }
+    }
+    repaint();
+  }
+
+  function repaint() {
+    if (!DATA) return;
+    noteCard.innerHTML = '';
+    if (MODE === 'fallback' || !ratesServerBacked) {
+      noteCard.appendChild(h('div', { class: 'card', style: { borderLeft: '3px solid #b45309', background: '#fffbeb' } },
+        h('div', { style: { fontSize: '.83rem' } },
+          h('strong', {}, 'Limited mode. '),
+          (MODE === 'fallback'
+            ? 'Per-service breakdown is unavailable and '
+            : '') +
+          'the rate is held in this browser only. Both need the app workers restarted onto the latest code; token totals below are correct either way.')));
+    }
+
+    const t = DATA.totals;
+    const total = t.total_tokens != null ? t.total_tokens : (t.input_tokens + t.output_tokens);
+    totalsCard.innerHTML = '';
+    totalsCard.appendChild(h('h2', { style: { marginTop: 0 } },
+      'Range: ' + DATA.range.from + ' → ' + DATA.range.to));
+    const k = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '.75rem' } });
+    k.appendChild(kpi('Total tokens', nf(total)));
+    k.appendChild(kpi('Input', nf(t.input_tokens), total ? (100 * t.input_tokens / total).toFixed(1) + '%' : ''));
+    k.appendChild(kpi('Output', nf(t.output_tokens), total ? (100 * t.output_tokens / total).toFixed(1) + '%' : ''));
+    k.appendChild(kpi('Calls', nf(t.calls)));
+    k.appendChild(kpi('Tenants', nf((DATA.per_tenant || []).length)));
+    k.appendChild(kpi('Billable', money(costOf(t.input_tokens, t.output_tokens)),
+                      '@ ₹' + rateIn() + ' in / ₹' + rateOut() + ' out per lakh', true));
+    totalsCard.appendChild(k);
+
+    // ---- per service ----
+    svcCard.innerHTML = '';
+    if ((DATA.by_service || []).length) {
+      svcCard.appendChild(h('h3', { style: { marginTop: 0 } }, 'By service'));
+      const max = Math.max.apply(null, DATA.by_service.map(x => x.total_tokens).concat([1]));
+      DATA.by_service.forEach(sv => {
+        svcCard.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '9rem 1fr 8rem 6rem', gap: '.6rem', alignItems: 'center', marginBottom: '.35rem' } },
+          h('span', { style: { fontSize: '.8rem' } }, sv.call_kind),
+          h('div', { style: { background: '#e5e7eb', borderRadius: '4px', height: '14px', overflow: 'hidden' } },
+            h('div', { style: { width: Math.max(0.5, 100 * sv.total_tokens / max) + '%', height: '100%', background: '#2a78d6' } })),
+          h('span', { style: { fontSize: '.78rem', textAlign: 'right' } }, nf(sv.total_tokens)),
+          h('span', { style: { fontSize: '.78rem', textAlign: 'right', color: '#2a78d6', fontWeight: '600' } },
+            money(costOf(sv.input_tokens, sv.output_tokens)))));
+      });
+    }
+
+    // ---- per tenant ----
+    const q = qInp.value.trim().toLowerCase();
+    const rows = (DATA.per_tenant || []).filter(x => !q || String(x.tenant_slug).toLowerCase().indexOf(q) >= 0);
+    tableCard.innerHTML = '';
+    tableCard.appendChild(h('h3', { style: { marginTop: 0 } },
+      'Per tenant (' + rows.length + ')'));
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Tenant'), h('th', {}, 'Calls'),
+        h('th', {}, 'Input'), h('th', {}, 'Output'), h('th', {}, 'Total tokens'),
+        h('th', {}, 'Rate in/out'), h('th', {}, 'Billable'))));
+    const tb = h('tbody', {});
+    if (!rows.length) {
+      tb.appendChild(h('tr', {}, h('td', { colspan: '7', class: 'muted' }, 'No usage in this range.')));
+    }
+    rows.forEach(x => {
+      const rIn  = x.rate_in  != null ? x.rate_in  : rateIn();
+      const rOut = x.rate_out != null ? x.rate_out : rateOut();
+      const bill = x.billable_inr != null ? x.billable_inr
+                                          : (x.input_tokens / 1e5) * rIn + (x.output_tokens / 1e5) * rOut;
+      const tr = h('tr', { style: { cursor: (x.services || []).length ? 'pointer' : 'default' } },
+        h('td', {}, h('strong', {}, x.tenant_slug)),
+        h('td', {}, nf(x.calls)),
+        h('td', {}, nf(x.input_tokens)),
+        h('td', {}, nf(x.output_tokens)),
+        h('td', {}, nf(x.total_tokens)),
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } },
+          rIn + ' / ' + rOut + (x.uses_global_rate === false ? ' · override' : '')),
+        h('td', { style: { color: '#2a78d6', fontWeight: '600' } }, money(bill)));
+      tb.appendChild(tr);
+      if ((x.services || []).length) {
+        const det = h('tr', { style: { display: 'none', background: '#f8fafc' } },
+          h('td', { colspan: '7' },
+            h('div', { style: { fontSize: '.78rem' } },
+              ...x.services.map(sv => h('div', { style: { display: 'grid', gridTemplateColumns: '10rem 8rem 8rem 6rem', gap: '.5rem', padding: '.15rem 0' } },
+                h('span', {}, sv.call_kind),
+                h('span', {}, nf(sv.input_tokens) + ' in'),
+                h('span', {}, nf(sv.output_tokens) + ' out'),
+                h('span', { style: { color: '#2a78d6' } }, money(costOf(sv.input_tokens, sv.output_tokens))))))));
+        tb.appendChild(det);
+        tr.onclick = () => { det.style.display = det.style.display === 'none' ? '' : 'none'; };
+      }
+    });
+    tbl.appendChild(tb);
+    tableCard.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+    tableCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.5rem' } },
+      'Billable = (input ÷ 1,00,000 × in-rate) + (output ÷ 1,00,000 × out-rate). ' +
+      'Failed calls carry no usageMetadata and are excluded.'));
+  }
+
+  await reload();
+};
