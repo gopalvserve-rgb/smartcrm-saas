@@ -106,7 +106,27 @@ async function ensureSchema() {
 /* ------------------------------------------------------------------ *
  * Config resolution
  * ------------------------------------------------------------------ */
-async function loadPolicy() {
+/* POLICY_CACHE_v1 (2026-09-06) — loadPolicy() runs two queries and walks EVERY
+ * tenant row. It is called by api_ai_myUsage, which every tenant's browser hits
+ * on page load and on a timer, and each of those may retry several times while
+ * the worker pool is mixed. Uncached that is a lot of full-table reads per
+ * minute against a control DB already reporting "too many clients".
+ *
+ * 30s TTL: rate and markup changes are commercial settings that nobody needs to
+ * see propagate in under half a minute, and every write path calls
+ * invalidatePolicy() so an operator's own change is still immediate to them. */
+let _polCache = null, _polAt = 0;
+const POLICY_TTL_MS = 30_000;
+function invalidatePolicy() { _polCache = null; _polAt = 0; }
+
+async function loadPolicy(force) {
+  if (!force && _polCache && (Date.now() - _polAt) < POLICY_TTL_MS) return _polCache;
+  const built = await _loadPolicyUncached();
+  _polCache = built; _polAt = Date.now();
+  return built;
+}
+
+async function _loadPolicyUncached() {
   await ensureSchema();
   const s = (await control.query(
     `SELECT COALESCE(rate_inr_per_lakh_input,0)  AS rin,
@@ -321,6 +341,7 @@ async function api_saas_ai_billing_setGlobal(token, payload) {
   if (p.grace_days         != null) { sets.push(`grace_days = $${i++}`);         vals.push(Math.max(0, parseInt(p.grace_days, 10) || 0)); }
   if (p.gst_percent        != null) { sets.push(`gst_percent = $${i++}`);        vals.push(Math.max(0, Number(p.gst_percent) || 0)); }
   if (sets.length) await control.query(`UPDATE ai_settings SET ${sets.join(', ')} WHERE id = 1`, vals);
+  invalidatePolicy();
   return await api_saas_ai_billing_config(token);
 }
 
@@ -338,6 +359,7 @@ async function api_saas_ai_billing_setTenant(token, payload) {
   if (!sets.length) throw new Error('nothing to update');
   vals.push(slug);
   await control.query(`UPDATE tenants SET ${sets.join(', ')} WHERE slug = $${i}`, vals);
+  invalidatePolicy();
   const pol = await loadPolicy();
   return { ok: true, tenant_slug: slug, effective: pol.for(slug) };
 }
@@ -511,7 +533,7 @@ async function markPaidByOrder(orderId, ref) {
 }
 
 module.exports = {
-  ensureSchema, loadPolicy, priceOf, unbilledFor, runBillingTick,
+  ensureSchema, loadPolicy, invalidatePolicy, priceOf, unbilledFor, runBillingTick,
   isTenantAiBlocked, clearBlockCache, startBillingWorker,
   api_saas_ai_billing_config,
   api_saas_ai_billing_setGlobal,
