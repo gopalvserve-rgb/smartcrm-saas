@@ -3992,9 +3992,9 @@ VIEWS.tickets = async (view) => {
    * client-side over the already-fetched rows, so it needs no backend change. */
   let _tkAiFilter = null;
   const aiSegMeta = {
-    ai_answered:     { label: '🤖 AI answered',    bg: '#dcfce7', fg: '#166534' },
-    ai_need_details: { label: '❓ Need details',    bg: '#fef9c3', fg: '#854d0e' },
-    ai_unclear:      { label: '⚠️ AI not capable',  bg: '#fee2e2', fg: '#991b1b' }
+    ai_answered:     { label: '🤖 AI Capable',       bg: '#dcfce7', fg: '#166534' },
+    ai_need_details: { label: '❓ Need more details', bg: '#fef9c3', fg: '#854d0e' },
+    ai_unclear:      { label: '⚠️ Not capable',       bg: '#fee2e2', fg: '#991b1b' }
   };
   const aiBar = h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '0 0 1rem' } });
   view.appendChild(aiBar);
