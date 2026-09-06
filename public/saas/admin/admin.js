@@ -6329,6 +6329,9 @@ VIEWS.ai_tokens = async (view) => {
   const RANGES = {
     'Today':      () => { const d = new Date(); return [ymd(d), ymd(d)]; },
     'Yesterday':  () => { const d = new Date(); d.setDate(d.getDate() - 1); return [ymd(d), ymd(d)]; },
+    /* inclusive of today, so "Last 7 days" is 7 calendar days, not 8 */
+    'Last 7 days':  () => { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - 6); return [ymd(s), ymd(e)]; },
+    'Last 30 days': () => { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - 29); return [ymd(s), ymd(e)]; },
     'This month': () => { const d = new Date(); return [ymd(new Date(d.getFullYear(), d.getMonth(), 1)), ymd(d)]; },
     'Last month': () => { const d = new Date();
                           const first = new Date(d.getFullYear(), d.getMonth() - 1, 1);
@@ -6338,7 +6341,9 @@ VIEWS.ai_tokens = async (view) => {
   };
   const presetBtns = [];
   const markActive = () => presetBtns.forEach(b => {
-    const [f, t] = RANGES[b.dataset.range]();
+    const fn = RANGES[b.dataset.range];
+    if (!fn) return;
+    const [f, t] = fn();
     const on = (f === fromInp.value && t === toInp.value);
     b.style.background = on ? '#2a78d6' : '';
     b.style.color = on ? '#fff' : '';
@@ -6360,8 +6365,8 @@ VIEWS.ai_tokens = async (view) => {
 
   view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
     h('label', {}, 'From '), fromInp, h('label', {}, ' To '), toInp,
-    preset('Today'), preset('Yesterday'), preset('This month'),
-    preset('Last month'), preset('All time'),
+    preset('Today'), preset('Yesterday'), preset('Last 7 days'), preset('Last 30 days'),
+    preset('This month'), preset('Last month'), preset('All time'),
     qInp, refresh));
 
   view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
@@ -6712,6 +6717,7 @@ VIEWS.ai_billing = async (view) => {
   }
 
   // ---------- 3. invoices ----------
+  let _invFilter = 'all';   /* all | pending | overdue | paid */
   async function loadInvoices() {
     invCard.innerHTML = '';
     invCard.appendChild(h('div', { class: 'muted' }, 'Loading invoices…'));
@@ -6726,12 +6732,34 @@ VIEWS.ai_billing = async (view) => {
       h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase' } }, label),
       h('div', { style: { fontWeight: '700' } }, money(amt)),
       h('div', { class: 'muted', style: { fontSize: '.72rem' } }, n + ' invoice' + (n === 1 ? '' : 's')));
+    /* Chips double as filters — the number you want to drill into is the number
+     * you just read, so making it clickable is the shortest path. */
+    const mkChip = (key, label, n, amt, colour) => {
+      const c = chip(label, n, amt, colour);
+      c.style.cursor = 'pointer';
+      c.style.outline = (_invFilter === key) ? '2px solid #2a78d6' : 'none';
+      c.style.outlineOffset = '1px';
+      c.title = 'Show only ' + label.toLowerCase() + ' invoices';
+      c.onclick = () => { _invFilter = (_invFilter === key ? 'all' : key); loadInvoices(); };
+      return c;
+    };
+    const allN = ((t.pending || {}).n || 0) + ((t.paid || {}).n || 0) + ((t.cancelled || {}).n || 0);
+    const allAmt = ((t.pending || {}).amt || 0) + ((t.paid || {}).amt || 0);
     invCard.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '.8rem' } },
-      chip('Pending', (t.pending || {}).n || 0, (t.pending || {}).amt || 0, '#fef9c3'),
-      chip('Overdue', (t.overdue || {}).n || 0, (t.overdue || {}).amt || 0, '#fee2e2'),
-      chip('Paid', (t.paid || {}).n || 0, (t.paid || {}).amt || 0, '#dcfce7')));
+      mkChip('all', 'All raised', allN, allAmt, '#f1f5f9'),
+      mkChip('pending', 'Pending', (t.pending || {}).n || 0, (t.pending || {}).amt || 0, '#fef9c3'),
+      mkChip('overdue', 'Overdue', (t.overdue || {}).n || 0, (t.overdue || {}).amt || 0, '#fee2e2'),
+      mkChip('paid', 'Paid', (t.paid || {}).n || 0, (t.paid || {}).amt || 0, '#dcfce7')));
 
-    const rows = data.invoices || [];
+    let rows = data.invoices || [];
+    if (_invFilter === 'pending')  rows = rows.filter(r => r.status === 'pending' && !r.is_overdue);
+    if (_invFilter === 'overdue')  rows = rows.filter(r => r.is_overdue);
+    if (_invFilter === 'paid')     rows = rows.filter(r => r.status === 'paid');
+    if (_invFilter !== 'all') {
+      invCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.5rem' } },
+        'Showing ' + rows.length + ' ' + _invFilter + ' invoice' + (rows.length === 1 ? '' : 's') +
+        ' — click the highlighted chip again to show all.'));
+    }
     if (!rows.length) {
       invCard.appendChild(h('div', { class: 'muted' }, 'No invoices raised yet. One appears automatically when a tenant crosses its cap.'));
       return;
@@ -6770,7 +6798,9 @@ VIEWS.ai_billing = async (view) => {
         h('td', {}, nf(Number(r.input_tokens) + Number(r.output_tokens))),
         h('td', {}, money(r.base_inr)),
         h('td', {}, money(r.markup_inr) + ' (' + r.markup_pct + '%)'),
-        h('td', { style: { fontWeight: '700' } }, money(r.total_inr)),
+        h('td', { style: { fontWeight: '700' } }, money(r.total_inr),
+          Number(r.gst_inr) ? h('div', { class: 'muted', style: { fontSize: '.72rem', fontWeight: '400' } },
+            money(r.subtotal_inr) + ' + ' + r.gst_percent + '% GST') : null),
         h('td', {}, paid ? h('span', { style: { color: '#15803d', fontWeight: '600' } }, '✔ paid')
                   : od   ? h('span', { style: { color: '#b91c1c', fontWeight: '600' } }, '⚠ overdue')
                   : r.status === 'cancelled' ? h('span', { class: 'muted' }, 'cancelled')
