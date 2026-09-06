@@ -137,6 +137,7 @@ const ROUTE_FILES = [
   'waCampaign',         /* WA_API_CAMPAIGN_v1 */
   'webchat',            /* WEBCHAT_v1 */
   'aiUsagePanel',       /* AI_TENANT_PANEL_v1 — tenant sees its own token usage + invoices */
+  'mySubscription',     /* MY_SUBSCRIPTION_v1 — tenant sees its own plan, dues, invoices */
 ];
 
 const API = {};
