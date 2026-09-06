@@ -6256,7 +6256,12 @@ VIEWS.ai_tokens = async (view) => {
   const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_RATE) || '{}') || {}; } catch (e) { return {}; } };
   const lsSet = (o) => { try { localStorage.setItem(LS_RATE, JSON.stringify(o)); } catch (e) {} };
 
-  const today = new Date().toISOString().slice(0, 10);
+  /* Local-date helpers. toISOString() is UTC, so between 00:00 and 05:30 IST it
+     returns YESTERDAY — which silently shifted every preset by a day. Build the
+     YYYY-MM-DD strings from the browser's own calendar instead. */
+  const _p2 = n => String(n).padStart(2, '0');
+  const ymd = d => d.getFullYear() + '-' + _p2(d.getMonth() + 1) + '-' + _p2(d.getDate());
+  const today = ymd(new Date());
   const monthStart = today.slice(0, 8) + '01';
   const fromInp = h('input', { type: 'date', value: monthStart });
   const toInp   = h('input', { type: 'date', value: today });
@@ -6270,21 +6275,44 @@ VIEWS.ai_tokens = async (view) => {
   rInInp.value  = cached.rate_in  != null ? cached.rate_in  : 5;
   rOutInp.value = cached.rate_out != null ? cached.rate_out : 5;
 
-  const preset = (label, days) => {
+  /* Named ranges rather than rolling day-counts — these match how the operator
+     actually thinks about a billing period. Each returns [from, to] inclusive. */
+  const RANGES = {
+    'Today':      () => { const d = new Date(); return [ymd(d), ymd(d)]; },
+    'Yesterday':  () => { const d = new Date(); d.setDate(d.getDate() - 1); return [ymd(d), ymd(d)]; },
+    'This month': () => { const d = new Date(); return [ymd(new Date(d.getFullYear(), d.getMonth(), 1)), ymd(d)]; },
+    'Last month': () => { const d = new Date();
+                          const first = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+                          const last  = new Date(d.getFullYear(), d.getMonth(), 0);  // day 0 = last day of prev month
+                          return [ymd(first), ymd(last)]; },
+    'All time':   () => ['2020-01-01', ymd(new Date())]
+  };
+  const presetBtns = [];
+  const markActive = () => presetBtns.forEach(b => {
+    const [f, t] = RANGES[b.dataset.range]();
+    const on = (f === fromInp.value && t === toInp.value);
+    b.style.background = on ? '#2a78d6' : '';
+    b.style.color = on ? '#fff' : '';
+    b.style.borderColor = on ? '#2a78d6' : '';
+  });
+  const preset = (label) => {
     const b = h('button', { class: 'btn ghost', style: { fontSize: '.75rem', padding: '.25rem .55rem' } }, label);
+    b.dataset.range = label;
     b.onclick = () => {
-      const end = new Date();
-      const start = new Date(); start.setDate(start.getDate() - days);
-      fromInp.value = (days === 0 ? monthStart : start.toISOString().slice(0, 10));
-      toInp.value = end.toISOString().slice(0, 10);
+      const [f, t] = RANGES[label]();
+      fromInp.value = f; toInp.value = t;
+      markActive();
       reload();
     };
+    presetBtns.push(b);
     return b;
   };
+  fromInp.onchange = toInp.onchange = () => { markActive(); reload(); };
 
   view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
     h('label', {}, 'From '), fromInp, h('label', {}, ' To '), toInp,
-    preset('This month', 0), preset('30d', 30), preset('90d', 90),
+    preset('Today'), preset('Yesterday'), preset('This month'),
+    preset('Last month'), preset('All time'),
     qInp, refresh));
 
   view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
@@ -6480,5 +6508,6 @@ VIEWS.ai_tokens = async (view) => {
       'Failed calls carry no usageMetadata and are excluded.'));
   }
 
+  markActive();
   await reload();
 };
