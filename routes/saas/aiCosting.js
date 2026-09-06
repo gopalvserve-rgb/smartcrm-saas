@@ -332,30 +332,35 @@ async function api_saas_ai_tokens_summary(token, opts) {
     params
   );
 
-  /* AI_TOKEN_RATE_v1 — price the report with the super admin's rates, applied at
-   * REPORT time. Never frozen onto ai_usage_log rows: change a rate and history
-   * re-prices correctly, so a corrected invoice is always reproducible.
-   * Each tenant uses its own override when set, else the global rate. */
-  let rates = { global: { in: 0, out: 0 }, for: () => ({ in: 0, out: 0 }) };
-  try { rates = await require('./aiSettings').resolveRates(); }
-  catch (e) { console.warn('[aiCosting] rate lookup failed, billing as 0:', e.message); }
+  /* AI_TOKEN_RATE_v1 + AI_BILLING_v1 — price the report with the SAME function the
+   * invoices use, applied at REPORT time so a rate change re-prices history.
+   *
+   * PRICE_ONE_IMPL_v1 (2026-09-06) — this block used to compute rate x tokens on
+   * its own, with no markup, while routes/saas/aiBilling.js computed base+markup.
+   * The two disagreed by exactly the markup %, so the AI Tokens screen quoted one
+   * number and the invoice charged another. Same failure the Duplicate Rule had:
+   * a second copy of a calculation drifting from the first. There is now ONE
+   * pricing function — aiBilling.priceOf — and this file calls it. */
+  const _billing = require('./aiBilling');
+  let _pol = null;
+  try { _pol = await _billing.loadPolicy(); }
+  catch (e) { console.warn('[aiCosting] policy lookup failed, pricing as 0:', e.message); }
   const money = n => Number(Number(n || 0).toFixed(2));
-  const priceOf = (slug, inTok, outTok) => {
-    const r = rates.for(slug);
-    return money((inTok / 1e5) * (r.in || 0) + (outTok / 1e5) * (r.out || 0));
-  };
+  const _polFor = slug => (_pol ? _pol.for(slug) : { rate_in: 0, rate_out: 0, markup_pct: 0 });
+  const priceOf = (slug, inTok, outTok) => _billing.priceOf(_polFor(slug), inTok, outTok).total_inr;
+  const priceParts = (slug, inTok, outTok) => _billing.priceOf(_polFor(slug), inTok, outTok);
 
   const byTenant = new Map();
   for (const x of res.rows) {
     const inTok = Number(x.input_tokens || 0), outTok = Number(x.output_tokens || 0);
     if (!byTenant.has(x.tenant_slug)) {
-      const r = rates.for(x.tenant_slug);
+      const r = _polFor(x.tenant_slug);
       byTenant.set(x.tenant_slug, {
         tenant_slug: x.tenant_slug, calls: 0,
         input_tokens: 0, output_tokens: 0, total_tokens: 0,
-        rate_in: r.in, rate_out: r.out,
-        uses_global_rate: !Object.prototype.hasOwnProperty.call(rates.per_tenant || {}, x.tenant_slug),
-        billable_inr: 0, services: []
+        rate_in: r.rate_in, rate_out: r.rate_out, markup_pct: r.markup_pct,
+        uses_global_rate: !!(r.uses_global && r.uses_global.rate),
+        base_inr: 0, markup_inr: 0, billable_inr: 0, services: []
       });
     }
     const t = byTenant.get(x.tenant_slug);
@@ -372,7 +377,10 @@ async function api_saas_ai_tokens_summary(token, opts) {
       billable_inr:  priceOf(x.tenant_slug, inTok, outTok)
     });
   }
-  byTenant.forEach(t => { t.billable_inr = priceOf(t.tenant_slug, t.input_tokens, t.output_tokens); });
+  byTenant.forEach(t => {
+    const p = priceParts(t.tenant_slug, t.input_tokens, t.output_tokens);
+    t.base_inr = p.base_inr; t.markup_inr = p.markup_inr; t.billable_inr = p.total_inr;
+  });
   const per_tenant = [...byTenant.values()].sort((a, b) => b.total_tokens - a.total_tokens);
 
   const totals = per_tenant.reduce((a, t) => {
@@ -398,7 +406,7 @@ async function api_saas_ai_tokens_summary(token, opts) {
     range: { from: r.fromDate, to: r.toDate },
     totals,
     /* The rate card in force for this report — so the UI can show what was applied. */
-    rates: { global: rates.global, overrides: Object.keys(rates.per_tenant || {}).length },
+    rates: { global: _pol ? _pol.global : null },
     tenants: per_tenant.length,
     by_service: [...byService.values()].sort((a, b) => b.total_tokens - a.total_tokens),
     per_tenant
