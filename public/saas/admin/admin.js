@@ -90,6 +90,41 @@ async function api(fn, ...args) {
   return j.result;
 }
 
+/* MIXED_FLEET_RETRY_v1 (2026-09-06) — survive a part-restarted worker pool.
+ *
+ * The app runs behind an nginx round-robin across four Node workers. A worker
+ * only loads new code when it restarts, so after a deploy the pool can be split:
+ * some workers know a newly-added api_saas_* function and some do not. The ones
+ * that do not answer 404 "Unknown SaaS function", which surfaced to the operator
+ * as a random save failure depending on which backend happened to serve them.
+ *
+ * Retrying is the correct fix rather than a hack: round-robin sends each retry
+ * to a different worker, so a handful of attempts reliably reaches one that has
+ * the function. Only "Unknown SaaS function" is retried — every other error
+ * (auth, validation, a real server fault) propagates immediately, so this cannot
+ * mask genuine failures or turn one bad write into several.
+ *
+ * Once every worker is on the same build this becomes a no-op: the first attempt
+ * always succeeds. It is safe to leave in permanently.
+ */
+async function apiFleet(fn, ...args) {
+  const MAX = 10;
+  let lastErr = null;
+  for (let i = 0; i < MAX; i++) {
+    try {
+      return await api(fn, ...args);
+    } catch (e) {
+      lastErr = e;
+      if (!/Unknown SaaS function/i.test(e && e.message || '')) throw e;
+      await new Promise(r => setTimeout(r, 120));
+    }
+  }
+  throw new Error((lastErr && lastErr.message ? lastErr.message : 'request failed') +
+    ' — tried ' + MAX + ' times across the worker pool. The workers serving this ' +
+    'request have not picked up the latest deploy yet.');
+}
+
+
 function toast(msg, kind = 'ok') {
   const t = h('div', { class: 'toast ' + kind }, msg);
   document.body.appendChild(t);
@@ -6348,7 +6383,7 @@ VIEWS.ai_tokens = async (view) => {
   // ---- rates: try the server, fall back to localStorage ----
   let ratesServerBacked = false;
   try {
-    const cfg = await api('api_saas_ai_settings_get');
+    const cfg = await apiFleet('api_saas_ai_settings_get');
     if (cfg && cfg.rate_inr_per_lakh_input != null) {
       ratesServerBacked = true;
       rInInp.value  = cfg.rate_inr_per_lakh_input;
@@ -6360,7 +6395,7 @@ VIEWS.ai_tokens = async (view) => {
     const body = { rate_inr_per_lakh_input: rateIn(), rate_inr_per_lakh_output: rateOut() };
     saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
     try {
-      const r = await api('api_saas_ai_settings_save', body);
+      const r = await apiFleet('api_saas_ai_settings_save', body);
       if (r && r.rate_inr_per_lakh_input != null) {
         ratesServerBacked = true;
         alert('Rate saved. It now applies to every tenant that has no override.');
@@ -6387,7 +6422,7 @@ VIEWS.ai_tokens = async (view) => {
     totalsCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
     const args = { from: fromInp.value, to: toInp.value };
     try {
-      DATA = await api('api_saas_ai_tokens_summary', args);
+      DATA = await apiFleet('api_saas_ai_tokens_summary', args);
       MODE = 'full';
     } catch (e) {
       // Old worker — no per-service split available. Use the costing endpoint.
@@ -6545,7 +6580,7 @@ VIEWS.ai_billing = async (view) => {
     policyCard.innerHTML = ''; tenantCard.innerHTML = '';
     policyCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
     let cfg;
-    try { cfg = await api('api_saas_ai_billing_config'); }
+    try { cfg = await apiFleet('api_saas_ai_billing_config'); }
     catch (e) {
       policyCard.innerHTML = '';
       policyCard.appendChild(h('div', { class: 'error-box' },
@@ -6560,7 +6595,7 @@ VIEWS.ai_billing = async (view) => {
     saveBtn.onclick = async () => {
       saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
       try {
-        await api('api_saas_ai_billing_setGlobal', {
+        await apiFleet('api_saas_ai_billing_setGlobal', {
           default_markup_pct: Number(mkInp.value) || 0,
           default_cap_inr: Number(capInp.value) || 0,
           grace_days: parseInt(grInp.value, 10) || 0
@@ -6572,7 +6607,7 @@ VIEWS.ai_billing = async (view) => {
     const dryBtn = h('button', { class: 'btn ghost' }, '\U0001F50D Preview run');
     dryBtn.onclick = async () => {
       try {
-        const r = await api('api_saas_ai_billing_runNow', { apply: false });
+        const r = await apiFleet('api_saas_ai_billing_runNow', { apply: false });
         alert('DRY RUN — nothing was written.\n\nWould raise ' + r.raised.length + ' invoice(s):\n' +
           r.raised.slice(0, 15).map(x => '  ' + x.tenant_slug + '  ' + money(x.total_inr)).join('\n') +
           (r.raised.length > 15 ? '\n  …' : '') +
@@ -6584,7 +6619,7 @@ VIEWS.ai_billing = async (view) => {
       if (!confirm('Raise invoices for every tenant currently over its cap, and pause AI for anyone past the grace period?\n\nThis writes real invoices.')) return;
       applyBtn.disabled = true;
       try {
-        const r = await api('api_saas_ai_billing_runNow', { apply: true });
+        const r = await apiFleet('api_saas_ai_billing_runNow', { apply: true });
         alert('Raised ' + r.raised.length + ' invoice(s). Paused ' + r.blocked.length + '. Released ' + r.unblocked.length + '.');
         await loadAll();
       } catch (e) { alert('Failed: ' + e.message); }
@@ -6630,7 +6665,7 @@ VIEWS.ai_billing = async (view) => {
       save.onclick = async () => {
         save.disabled = true; save.textContent = '…';
         try {
-          await api('api_saas_ai_billing_setTenant', {
+          await apiFleet('api_saas_ai_billing_setTenant', {
             tenant_slug: r.tenant_slug,
             markup_pct: mk.value === '' ? null : Number(mk.value),
             cap_inr:    cap.value === '' ? null : Number(cap.value)
@@ -6644,7 +6679,7 @@ VIEWS.ai_billing = async (view) => {
                                 title: 'Raise an invoice for this tenant now, ignoring the cap' }, 'Invoice');
       gen.onclick = async () => {
         if (!confirm('Raise an invoice for ' + r.tenant_slug + ' covering all unbilled usage?')) return;
-        try { const x = await api('api_saas_ai_invoice_generateNow', { tenant_slug: r.tenant_slug });
+        try { const x = await apiFleet('api_saas_ai_invoice_generateNow', { tenant_slug: r.tenant_slug });
               alert('Invoice #' + x.id + ' raised for ' + money(x.total_inr)); await loadAll(); }
         catch (e) { alert('Failed: ' + e.message); }
       };
@@ -6668,7 +6703,7 @@ VIEWS.ai_billing = async (view) => {
     invCard.innerHTML = '';
     invCard.appendChild(h('div', { class: 'muted' }, 'Loading invoices…'));
     let data;
-    try { data = await api('api_saas_ai_invoices_list', { limit: 200 }); }
+    try { data = await apiFleet('api_saas_ai_invoices_list', { limit: 200 }); }
     catch (e) { invCard.innerHTML = ''; invCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
     const t = data.totals || {};
     invCard.innerHTML = '';
@@ -6703,13 +6738,13 @@ VIEWS.ai_billing = async (view) => {
         pay.onclick = async () => {
           const ref = prompt('Payment reference (optional):', '');
           if (ref === null) return;
-          try { await api('api_saas_ai_invoice_markPaid', { id: r.id, paid_ref: ref }); await loadAll(); }
+          try { await apiFleet('api_saas_ai_invoice_markPaid', { id: r.id, paid_ref: ref }); await loadAll(); }
           catch (e) { alert(e.message); }
         };
         const can = h('button', { class: 'btn ghost', style: { fontSize: '.72rem', padding: '.2rem .5rem', marginLeft: '.3rem' } }, 'Cancel');
         can.onclick = async () => {
           if (!confirm('Cancel invoice #' + r.id + '? Its period becomes billable again.')) return;
-          try { await api('api_saas_ai_invoice_cancel', { id: r.id }); await loadAll(); }
+          try { await apiFleet('api_saas_ai_invoice_cancel', { id: r.id }); await loadAll(); }
           catch (e) { alert(e.message); }
         };
         act.appendChild(pay); act.appendChild(can);
