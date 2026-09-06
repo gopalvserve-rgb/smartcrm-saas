@@ -163,6 +163,7 @@ const NAV = [
   { id: 'crashes',       label: '🚨 Crashes',            requiresPerm: 'crashes.view' },
   { id: 'ai_costing',    label: '🤖 AI Costing',         requiresPerm: 'ai_costing.view' },
   { id: 'ai_tokens',     label: '🎟️ AI Tokens',          requiresPerm: 'ai_costing.view' },  /* AI_TOKENS_UI_v1 */
+  { id: 'ai_billing',    label: '💳 AI Billing',         requiresPerm: 'ai_costing.view' },  /* AI_BILLING_UI_v1 */
   { id: 'finance',       label: '💰 Finance',            requiresPerm: 'finance.view' },     /* FIN_DASH_v1 */
   { id: 'wl_billing',    label: '🏷️ White-Label Billing', requiresPerm: 'wl_billing.view' },  /* WL_BILLING_v1 */
   { id: 'announcements', label: '📣 Updates',            requiresPerm: 'announcements.view' },
@@ -6510,4 +6511,228 @@ VIEWS.ai_tokens = async (view) => {
 
   markActive();
   await reload();
+};
+
+
+// ============================================================
+// AI_BILLING_UI_v1 (2026-09-06) — markup, caps, invoices
+//
+// Three things on one screen because they are one decision loop:
+//   1. Policy   — global markup %, cap and grace period
+//   2. Tenants  — per-tenant markup / cap override, and how close each is
+//                 to its cap right now
+//   3. Invoices — raised so far, paid vs pending vs overdue
+//
+// An invoice is raised automatically when a tenant's UNBILLED amount crosses
+// its cap. After `grace_days` unpaid, that tenant's AI features are paused —
+// bot replies, Copilot, call summaries. The rest of their CRM keeps working.
+// ============================================================
+VIEWS.ai_billing = async (view) => {
+  view.appendChild(h('h1', {}, '\U0001F4B3 AI Billing'));
+
+  const nf = n => Number(n || 0).toLocaleString('en-IN');
+  const money = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const policyCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading…'));
+  const tenantCard = h('div', { class: 'card' });
+  const invCard    = h('div', { class: 'card' });
+  view.appendChild(policyCard); view.appendChild(tenantCard); view.appendChild(invCard);
+
+  async function loadAll() { await loadPolicy(); await loadInvoices(); }
+
+  // ---------- 1. global policy ----------
+  async function loadPolicy() {
+    policyCard.innerHTML = ''; tenantCard.innerHTML = '';
+    policyCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+    let cfg;
+    try { cfg = await api('api_saas_ai_billing_config'); }
+    catch (e) {
+      policyCard.innerHTML = '';
+      policyCard.appendChild(h('div', { class: 'error-box' },
+        'Billing backend not reachable on this worker yet: ' + e.message));
+      return;
+    }
+    const g = cfg.global || {};
+    const mkInp = h('input', { type: 'number', min: '0', step: '1', value: g.markup_pct || 0, style: { width: '5rem' } });
+    const capInp = h('input', { type: 'number', min: '0', step: '50', value: g.cap_inr || 0, style: { width: '6.5rem' } });
+    const grInp = h('input', { type: 'number', min: '0', step: '1', value: g.grace_days == null ? 3 : g.grace_days, style: { width: '4rem' } });
+    const saveBtn = h('button', { class: 'btn primary' }, '\U0001F4BE Save policy');
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      try {
+        await api('api_saas_ai_billing_setGlobal', {
+          default_markup_pct: Number(mkInp.value) || 0,
+          default_cap_inr: Number(capInp.value) || 0,
+          grace_days: parseInt(grInp.value, 10) || 0
+        });
+        await loadAll();
+      } catch (e) { alert('Save failed: ' + e.message); }
+      finally { saveBtn.disabled = false; saveBtn.textContent = '\U0001F4BE Save policy'; }
+    };
+    const dryBtn = h('button', { class: 'btn ghost' }, '\U0001F50D Preview run');
+    dryBtn.onclick = async () => {
+      try {
+        const r = await api('api_saas_ai_billing_runNow', { apply: false });
+        alert('DRY RUN — nothing was written.\n\nWould raise ' + r.raised.length + ' invoice(s):\n' +
+          r.raised.slice(0, 15).map(x => '  ' + x.tenant_slug + '  ' + money(x.total_inr)).join('\n') +
+          (r.raised.length > 15 ? '\n  …' : '') +
+          '\n\nWould pause AI for: ' + (r.blocked.length ? r.blocked.join(', ') : 'nobody'));
+      } catch (e) { alert('Failed: ' + e.message); }
+    };
+    const applyBtn = h('button', { class: 'btn' }, '⚡ Raise invoices now');
+    applyBtn.onclick = async () => {
+      if (!confirm('Raise invoices for every tenant currently over its cap, and pause AI for anyone past the grace period?\n\nThis writes real invoices.')) return;
+      applyBtn.disabled = true;
+      try {
+        const r = await api('api_saas_ai_billing_runNow', { apply: true });
+        alert('Raised ' + r.raised.length + ' invoice(s). Paused ' + r.blocked.length + '. Released ' + r.unblocked.length + '.');
+        await loadAll();
+      } catch (e) { alert('Failed: ' + e.message); }
+      finally { applyBtn.disabled = false; }
+    };
+
+    policyCard.innerHTML = '';
+    policyCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Policy'));
+    policyCard.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', alignItems: 'center' } },
+      h('label', {}, 'Markup %'), mkInp,
+      h('label', {}, 'Cap ₹'), capInp,
+      h('label', { title: 'Days a tenant has to pay before AI features pause' }, 'Grace days'), grInp,
+      saveBtn, dryBtn, applyBtn));
+    policyCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem', marginTop: '.5rem' } },
+      'Charge = tokens × rate (set on AI Tokens) + markup %. An invoice is raised when a tenant’s unbilled amount crosses the cap. ' +
+      'Cap 0 = never auto-invoice. After the grace period unpaid, that tenant’s AI features pause — the rest of their CRM keeps working.'));
+
+    renderTenants(cfg.tenants || []);
+  }
+
+  // ---------- 2. per-tenant markup / cap ----------
+  function renderTenants(rows) {
+    tenantCard.innerHTML = '';
+    tenantCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Per tenant (' + rows.length + ')'));
+    tenantCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.76rem', marginBottom: '.5rem' } },
+      'Leave a box empty to inherit the global value. “Unbilled” is what has accrued since that tenant’s last invoice.'));
+    const withUse = rows.filter(r => r.unbilled && r.unbilled.tokens > 0)
+                        .sort((a, b) => b.unbilled.total_inr - a.unbilled.total_inr);
+    const rest = rows.filter(r => !r.unbilled || r.unbilled.tokens === 0);
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Tenant'), h('th', {}, 'Markup %'), h('th', {}, 'Cap ₹'),
+        h('th', {}, 'Unbilled'), h('th', {}, '% of cap'), h('th', {}, 'Status'), h('th', {}, ''))));
+    const tb = h('tbody', {});
+    withUse.concat(rest).forEach(r => {
+      const mk = h('input', { type: 'number', min: '0', step: '1', style: { width: '4.5rem' },
+                              placeholder: String(r.effective.markup_pct),
+                              value: r.markup_pct == null ? '' : r.markup_pct });
+      const cap = h('input', { type: 'number', min: '0', step: '50', style: { width: '6rem' },
+                               placeholder: String(r.effective.cap_inr),
+                               value: r.cap_inr == null ? '' : r.cap_inr });
+      const save = h('button', { class: 'btn ghost', style: { fontSize: '.72rem', padding: '.2rem .5rem' } }, 'Save');
+      save.onclick = async () => {
+        save.disabled = true; save.textContent = '…';
+        try {
+          await api('api_saas_ai_billing_setTenant', {
+            tenant_slug: r.tenant_slug,
+            markup_pct: mk.value === '' ? null : Number(mk.value),
+            cap_inr:    cap.value === '' ? null : Number(cap.value)
+          });
+          await loadAll();
+        } catch (e) { alert('Save failed: ' + e.message); save.disabled = false; save.textContent = 'Save'; }
+      };
+      const pct = r.unbilled && r.unbilled.pct_of_cap;
+      const over = pct != null && pct >= 100;
+      const gen = h('button', { class: 'btn ghost', style: { fontSize: '.72rem', padding: '.2rem .5rem', marginLeft: '.3rem' },
+                                title: 'Raise an invoice for this tenant now, ignoring the cap' }, 'Invoice');
+      gen.onclick = async () => {
+        if (!confirm('Raise an invoice for ' + r.tenant_slug + ' covering all unbilled usage?')) return;
+        try { const x = await api('api_saas_ai_invoice_generateNow', { tenant_slug: r.tenant_slug });
+              alert('Invoice #' + x.id + ' raised for ' + money(x.total_inr)); await loadAll(); }
+        catch (e) { alert('Failed: ' + e.message); }
+      };
+      tb.appendChild(h('tr', {},
+        h('td', {}, h('strong', {}, r.tenant_slug)),
+        h('td', {}, mk),
+        h('td', {}, cap),
+        h('td', {}, r.unbilled ? money(r.unbilled.total_inr) : '—'),
+        h('td', { style: over ? { color: '#b91c1c', fontWeight: '700' } : {} }, pct == null ? '—' : pct + '%'),
+        h('td', {}, r.blocked_at
+          ? h('span', { style: { color: '#b91c1c', fontWeight: '600' } }, '⛔ AI paused')
+          : h('span', { class: 'muted' }, 'active')),
+        h('td', {}, save, gen)));
+    });
+    tbl.appendChild(tb);
+    tenantCard.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+  }
+
+  // ---------- 3. invoices ----------
+  async function loadInvoices() {
+    invCard.innerHTML = '';
+    invCard.appendChild(h('div', { class: 'muted' }, 'Loading invoices…'));
+    let data;
+    try { data = await api('api_saas_ai_invoices_list', { limit: 200 }); }
+    catch (e) { invCard.innerHTML = ''; invCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    const t = data.totals || {};
+    invCard.innerHTML = '';
+    invCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Invoices'));
+    const chip = (label, n, amt, colour) => h('div', { style: { padding: '.5rem .8rem', borderRadius: '8px',
+        background: colour, minWidth: '120px' } },
+      h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase' } }, label),
+      h('div', { style: { fontWeight: '700' } }, money(amt)),
+      h('div', { class: 'muted', style: { fontSize: '.72rem' } }, n + ' invoice' + (n === 1 ? '' : 's')));
+    invCard.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '.8rem' } },
+      chip('Pending', (t.pending || {}).n || 0, (t.pending || {}).amt || 0, '#fef9c3'),
+      chip('Overdue', (t.overdue || {}).n || 0, (t.overdue || {}).amt || 0, '#fee2e2'),
+      chip('Paid', (t.paid || {}).n || 0, (t.paid || {}).amt || 0, '#dcfce7')));
+
+    const rows = data.invoices || [];
+    if (!rows.length) {
+      invCard.appendChild(h('div', { class: 'muted' }, 'No invoices raised yet. One appears automatically when a tenant crosses its cap.'));
+      return;
+    }
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, '#'), h('th', {}, 'Tenant'), h('th', {}, 'Period'), h('th', {}, 'Tokens'),
+        h('th', {}, 'Base'), h('th', {}, 'Markup'), h('th', {}, 'Total'),
+        h('th', {}, 'Status'), h('th', {}, 'Due'), h('th', {}, ''))));
+    const tb = h('tbody', {});
+    rows.forEach(r => {
+      const paid = r.status === 'paid';
+      const od = r.is_overdue;
+      const act = h('td', {});
+      if (r.status === 'pending') {
+        const pay = h('button', { class: 'btn ghost', style: { fontSize: '.72rem', padding: '.2rem .5rem' } }, 'Mark paid');
+        pay.onclick = async () => {
+          const ref = prompt('Payment reference (optional):', '');
+          if (ref === null) return;
+          try { await api('api_saas_ai_invoice_markPaid', { id: r.id, paid_ref: ref }); await loadAll(); }
+          catch (e) { alert(e.message); }
+        };
+        const can = h('button', { class: 'btn ghost', style: { fontSize: '.72rem', padding: '.2rem .5rem', marginLeft: '.3rem' } }, 'Cancel');
+        can.onclick = async () => {
+          if (!confirm('Cancel invoice #' + r.id + '? Its period becomes billable again.')) return;
+          try { await api('api_saas_ai_invoice_cancel', { id: r.id }); await loadAll(); }
+          catch (e) { alert(e.message); }
+        };
+        act.appendChild(pay); act.appendChild(can);
+      }
+      tb.appendChild(h('tr', { style: od ? { background: '#fef2f2' } : {} },
+        h('td', { class: 'muted' }, r.id),
+        h('td', {}, h('strong', {}, r.tenant_slug)),
+        h('td', { class: 'muted', style: { fontSize: '.75rem' } },
+          String(r.period_from || '').slice(0, 10) + ' → ' + String(r.period_to || '').slice(0, 10)),
+        h('td', {}, nf(Number(r.input_tokens) + Number(r.output_tokens))),
+        h('td', {}, money(r.base_inr)),
+        h('td', {}, money(r.markup_inr) + ' (' + r.markup_pct + '%)'),
+        h('td', { style: { fontWeight: '700' } }, money(r.total_inr)),
+        h('td', {}, paid ? h('span', { style: { color: '#15803d', fontWeight: '600' } }, '✔ paid')
+                  : od   ? h('span', { style: { color: '#b91c1c', fontWeight: '600' } }, '⚠ overdue')
+                  : r.status === 'cancelled' ? h('span', { class: 'muted' }, 'cancelled')
+                  : h('span', { style: { color: '#a16207' } }, 'pending')),
+        h('td', { class: 'muted', style: { fontSize: '.75rem' } }, String(r.due_at || '').slice(0, 10)),
+        act));
+    });
+    tbl.appendChild(tb);
+    invCard.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+  }
+
+  await loadAll();
 };
