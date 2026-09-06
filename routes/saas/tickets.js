@@ -393,6 +393,12 @@ async function api_saas_tk_submit(token, payload) {
     } catch (e) { console.warn('[tickets] create-notify error:', e.message); }
   })();
 
+  /* TICKET_AI_TRIAGE_v1 — a brand-new ticket is OPEN, so run AI triage and let it
+   * reply immediately when it's AI-Capable or Need-more-details. Fire-and-forget:
+   * classification/reply happen in the background and never block ticket creation
+   * or throw into this path. Gated server-side to open/new statuses. */
+  try { require('./ticketTriage').autoTriageNewTicket(id); } catch (e) { console.warn('[tickets] auto-triage skip:', e.message); }
+
   return { ok: true, id, ticket_number: ticketNumber };
 }
 

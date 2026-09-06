@@ -134,6 +134,9 @@ async function _postReply(ticket, bodyText) {
 }
 
 /* ---- triage one ticket: classify, store, optionally post ---- */
+// AI only replies while the ticket is OPEN/NEW and the ball is in our court —
+// never on waiting_customer (we already replied), resolved or closed.
+const POSTABLE_STATUS = ['open', 'reopened', 'in_progress'];
 async function triageOne(ticketId, opts) {
   await ensureCols();
   const post = !!(opts && opts.post);
@@ -142,7 +145,11 @@ async function triageOne(ticketId, opts) {
   const c = await classify(t.subject, t.description);
 
   let posted = 0;
-  if (post && (c.segment === 'ai_answered' || c.segment === 'ai_need_details') && c.answer) {
+  const canPost = post
+    && POSTABLE_STATUS.includes(String(t.status))
+    && (c.segment === 'ai_answered' || c.segment === 'ai_need_details')
+    && c.answer;
+  if (canPost) {
     try { await _postReply(t, c.answer); posted = 1; } catch (e) { c.reason += ' | post failed: ' + e.message; }
   }
   await control.query(
@@ -159,9 +166,10 @@ async function triageBatch(opts) {
   await ensureCols();
   const o = opts || {};
   const post = !!o.post;
-  const limit = Math.max(1, Math.min(Number(o.limit) || 50, 300));
-  // by default: open-ish tickets not yet triaged
-  const statusFilter = o.all ? '' : `AND status IN ('open','reopened','in_progress','waiting_customer')`;
+  const limit = Math.max(1, Math.min(Number(o.limit) || 50, 500));
+  // Default scope = OPEN / NEW tickets (open, reopened, in_progress). When
+  // posting, these are also the only statuses triageOne will reply on.
+  const statusFilter = o.all ? '' : `AND status IN ('open','reopened','in_progress')`;
   const redo = o.redo ? '' : 'AND ai_segment IS NULL';
   const rows = (await control.query(
     `SELECT id FROM support_tickets WHERE 1=1 ${statusFilter} ${redo}
@@ -201,7 +209,18 @@ async function api_saas_tk_admin_aiCounts(token) {
   return out;
 }
 
+/* Fire-and-forget triage for a brand-new ticket: classify and, if AI Capable or
+ * Need-more-details, reply immediately. Never throws into the caller. */
+function autoTriageNewTicket(ticketId) {
+  setImmediate(() => {
+    triageOne(ticketId, { post: true })
+      .then(r => console.log('[ticket-triage] #' + (r.ticket_number||ticketId) + ' -> ' + r.segment + (r.posted?' (replied)':'')))
+      .catch(e => console.warn('[ticket-triage] auto failed for ' + ticketId + ': ' + e.message));
+  });
+}
+
 module.exports = {
   ensureCols, classify, triageOne, triageBatch,
-  api_saas_tk_admin_aiTriage, api_saas_tk_admin_aiTriageBatch, api_saas_tk_admin_aiCounts
+  api_saas_tk_admin_aiTriage, api_saas_tk_admin_aiTriageBatch, api_saas_tk_admin_aiCounts,
+  autoTriageNewTicket
 };
