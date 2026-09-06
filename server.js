@@ -89,6 +89,7 @@ const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
 const aiBilling  = require('./routes/saas/aiBilling');   /* AI_BILLING_v1 */
+const ticketTriage = require('./routes/saas/ticketTriage');   /* TICKET_AI_TRIAGE_v1 */
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -160,7 +161,7 @@ const SAAS_API = {};
 [
   superAdmin, packages, signup, tenants, invoices, settings,
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
-  aiSettings, aiCosting, aiBilling,   /* AI_BILLING_v1 */
+  aiSettings, aiCosting, aiBilling, ticketTriage,   /* AI_BILLING_v1 + TICKET_AI_TRIAGE_v1 */
   tenantModules, demoTenant,
   tickets,
   finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth,

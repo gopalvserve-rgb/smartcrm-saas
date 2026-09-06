@@ -3986,6 +3986,51 @@ VIEWS.tickets = async (view) => {
   let _tkAssigneeFilter = null;
   const assigneeRow = h('div', { id: 'tk-assignee-summary', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '1rem' } });
   view.appendChild(assigneeRow);
+
+  /* TICKET_AI_TRIAGE_v1 — AI segment filter bar. Each ticket carries t.ai_segment
+   * (ai_answered / ai_need_details / ai_unclear), set by the triage. Filtering is
+   * client-side over the already-fetched rows, so it needs no backend change. */
+  let _tkAiFilter = null;
+  const aiSegMeta = {
+    ai_answered:     { label: '🤖 AI answered',    bg: '#dcfce7', fg: '#166534' },
+    ai_need_details: { label: '❓ Need details',    bg: '#fef9c3', fg: '#854d0e' },
+    ai_unclear:      { label: '⚠️ AI not capable',  bg: '#fee2e2', fg: '#991b1b' }
+  };
+  const aiBar = h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '0 0 1rem' } });
+  view.appendChild(aiBar);
+  function renderAiBar(){
+    aiBar.innerHTML = '';
+    aiBar.appendChild(h('span', { style: { fontSize: '.72rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '.04em' } }, 'AI triage:'));
+    const counts = {}; (_lastTickets||[]).forEach(t=>{ if(t.ai_segment) counts[t.ai_segment]=(counts[t.ai_segment]||0)+1; });
+    const mk = (seg,label,bg,fg) => {
+      const active = _tkAiFilter===seg;
+      const n = seg==='all' ? (_lastTickets||[]).length : (counts[seg]||0);
+      const b = h('button', { class:'btn small', style:{
+        background: active?(bg||'#6366f1'):'#fff', color: active?(fg||'#fff'):'#334155',
+        border:'1px solid '+(active?(fg||'#6366f1'):'#cbd5e1'), borderRadius:'999px',
+        fontSize:'.8rem', padding:'.28rem .7rem', cursor:'pointer' } },
+        label + '  ' + n);
+      b.onclick = () => { _tkAiFilter = (_tkAiFilter===seg?null:(seg==='all'?null:seg)); renderAiBar(); paintTable(); };
+      return b;
+    };
+    aiBar.appendChild(mk('all','All',null,null));
+    aiBar.appendChild(mk('ai_answered', aiSegMeta.ai_answered.label, aiSegMeta.ai_answered.bg, aiSegMeta.ai_answered.fg));
+    aiBar.appendChild(mk('ai_need_details', aiSegMeta.ai_need_details.label, aiSegMeta.ai_need_details.bg, aiSegMeta.ai_need_details.fg));
+    aiBar.appendChild(mk('ai_unclear', aiSegMeta.ai_unclear.label, aiSegMeta.ai_unclear.bg, aiSegMeta.ai_unclear.fg));
+    // Run-triage button (works once the backend is deployed+restarted; harmless otherwise)
+    const runBtn = h('button', { class:'btn small ghost', style:{ marginLeft:'auto', fontSize:'.8rem' },
+      title:'Classify open tickets against the knowledge base' }, '⚙️ Run AI triage');
+    runBtn.onclick = async () => {
+      if(!confirm('Run AI triage on open tickets? This classifies them; it will NOT auto-send replies unless posting is enabled server-side.')) return;
+      runBtn.disabled=true; runBtn.textContent='Running…';
+      try { const r = await api('api_saas_tk_admin_aiTriageBatch', { post:false, limit:100 });
+            alert('Triaged '+r.total+':  answered '+r.ai_answered+' · need details '+r.ai_need_details+' · not capable '+r.ai_unclear); load(); }
+      catch(e){ alert('Triage not available yet: '+e.message); }
+      finally { runBtn.disabled=false; runBtn.textContent='⚙️ Run AI triage'; }
+    };
+    aiBar.appendChild(runBtn);
+  }
+
   const tableWrap = h('div', { id: 'tk-table' });
   view.appendChild(tableWrap);
 
@@ -4063,8 +4108,14 @@ VIEWS.tickets = async (view) => {
     }
 
     // Table
+    renderAiBar();
+    paintTable();
+  }
+
+  function paintTable(){
     tableWrap.innerHTML = '';
-    const tickets = res.tickets || [];
+    let tickets = _lastTickets || [];
+    if (_tkAiFilter) tickets = tickets.filter(t => t.ai_segment === _tkAiFilter);
     if (!tickets.length) {
       tableWrap.appendChild(h('div', { class: 'empty' }, 'No tickets match these filters.'));
       return;
@@ -4093,7 +4144,12 @@ VIEWS.tickets = async (view) => {
           h('div', { style: { fontWeight: 600 } }, t.org_name || t.tenant_slug),
           h('div', { class: 'muted', style: { fontSize: '.75rem' } }, t.tenant_slug)
         )),
-        h('td', { style: { maxWidth: '300px' } }, h('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.subject)),
+        h('td', { style: { maxWidth: '300px' } }, h('div', {},
+          h('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.subject),
+          t.ai_segment && aiSegMeta[t.ai_segment]
+            ? h('span', { style: { display:'inline-block', marginTop:'2px', background: aiSegMeta[t.ai_segment].bg, color: aiSegMeta[t.ai_segment].fg, borderRadius:'6px', padding:'0 6px', fontSize:'.66rem', fontWeight:700 },
+                title: (t.ai_reason||'') + (t.ai_posted? ' · reply posted':'') }, aiSegMeta[t.ai_segment].label + (t.ai_posted?' ✓':''))
+            : null)),
         h('td', {}, (catObj ? catObj.icon + ' ' + catObj.label : t.category)),
         h('td', {}, _tkStatusPill(t.status, cat)),
         h('td', {}, _tkPrioPill(t.priority, cat)),
