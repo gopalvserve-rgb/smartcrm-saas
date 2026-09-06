@@ -136,6 +136,7 @@ const ROUTE_FILES = [
   'leadSheetExport',    /* LEAD_SHEET_EXPORT_v1 — push leads to a linked Google Sheet */
   'waCampaign',         /* WA_API_CAMPAIGN_v1 */
   'webchat',            /* WEBCHAT_v1 */
+  'aiUsagePanel',       /* AI_TENANT_PANEL_v1 — tenant sees its own token usage + invoices */
 ];
 
 const API = {};

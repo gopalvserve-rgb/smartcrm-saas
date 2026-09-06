@@ -36,6 +36,8 @@ const WORKERS_ON = String(process.env.WORKERS || 'on').toLowerCase() !== 'off';
 if (!WORKERS_ON) console.log('[worker-split] background workers DISABLED in this process (WORKERS=off)');
 
 try { WORKERS_ON && require('./utils/saasInvoiceAutoGen').startSweep(); } catch (e) { console.warn('[saasInvoiceAutoGen] start failed:', e.message); }
+/* AI_BILLING_v1 — raise AI-usage invoices at the cap, enforce the grace period. */
+try { WORKERS_ON && require('./routes/saas/aiBilling').startBillingWorker(); } catch (e) { console.warn('[ai-billing] start failed:', e.message); }
 try { require('./utils/showcaseFollowupSeed').startSweep(); } catch (e) { console.warn('[showcaseFollowupSeed] start failed:', e.message); }
 try { require('./utils/invoicingModuleBackfill').startSweep(); } catch (e) { console.warn('[invoicingModuleBackfill] start failed:', e.message); }
 
@@ -86,6 +88,7 @@ const applySchema = require('./routes/saas/applySchema');
 const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
+const aiBilling  = require('./routes/saas/aiBilling');   /* AI_BILLING_v1 */
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -157,7 +160,7 @@ const SAAS_API = {};
 [
   superAdmin, packages, signup, tenants, invoices, settings,
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
-  aiSettings, aiCosting,
+  aiSettings, aiCosting, aiBilling,   /* AI_BILLING_v1 */
   tenantModules, demoTenant,
   tickets,
   finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth,

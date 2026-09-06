@@ -207,6 +207,29 @@ async function _demoBlocked(args) {
            finish_reason: null, error: 'AI Audit / Summary is disabled on showcase / demo tenants. Copilot and Quick Note still work (limited to 30 / day).', raw_status: null };
 }
 
+/* AI_BILLING_v1 (2026-09-06) — refuse AI work for a tenant whose AI invoice is
+ * past its due date. Deliberately scoped to AI ONLY: the CRM, leads, calls and
+ * recordings keep working. Losing the bot is proportionate to an unpaid AI bill;
+ * locking a sales team out of their pipeline over a few hundred rupees is not.
+ *
+ * Fails OPEN — any error resolving the block lets the call through. A billing
+ * lookup problem must never take a paying tenant's AI offline. */
+async function _billingBlocked() {
+  try {
+    const dbMod = require('../db/pg');
+    const store = dbMod.tenantStorage && dbMod.tenantStorage.getStore && dbMod.tenantStorage.getStore();
+    const slug = store && store.slug ? String(store.slug) : '';
+    if (!slug) return null;
+    const billing = require('../routes/saas/aiBilling');
+    if (!(await billing.isTenantAiBlocked(slug))) return null;
+    return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
+             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0, finish_reason: null,
+             error: 'AI features are paused for this account because an AI usage invoice is overdue. ' +
+                    'Settle the invoice from Billing to resume — the rest of the CRM is unaffected.',
+             raw_status: null, billing_hold: true };
+  } catch (_) { return null; }
+}
+
 /* AI_AUTOLOG_v1 (2026-09-05) — token metering is no longer opt-in.
  *
  * WHY: logUsage() used to be the caller's job. Result, measured in production:
@@ -245,6 +268,8 @@ async function generate(args) {
 async function _generateRaw(args) {
   const blocked = await _demoBlocked(args);
   if (blocked) return blocked;
+  const held = await _billingBlocked();
+  if (held) return held;
   const settings = await loadSettings();
   if (!settings) {
     return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
@@ -490,6 +515,8 @@ async function generateWithTools(args) {
 }
 
 async function _generateWithToolsRaw(args) {
+  const _held = await _billingBlocked();
+  if (_held) return _held;
   // Copilot calls this; pass feature='copilot' so it's allowed on demo tenants.
   // If caller forgot the feature label and we're on a demo tenant, default
   // to allow (Copilot is the primary user of this method — block-by-default
